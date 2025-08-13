@@ -69,81 +69,131 @@ class Config:
 
 class TgNotify:
     MAX_LEN = 4090
+    DESC_MAX_LEN = 1500
 
-    def __init__(self, token: str, chat_id: str):
+    def __init__(self, token: str, chat_id: str, telegraph_token: str):
         if not token or not chat_id:
             raise ValueError("Bot token and chat ID required")
+        if not telegraph_token:
+            raise ValueError("Telegraph token is required")
         self.token = token
         self.chat_id = chat_id
+        self.telegraph_token = telegraph_token
         self.url = f"https://api.telegram.org/bot{token}"
 
-    def _split(self, msg: str) -> List[str]:
-        if len(msg) <= self.MAX_LEN:
-            return [msg]
+    def _create_telegraph_page(self, title: str, content: str) -> Optional[str]:
+        try:
+            telegraph_api = "https://api.telegra.ph/createPage"
 
-        parts = []
-        curr = ""
-        blocks = msg.split('\n\n')
+            clean_content = content.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
 
-        for block in blocks:
-            if len(curr + block + '\n\n') > self.MAX_LEN:
-                if curr:
-                    parts.append(curr.rstrip())
-                curr = block + '\n\n'
+            payload = {
+                "access_token": self.telegraph_token,
+                "title": f"Update Details: {title}",
+                "author_name": "TRANSSION Updates Tracker",
+                "author_url": "https://t.me/TranssionUpdatesTracker",
+                "content": [{"tag": "p", "children": [clean_content]}],
+                "return_content": False
+            }
+
+            response = requests.post(telegraph_api, json=payload, timeout=10)
+            response.raise_for_status()
+
+            result = response.json()
+            if result.get("ok"):
+                telegraph_url = result["result"]["url"]
+                Log.s(f"Created Telegraph page: {telegraph_url}")
+                return telegraph_url
             else:
-                curr += block + '\n\n'
+                Log.w(f"Telegraph API error: {result}")
+                return None
 
-        if curr:
-            parts.append(curr.rstrip())
+        except Exception as e:
+            Log.w(f"Failed to create Telegraph page: {e}")
+            return None
 
-        proc_parts = []
-        open_tags = []
+    def _truncate_desc(self, desc: str, max_len: int = None, telegraph_url: Optional[str] = None) -> str:
+        if max_len is None:
+            max_len = self.DESC_MAX_LEN
 
-        for i, part in enumerate(parts):
-            tags = re.findall(r'<(\w+)[^>]*>', part)
-            close_tags = re.findall(r'</(\w+)>', part)
+        link_text = f'... <a href="{telegraph_url}">Read full changelogs</a>' if telegraph_url else "..."
+        effective_max_len = max_len - len(link_text) if telegraph_url else max_len
 
-            for tag in tags:
-                if tag not in close_tags:
-                    open_tags.append(tag)
-            for tag in close_tags:
-                if tag in open_tags:
-                    open_tags.remove(tag)
+        if len(desc) <= max_len:
+            return desc
 
-            if i < len(parts) - 1 and open_tags:
-                part += ''.join(f'</{tag}>' for tag in reversed(open_tags))
-                parts[i + 1] = ''.join(f'<{tag}>' for tag in open_tags) + parts[i + 1]
+        truncated = desc[:effective_max_len]
 
-            proc_parts.append(part)
+        sentence_endings = []
+        for match in re.finditer(r'\.\s+', truncated):
+            sentence_endings.append(match.end() - 1)
 
-        return proc_parts
+        if sentence_endings and sentence_endings[-1] > effective_max_len * 0.6:
+            result = truncated[:sentence_endings[-1] + 1]
+        else:
+            last_paragraph = truncated.rfind('\n\n')
+            if last_paragraph > effective_max_len * 0.5:
+                result = truncated[:last_paragraph]
+            else:
+                last_line = truncated.rfind('\n')
+                if last_line > effective_max_len * 0.7:
+                    result = truncated[:last_line]
+                else:
+                    last_space = truncated.rfind(' ')
+                    if last_space > effective_max_len * 0.8:
+                        result = truncated[:last_space]
+                    else:
+                        result = truncated
+
+        result += link_text
+        return result
 
     def send(self, msg: str, btn_text: Optional[str] = None,
-             btn_url: Optional[str] = None) -> bool:
+             btn_url: Optional[str] = None, truncate_desc: bool = True,
+             device_title: Optional[str] = None) -> bool:
         Log.i("Sending Telegram notification...")
-        parts = self._split(msg)
+
+        telegraph_url = None
+
+        if truncate_desc and len(msg) > self.MAX_LEN:
+            import re
+            desc_pattern = r'(<b>Title:</b> .*?\n\n)(.*?)(\n\n<b>Size:</b>)'
+            match = re.search(desc_pattern, msg, re.DOTALL)
+
+            if match:
+                before_desc = match.group(1)
+                description = match.group(2).strip()
+                after_desc = match.group(3)
+
+                excess_chars = len(msg) - self.MAX_LEN
+
+                if excess_chars > 0 and len(description) > self.DESC_MAX_LEN:
+                    title_match = re.search(r'<b>Title:</b> (.*?)\n', before_desc)
+                    page_title = title_match.group(1) if title_match else (device_title or "Update")
+
+                    telegraph_url = self._create_telegraph_page(page_title, description)
+
+                    truncated_desc = self._truncate_desc(description, telegraph_url=telegraph_url)
+
+                    msg = msg.replace(match.group(0), before_desc + truncated_desc + after_desc)
 
         try:
-            for i, part in enumerate(parts):
-                payload = {
-                    'chat_id': self.chat_id,
-                    'text': part,
-                    'parse_mode': 'html',
-                    'disable_web_page_preview': True,
+            payload = {
+                'chat_id': self.chat_id,
+                'text': msg,
+                'parse_mode': 'html',
+                'disable_web_page_preview': True,
+            }
+
+            if btn_text and btn_url:
+                payload['reply_markup'] = {
+                    'inline_keyboard': [[
+                        {'text': btn_text, 'url': btn_url}
+                    ]]
                 }
 
-                if i == len(parts) - 1 and btn_text and btn_url:
-                    payload['reply_markup'] = {
-                        'inline_keyboard': [[
-                            {'text': btn_text, 'url': btn_url}
-                        ]]
-                    }
-
-                r = requests.post(f"{self.url}/sendMessage", json=payload, timeout=15)
-                r.raise_for_status()
-
-                if i < len(parts) - 1:
-                    time.sleep(0.5)
+            r = requests.post(f"{self.url}/sendMessage", json=payload, timeout=15)
+            r.raise_for_status()
 
             Log.s("Notification sent successfully")
             return True
@@ -428,12 +478,14 @@ def main() -> int:
     if not args.skip_telegram and not args.register_fingerprint:
         token = os.environ.get('bot_token')
         chat = os.environ.get('chat_id')
-        if not token or not chat:
+        telegraph_token = os.environ.get('telegraph_token')
+
+        if not token or not chat or not telegraph_token:
             Log.w("Telegram env vars not set, skipping notifications")
             args.skip_telegram = True
         else:
             try:
-                tg = TgNotify(token, chat)
+                tg = TgNotify(token, chat, telegraph_token)
             except ValueError as e:
                 Log.e(f"Telegram setup failed: {e}")
                 args.skip_telegram = True
@@ -504,7 +556,7 @@ def main() -> int:
             f"<b>Fingerprint:</b>\n<code>{target_fp}</code>"
         )
 
-        if tg.send(msg, "Google OTA Link", url):
+        if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
             if is_new_update:
                 save_processed_fingerprint(processed_fp_path, target_fp)
                 Log.i("Creating GitHub release for new update...")
