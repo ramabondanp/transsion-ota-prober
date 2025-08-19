@@ -456,6 +456,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='Android OTA Update Checker')
     parser.add_argument('--debug', action='store_true', help='Enable debugging')
     parser.add_argument('-c', '--config', type=Path, required=True, help='Config file path')
+    parser.add_argument('--dry-run', action='store_true', help='Simulate actions without making changes or sending notifications')
     parser.add_argument('--skip-telegram', action='store_true', help='Skip Telegram notifications')
     parser.add_argument('--register-fingerprint', action='store_true', help='Save the update fingerprint without sending a notification')
     parser.add_argument('--force-notify', action='store_true', help='Send notification even if the update has been seen before')
@@ -473,6 +474,9 @@ def main() -> int:
         return 1
 
     config_name = args.config.stem
+
+    if args.dry_run:
+        Log.i("Dry-run mode enabled: no external side effects will occur.")
 
     tg = None
     if not args.skip_telegram and not args.register_fingerprint:
@@ -531,9 +535,12 @@ def main() -> int:
 
     if args.register_fingerprint:
         if is_new_update:
-            Log.i("--register-fingerprint flag is set. Saving new fingerprint without notification.")
-            save_processed_fingerprint(processed_fp_path, target_fp)
-            Log.s("Update check completed successfully (fingerprint registered).")
+            if args.dry_run:
+                Log.i("--register-fingerprint set. Dry-run: would save new fingerprint without notification.")
+            else:
+                Log.i("--register-fingerprint flag is set. Saving new fingerprint without notification.")
+                save_processed_fingerprint(processed_fp_path, target_fp)
+                Log.s("Update check completed successfully (fingerprint registered).")
         else:
             Log.i("--register-fingerprint flag is set, but fingerprint is already known. No action taken.")
         return 0
@@ -556,20 +563,29 @@ def main() -> int:
             f"<b>Fingerprint:</b>\n<code>{target_fp}</code>"
         )
 
-        if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
+        if args.dry_run:
+            Log.i("Dry-run: would send Telegram notification with OTA details.")
             if is_new_update:
-                save_processed_fingerprint(processed_fp_path, target_fp)
-                Log.i("Creating GitHub release for new update...")
-                create_github_release(config_name, data)
+                Log.i("Dry-run: would save new fingerprint after successful notification.")
+                Log.i("Dry-run: would create GitHub release for new update.")
         else:
-            Log.e("Failed to send notification. Fingerprint will not be saved.")
-            return 1
+            if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
+                if is_new_update:
+                    save_processed_fingerprint(processed_fp_path, target_fp)
+                    Log.i("Creating GitHub release for new update...")
+                    create_github_release(config_name, data)
+            else:
+                Log.e("Failed to send notification. Fingerprint will not be saved.")
+                return 1
 
     if args.force_release:
-        Log.i("Force release flag detected. Creating GitHub release...")
-        if create_github_release(config_name, data):
-            if is_new_update and not (not args.skip_telegram and tg):
-                Log.i("Skipping fingerprint save due to force release")
+        if args.dry_run:
+            Log.i("Dry-run: would create GitHub release due to --force-release.")
+        else:
+            Log.i("Force release flag detected. Creating GitHub release...")
+            if create_github_release(config_name, data):
+                if is_new_update and not (not args.skip_telegram and tg):
+                    Log.i("Skipping fingerprint save due to force release")
 
     Log.s("Update check completed successfully")
     return 0
