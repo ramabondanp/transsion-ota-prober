@@ -632,10 +632,10 @@ def main() -> int:
             f"<b>Title:</b> {title}\n\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
-            + (f"<b>Security patch:</b> {spl}\n" if spl else '')
-            + (f"<b>Build date:</b> {bdate} (CST)\n" if bdate else '')
             + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else '')
+            + (f"<b>Security patch:</b> {spl}\n" if spl else '')
             + f"<b>Fingerprint:</b> <code>{target_fp}</code>"
+            + (f"\n<b>Build date:</b> {bdate} (CST)" if bdate else '')
         )
 
         if args.dry_run:
