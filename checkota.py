@@ -336,7 +336,7 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
       - post_build_incremental
       - post_security_patch_level
       - post_timestamp
-      - build_date (derived from post_timestamp, UTC)
+      - build_date (derived from post_timestamp, CST)
     """
     Log.i("Fetching OTA metadata (fingerprint, patch level, etc.)...")
     cmds = ['curl', 'bsdtar', 'grep']
@@ -390,9 +390,10 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
             result['post_timestamp'] = meta['post-timestamp']
             try:
                 ts = int(meta['post-timestamp'])
-                dt = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
-                # Format example: "01 Jan 2025"
-                result['build_date'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                dt_utc = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+                tz_cst = datetime.timezone(datetime.timedelta(hours=8))
+                dt_cst = dt_utc.astimezone(tz_cst)
+                result['build_date'] = dt_cst.strftime('%Y-%m-%d %H:%M:%S')
             except Exception:
                 pass
 
@@ -463,7 +464,7 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
     if post_security_patch_level:
         extra_lines.append(f"**Security patch:** {post_security_patch_level}")
     if build_date:
-        extra_lines.append(f"**Build date:** {build_date} (UTC)")
+        extra_lines.append(f"**Build date:** {build_date} (CST)")
 
     extra_block = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
 
@@ -588,7 +589,7 @@ def main() -> int:
     if spl:
         Log.i(f"Security patch: {spl}")
     if bdate:
-        Log.i(f"Build date: {bdate} (UTC)")
+        Log.i(f"Build date: {bdate} (CST)")
 
     processed_fp_path = Path(PROCESSED_FP_FILE)
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
@@ -632,7 +633,7 @@ def main() -> int:
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
             + (f"<b>Security patch:</b> {spl}\n" if spl else '')
-            + (f"<b>Build date:</b> {bdate} (UTC)\n" if bdate else '')
+            + (f"<b>Build date:</b> {bdate} (CST)\n" if bdate else '')
             + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else '')
             + f"<b>Fingerprint:</b> <code>{target_fp}</code>"
         )
