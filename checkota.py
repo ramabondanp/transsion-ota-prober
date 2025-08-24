@@ -325,47 +325,89 @@ def check_cmds(cmds: List[str]) -> bool:
         return False
     return True
 
-def get_fingerprint(url: str) -> Optional[str]:
-    Log.i("Fetching target fingerprint...")
-    cmds = ['curl', 'bsdtar', 'grep', 'sed']
+def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
+    """Stream-extract OTA metadata and parse useful post-* fields quickly.
+
+    Uses a pipeline to stop early after matching needed lines to avoid
+    downloading the entire OTA zip.
+
+    Returns a dict with keys:
+      - fingerprint (post-build)
+      - post_build_incremental
+      - post_security_patch_level
+      - post_timestamp
+      - build_date (derived from post_timestamp, UTC)
+    """
+    Log.i("Fetching OTA metadata (fingerprint, patch level, etc.)...")
+    cmds = ['curl', 'bsdtar', 'grep']
     if not check_cmds(cmds):
         return None
 
     curl_cmd = ['curl', '--fail', '-Ls', '--max-time', '60', '--limit-rate', '100K', url]
     bsdtar_cmd = ['bsdtar', '-Oxf', '-', 'META-INF/com/android/metadata']
-    grep_cmd = ['grep', '-m1', '^post-build=']
-    sed_cmd = ['sed', 's/^post-build=//']
+    # Match relevant keys and stop after up to 4 matches
+    grep_cmd = ['grep', '-E', '^(post-build=|post-build-incremental=|post-security-patch-level=|post-timestamp=)', '-m', '4']
 
     try:
         curl_proc = subprocess.Popen(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         bsdtar_proc = subprocess.Popen(bsdtar_cmd, stdin=curl_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        curl_proc.stdout.close()
+        if curl_proc.stdout:
+            curl_proc.stdout.close()
         grep_proc = subprocess.Popen(grep_cmd, stdin=bsdtar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        bsdtar_proc.stdout.close()
-        sed_proc = subprocess.Popen(sed_cmd, stdin=grep_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        grep_proc.stdout.close()
+        if bsdtar_proc.stdout:
+            bsdtar_proc.stdout.close()
 
         try:
-            stdout_bytes, _ = sed_proc.communicate(timeout=90)
-            fp = stdout_bytes.decode('utf-8').strip()
+            stdout_bytes, _ = grep_proc.communicate(timeout=90)
+            content = stdout_bytes.decode('utf-8', errors='replace')
         except subprocess.TimeoutExpired:
-            Log.w("Timeout expired while fetching fingerprint.")
+            Log.w("Timeout expired while fetching OTA metadata.")
             return None
 
+        if not content.strip():
+            Log.w("Could not extract OTA metadata (empty content).")
+            return None
+
+        meta: Dict[str, str] = {}
+        for line in content.splitlines():
+            if '=' in line:
+                k, v = line.strip().split('=', 1)
+                meta[k.strip()] = v.strip()
+
+        result: Dict[str, str] = {}
+        fp = meta.get('post-build', '')
         if not fp:
-            Log.w("Could not extract fingerprint (pipeline returned empty).")
-            return None
+            Log.w("post-build not found in metadata.")
+        else:
+            Log.i(f"Extracted fingerprint: {fp}")
+        result['fingerprint'] = fp
 
-        Log.i(f"Extracted fingerprint: {fp}")
-        return fp
+        if meta.get('post-build-incremental'):
+            result['post_build_incremental'] = meta['post-build-incremental']
+        if meta.get('post-security-patch-level'):
+            result['post_security_patch_level'] = meta['post-security-patch-level']
+        if meta.get('post-timestamp'):
+            result['post_timestamp'] = meta['post-timestamp']
+            try:
+                ts = int(meta['post-timestamp'])
+                dt = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+                # Format example: "01 Jan 2025"
+                result['build_date'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+
+        return result
 
     except Exception as e:
-        Log.e(f"Error setting up fingerprint pipeline: {e}")
+        Log.e(f"Error extracting OTA metadata: {e}")
         return None
     finally:
+        # Ensure curl is not left running
         if 'curl_proc' in locals() and curl_proc and curl_proc.poll() is None:
-            Log.i(f"Cleaning up leftover curl process (PID: {curl_proc.pid})...")
-            curl_proc.kill()
+            try:
+                curl_proc.kill()
+            except Exception:
+                pass
 
 def load_processed_fingerprints(path: Path) -> Set[str]:
     if not path.exists():
@@ -411,13 +453,26 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
     description = description or 'No description available'
     size = size or 'Unknown size'
     fingerprint = update_data.get('fingerprint', 'Unknown fingerprint')
+    post_build_incremental = update_data.get('post_build_incremental')
+    post_security_patch_level = update_data.get('post_security_patch_level')
+    build_date = update_data.get('build_date')
+
+    extra_lines = []
+    if post_build_incremental:
+        extra_lines.append(f"**Incremental:** {post_build_incremental}")
+    if post_security_patch_level:
+        extra_lines.append(f"**Security patch:** {post_security_patch_level}")
+    if build_date:
+        extra_lines.append(f"**Build date:** {build_date} (UTC)")
+
+    extra_block = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
 
     release_notes = f"""# {device}
 ## Changelog:
 {description}
 
 **Size:** {size}
-**Download URL:** {url}
+**Download URL:** {url}{extra_block}
 **Fingerprint:** `{fingerprint}`
 """
 
@@ -518,12 +573,22 @@ def main() -> int:
     Log.i(f"Size: {size}")
     Log.i(f"URL: {url}")
 
-    target_fp = get_fingerprint(url)
-    if not target_fp:
+    ota_meta = get_ota_metadata(url)
+    if not ota_meta or not ota_meta.get('fingerprint'):
         Log.e("Could not determine target fingerprint. Cannot verify if update is new.")
         return 1
 
+    target_fp = ota_meta['fingerprint']
     Log.i(f"Target build: {target_fp}")
+    inc = ota_meta.get('post_build_incremental')
+    spl = ota_meta.get('post_security_patch_level')
+    bdate = ota_meta.get('build_date')
+    if inc:
+        Log.i(f"Incremental: {inc}")
+    if spl:
+        Log.i(f"Security patch: {spl}")
+    if bdate:
+        Log.i(f"Build date: {bdate} (UTC)")
 
     processed_fp_path = Path(PROCESSED_FP_FILE)
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
@@ -552,6 +617,12 @@ def main() -> int:
         Log.w(f"Forcing GitHub release for an already processed update: {target_fp}")
 
     data['fingerprint'] = target_fp
+    if inc:
+        data['post_build_incremental'] = inc
+    if spl:
+        data['post_security_patch_level'] = spl
+    if bdate:
+        data['build_date'] = bdate
 
     if not args.skip_telegram and tg:
         msg = (
@@ -560,7 +631,10 @@ def main() -> int:
             f"<b>Title:</b> {title}\n\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
-            f"<b>Fingerprint:</b>\n<code>{target_fp}</code>"
+            + (f"<b>Security patch:</b> {spl}\n" if spl else '')
+            + (f"<b>Build date:</b> {bdate} (UTC)\n" if bdate else '')
+            + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else '')
+            + f"<b>Fingerprint:</b> <code>{target_fp}</code>"
         )
 
         if args.dry_run:
