@@ -66,6 +66,7 @@
 * itel RS4 (S666LN)
 * itel S25 (S685LN)
 * itel S25 Ultra (S686LN)
+* itel SUPER 26 Ultra (S688LN)
 * itel VistaTab 30 Pro (P13001L)
 
 ## XPAD
