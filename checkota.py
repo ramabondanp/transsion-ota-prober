@@ -338,15 +338,15 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
       - post_timestamp
       - build_date (derived from post_timestamp, CST)
     """
-    Log.i("Fetching OTA metadata (fingerprint, patch level, etc.)...")
+    Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
     cmds = ['curl', 'bsdtar', 'grep']
     if not check_cmds(cmds):
         return None
 
     curl_cmd = ['curl', '--fail', '-Ls', '--max-time', '60', '--limit-rate', '100K', url]
     bsdtar_cmd = ['bsdtar', '-Oxf', '-', 'META-INF/com/android/metadata']
-    # Match relevant keys and stop after up to 4 matches
-    grep_cmd = ['grep', '-E', '^(post-build=|post-build-incremental=|post-security-patch-level=|post-timestamp=)', '-m', '4']
+    # Match relevant keys and stop early after matches
+    grep_cmd = ['grep', '-E', '^(post-build=|post-build-incremental=|post-security-patch-level=|post-timestamp=|post-sdk-level=)', '-m', '5']
 
     try:
         curl_proc = subprocess.Popen(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -394,6 +394,29 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
                 tz_cst = datetime.timezone(datetime.timedelta(hours=8))
                 dt_cst = dt_utc.astimezone(tz_cst)
                 result['build_date'] = dt_cst.strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+
+        # Capture SDK level (Android 13/14/15+, etc.)
+        if meta.get('post-sdk-level'):
+            result['post_sdk_level'] = meta['post-sdk-level']
+            try:
+                sdk_int = int(meta['post-sdk-level'])
+                # Only declare Android version for SDK 33+
+                if sdk_int >= 33:
+                    sdk_to_android = {
+                        33: 'Android 13',
+                        34: 'Android 14',
+                        35: 'Android 15',
+                        36: 'Android 16',
+                        37: 'Android 17',
+                        38: 'Android 18',
+                    }
+                    if sdk_int in sdk_to_android:
+                        result['android_version'] = sdk_to_android[sdk_int]
+                    else:
+                        # Future SDKs: keep as SDK only without guessed name
+                        result['android_version'] = None
             except Exception:
                 pass
 
@@ -457,6 +480,8 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
     post_build_incremental = update_data.get('post_build_incremental')
     post_security_patch_level = update_data.get('post_security_patch_level')
     build_date = update_data.get('build_date')
+    post_sdk_level = update_data.get('post_sdk_level')
+    android_version = update_data.get('android_version')
 
     extra_lines = []
     if post_build_incremental:
@@ -465,6 +490,15 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
         extra_lines.append(f"**Security patch:** {post_security_patch_level}")
     if build_date:
         extra_lines.append(f"**Build date:** {build_date} (CST)")
+    if post_sdk_level:
+        try:
+            if int(str(post_sdk_level)) >= 33:
+                if android_version:
+                    extra_lines.append(f"**Android:** {android_version} (SDK {post_sdk_level})")
+                else:
+                    extra_lines.append(f"**SDK:** {post_sdk_level}")
+        except Exception:
+            pass
 
     extra_block = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
 
@@ -584,12 +618,23 @@ def main() -> int:
     inc = ota_meta.get('post_build_incremental')
     spl = ota_meta.get('post_security_patch_level')
     bdate = ota_meta.get('build_date')
+    sdk_level = ota_meta.get('post_sdk_level')
+    android_ver = ota_meta.get('android_version')
     if inc:
         Log.i(f"Incremental: {inc}")
     if spl:
         Log.i(f"Security patch: {spl}")
     if bdate:
         Log.i(f"Build date: {bdate} (CST)")
+    if sdk_level:
+        try:
+            if int(sdk_level) >= 33:
+                if android_ver:
+                    Log.i(f"Android: {android_ver} (SDK {sdk_level})")
+                else:
+                    Log.i(f"SDK level: {sdk_level}")
+        except Exception:
+            pass
 
     processed_fp_path = Path(PROCESSED_FP_FILE)
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
@@ -624,12 +669,27 @@ def main() -> int:
         data['post_security_patch_level'] = spl
     if bdate:
         data['build_date'] = bdate
+    if sdk_level:
+        data['post_sdk_level'] = sdk_level
+    if android_ver:
+        data['android_version'] = android_ver
 
     if not args.skip_telegram and tg:
+        sdk_msg = ''
+        if sdk_level:
+            try:
+                if int(sdk_level) >= 33:
+                    if android_ver:
+                        sdk_msg = f"{android_ver}"
+                    else:
+                        sdk_msg = f"SDK: {sdk_level}"
+            except Exception:
+                pass
+
         msg = (
             f"<blockquote><b>OTA Update Available</b></blockquote>\n\n"
             f"<b>Device:</b> {cfg.model}\n\n"
-            f"<b>Title:</b> {title}\n\n"
+            f"<b>Title:</b> {title} ({sdk_msg})\n\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
             + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else '')
