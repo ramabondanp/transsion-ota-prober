@@ -1,18 +1,12 @@
 # List of supported Transsion devices
 
 ## PHANTOM SERIES
-* TECNO PHANTOM X2 (AD8)
-* TECNO PHANTOM X2 Pro (AD9)
 * TECNO PHANTOM V Fold 5G (AD10)
 * TECNO PHANTOM V Flip 5G (AD11)
 * TECNO PHANTOM V Fold2 5G (AE10)
 * TECNO PHANTOM V Flip2 5G (AE11)
 
 ## CAMON SERIES
-* TECNO CAMON 20 (CK6)
-* TECNO CAMON 20 Pro (CK7n)
-* TECNO CAMON 20 Pro 5G (CK8n)
-* TECNO CAMON 20s Pro 5G (CK8nB)
 * TECNO CAMON 30 4G (CL6)
 * TECNO CAMON 30 5G (CL7)
 * TECNO CAMON 30 Pro 5G (CL8)
@@ -29,7 +23,7 @@
 * TECNO SPARK 20 (KJ5)
 * TECNO SPARK 20 Pro (KJ6)
 * TECNO SPARK 20 Pro+ (KJ7)
-* TECNO SPARK 20 Pro 5G (KJ8)
+* TECNO SPARK 20 Pro 5G (KJ8-IN)
 * TECNO SPARK 30C (KL5)
 * TECNO SPARK 30 4G (KL6)
 * TECNO SPARK 30 Pro (KL7)
@@ -44,9 +38,6 @@
 * TECNO SPARK 40 5G (KM8n)
 
 ## POVA SERIES
-* TECNO POVA Neo 3 (LH6n)
-* TECNO POVA 5 (LH7n)
-* TECNO POVA 5 Pro (LH8n)
 * TECNO POVA 6 Neo (LI6)
 * TECNO POVA 6 (LI7)
 * TECNO POVA 6 Pro (LI9)
@@ -69,7 +60,7 @@
 * itel RS4 (S666LN)
 * itel S25 (S685LN)
 * itel S25 Ultra (S686LN)
-* itel SUPER 26 Ultra (S688LN)
+* itel Super 26 Ultra (S688LN)
 * itel VistaTab 30 Pro (P13001L)
 
 ## XPAD
@@ -98,17 +89,11 @@
 * Infinix ZERO Flip (X6962)
 
 ## GT SERIES
-* Infinix GT 10 Pro (X6739)
-* Infinix GT 20 Pro (X6871)
+* Infinix GT 20 Pro (X6871) (X6871-IN)
 * Infinix GT 30 Pro (X6873)
 * Infinix GT 30 (X6876)
 
 ## NOTE SERIES
-* Infinix NOTE 30 VIP (X6710)
-* Infinix NOTE 30 5G (X6711)
-* Infinix NOTE 30 (Helio G85) (X6716B)
-* Infinix NOTE 30 Pro (X678B)
-* Infinix NOTE 30 (X6833B)
 * Infinix NOTE 40X 5G (X6838)
 * Infinix NOTE 40 Pro (X6850)
 * Infinix NOTE 40S (X6850B)
@@ -119,7 +104,7 @@
 * Infinix NOTE 50 Pro 4G (X6855)
 * Infinix NOTE 50 Pro+ 5G (X6856)
 * Infinix NOTE 50X 5G (X6857)
-* Infinix NOTE 50X 5G (India) (X6857B)
+* Infinix NOTE 50X 5G (India) (X6857B-IN)
 * Infinix NOTE 50 4G (X6858)
 * Infinix NOTE 50s 5G (X6870)
 
