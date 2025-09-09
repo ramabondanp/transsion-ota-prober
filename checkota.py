@@ -67,6 +67,30 @@ class Config:
                 f'{self.android_version}/{self.build_tag}/'
                 f'{self.incremental}:user/release-keys')
 
+def region_from_product(product: str) -> Optional[str]:
+    """Map region code in product (e.g., KM9-OP) to human-friendly name.
+
+    Known mappings:
+      OP -> Global
+      RU -> Russia
+      IN -> India
+    """
+    if not product:
+        return None
+    try:
+        # Expect region after the last hyphen, e.g. "KM9-OP" -> "OP"
+        if '-' not in product:
+            return None
+        code = product.split('-')[-1].strip().upper()
+        mapping = {
+            'OP': 'Global',
+            'RU': 'Russia',
+            'IN': 'India',
+        }
+        return mapping.get(code)
+    except Exception:
+        return None
+
 class TgNotify:
     MAX_LEN = 4090
     DESC_MAX_LEN = 1500
@@ -587,6 +611,9 @@ def main() -> int:
     checker = UpdateChecker(cfg)
     fp = cfg.fingerprint()
     Log.i(f"Device: {cfg.model} ({cfg.device})")
+    reg_name = region_from_product(cfg.product)
+    if reg_name:
+        Log.i(f"Region: {reg_name}")
     Log.i(f"Build: {fp}")
 
     found, data = checker.check(args.debug)
@@ -686,9 +713,10 @@ def main() -> int:
             except Exception:
                 pass
 
+        region_line = f" ({reg_name})" if reg_name else ''
         msg = (
             f"<blockquote><b>OTA Update Available</b></blockquote>\n\n"
-            f"<b>Device:</b> {cfg.model}\n\n"
+            f"<b>Device:</b> {cfg.model}{region_line}\n\n"
             f"<b>Title:</b> {title} ({sdk_msg})\n\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
