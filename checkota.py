@@ -28,6 +28,30 @@ USER_AGENT_TPL = 'Dalvik/2.1.0 (Linux; U; Android {0}; {1} Build/{2})'
 PROTO_TYPE = 'application/x-protobuffer'
 DEBUG_FILE = "debug_checkin_response.txt"
 PROCESSED_FP_FILE = "processed_fingerprints.txt"
+OTA_URL_PREFIX = b'https://android.googleapis.com/packages/ota'
+
+TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
+
+REGION_CODE_MAP = {
+    'OP': 'Global',
+    'RU': 'Russia',
+    'IN': 'India',
+}
+
+SDK_TO_ANDROID = {
+    33: 'Android 13',
+    34: 'Android 14',
+    35: 'Android 15',
+    36: 'Android 16',
+    37: 'Android 17',
+    38: 'Android 18',
+}
+
+DESC_SECTION_RE = re.compile(r'(<b>Title:</b> .*?\n\n)(.*?)(\n\n<b>Size:</b>)', re.DOTALL)
+SENTENCE_BOUNDARY_RE = re.compile(r'\.\s+')
+BR_TAG_RE = re.compile(r'<br\s*/?>', re.IGNORECASE)
+HTML_TAG_RE = re.compile(r'<[^>]*>')
+URL_PAREN_RE = re.compile(r'\s*\(http[s]?://\S+\)?')
 
 class Log:
     @staticmethod
@@ -82,12 +106,7 @@ def region_from_product(product: str) -> Optional[str]:
         if '-' not in product:
             return None
         code = product.split('-')[-1].strip().upper()
-        mapping = {
-            'OP': 'Global',
-            'RU': 'Russia',
-            'IN': 'India',
-        }
-        return mapping.get(code)
+        return REGION_CODE_MAP.get(code)
     except Exception:
         return None
 
@@ -107,8 +126,6 @@ class TgNotify:
 
     def _create_telegraph_page(self, title: str, content: str) -> Optional[str]:
         try:
-            telegraph_api = "https://api.telegra.ph/createPage"
-
             clean_content = content.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
 
             payload = {
@@ -120,7 +137,7 @@ class TgNotify:
                 "return_content": False
             }
 
-            response = requests.post(telegraph_api, json=payload, timeout=10)
+            response = requests.post(TELEGRAPH_API_URL, json=payload, timeout=10)
             response.raise_for_status()
 
             result = response.json()
@@ -148,9 +165,7 @@ class TgNotify:
 
         truncated = desc[:effective_max_len]
 
-        sentence_endings = []
-        for match in re.finditer(r'\.\s+', truncated):
-            sentence_endings.append(match.end() - 1)
+        sentence_endings = [match.end() - 1 for match in SENTENCE_BOUNDARY_RE.finditer(truncated)]
 
         if sentence_endings and sentence_endings[-1] > effective_max_len * 0.6:
             result = truncated[:sentence_endings[-1] + 1]
@@ -180,9 +195,7 @@ class TgNotify:
         telegraph_url = None
 
         if truncate_desc and len(msg) > self.MAX_LEN:
-            import re
-            desc_pattern = r'(<b>Title:</b> .*?\n\n)(.*?)(\n\n<b>Size:</b>)'
-            match = re.search(desc_pattern, msg, re.DOTALL)
+            match = DESC_SECTION_RE.search(msg)
 
             if match:
                 before_desc = match.group(1)
@@ -306,37 +319,37 @@ class UpdateChecker:
         }
 
         for entry in resp.setting:
-            try:
-                if entry.name == b'update_url' or b'https://android.googleapis.com/packages/ota' in entry.value:
-                    info['url'] = entry.value.decode('utf-8')
+            name_bytes = entry.name or b''
+            value_bytes = entry.value or b''
+
+            value = value_bytes.decode('utf-8', errors='ignore')
+
+            if not info['found'] and (name_bytes == b'update_url' or OTA_URL_PREFIX in value_bytes):
+                url = value.strip()
+                if url:
+                    info['url'] = url
                     info['found'] = True
-                    break
-            except:
+
+            try:
+                name = name_bytes.decode('utf-8')
+            except Exception:
                 continue
 
-        if info['found']:
-            for entry in resp.setting:
-                try:
-                    name = entry.name.decode('utf-8')
-                    value = entry.value.decode('utf-8')
-
-                    if name == 'update_title':
-                        info['title'] = value.strip()
-                    elif name == 'update_description':
-                        info['description'] = self._clean_desc(value)
-                    elif name == 'update_size':
-                        info['size'] = value
-                except:
-                    continue
+            if name == 'update_title':
+                info['title'] = value.strip()
+            elif name == 'update_description':
+                info['description'] = self._clean_desc(value)
+            elif name == 'update_size':
+                info['size'] = value
 
         return info
 
     @staticmethod
     def _clean_desc(text: str) -> str:
-        text = re.sub(r'\n', '', text)
-        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-        text = re.sub(r'<[^>]*>', '', text)
-        text = re.sub(r'\s*\(http[s]?://\S+\)?', '', text)
+        text = text.replace('\n', '')
+        text = BR_TAG_RE.sub('\n', text)
+        text = HTML_TAG_RE.sub('', text)
+        text = URL_PAREN_RE.sub('', text)
         return text.strip()
 
 def check_cmd(cmd: str) -> bool:
@@ -423,24 +436,12 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
 
         # Capture SDK level (Android 13/14/15+, etc.)
         if meta.get('post-sdk-level'):
-            result['post_sdk_level'] = meta['post-sdk-level']
+            sdk_level = meta['post-sdk-level']
+            result['post_sdk_level'] = sdk_level
             try:
-                sdk_int = int(meta['post-sdk-level'])
-                # Only declare Android version for SDK 33+
+                sdk_int = int(sdk_level)
                 if sdk_int >= 33:
-                    sdk_to_android = {
-                        33: 'Android 13',
-                        34: 'Android 14',
-                        35: 'Android 15',
-                        36: 'Android 16',
-                        37: 'Android 17',
-                        38: 'Android 18',
-                    }
-                    if sdk_int in sdk_to_android:
-                        result['android_version'] = sdk_to_android[sdk_int]
-                    else:
-                        # Future SDKs: keep as SDK only without guessed name
-                        result['android_version'] = None
+                    result['android_version'] = SDK_TO_ANDROID.get(sdk_int)
             except Exception:
                 pass
 
@@ -474,6 +475,32 @@ def save_processed_fingerprint(path: Path, fingerprint: str):
         Log.s(f"Saved new fingerprint to {path}")
     except Exception as e:
         Log.e(f"Failed to save fingerprint to {path}: {e}")
+
+
+def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) -> Tuple[str, str, str]:
+    """Return helper strings for Telegram/log output based on SDK level."""
+    if sdk_level is None:
+        return '', '', ''
+
+    try:
+        sdk_int = int(str(sdk_level))
+    except (TypeError, ValueError):
+        return '', '', ''
+
+    if sdk_int < 33:
+        return '', '', ''
+
+    version_label = android_version or SDK_TO_ANDROID.get(sdk_int)
+    if version_label:
+        message = version_label
+        log_line = f"Android: {version_label} (SDK {sdk_level})"
+        release_line = f"**Android:** {version_label} (SDK {sdk_level})"
+        return message, log_line, release_line
+
+    message = f"SDK: {sdk_level}"
+    log_line = f"SDK level: {sdk_level}"
+    release_line = f"**SDK:** {sdk_level}"
+    return message, log_line, release_line
 
 def create_github_release(config_name: str, update_data: Dict) -> bool:
     if not check_cmd('gh'):
@@ -515,14 +542,9 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
     if build_date:
         extra_lines.append(f"**Build date:** {build_date} (CST)")
     if post_sdk_level:
-        try:
-            if int(str(post_sdk_level)) >= 33:
-                if android_version:
-                    extra_lines.append(f"**Android:** {android_version} (SDK {post_sdk_level})")
-                else:
-                    extra_lines.append(f"**SDK:** {post_sdk_level}")
-        except Exception:
-            pass
+        _, _, release_line = build_sdk_strings(post_sdk_level, android_version)
+        if release_line:
+            extra_lines.append(release_line)
 
     extra_block = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
 
@@ -647,21 +669,15 @@ def main() -> int:
     bdate = ota_meta.get('build_date')
     sdk_level = ota_meta.get('post_sdk_level')
     android_ver = ota_meta.get('android_version')
+    sdk_message, sdk_log_line, _ = build_sdk_strings(sdk_level, android_ver)
     if inc:
         Log.i(f"Incremental: {inc}")
     if spl:
         Log.i(f"Security patch: {spl}")
     if bdate:
         Log.i(f"Build date: {bdate} (CST)")
-    if sdk_level:
-        try:
-            if int(sdk_level) >= 33:
-                if android_ver:
-                    Log.i(f"Android: {android_ver} (SDK {sdk_level})")
-                else:
-                    Log.i(f"SDK level: {sdk_level}")
-        except Exception:
-            pass
+    if sdk_log_line:
+        Log.i(sdk_log_line)
 
     processed_fp_path = Path(PROCESSED_FP_FILE)
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
@@ -702,22 +718,12 @@ def main() -> int:
         data['android_version'] = android_ver
 
     if not args.skip_telegram and tg:
-        sdk_msg = ''
-        if sdk_level:
-            try:
-                if int(sdk_level) >= 33:
-                    if android_ver:
-                        sdk_msg = f"{android_ver}"
-                    else:
-                        sdk_msg = f"SDK: {sdk_level}"
-            except Exception:
-                pass
-
         region_line = f" ({reg_name})" if reg_name else ''
+        sdk_suffix = f" ({sdk_message})" if sdk_message else ''
         msg = (
             f"<blockquote><b>OTA Update Available</b></blockquote>\n\n"
             f"<b>Device:</b> {cfg.model}{region_line}\n\n"
-            f"<b>Title:</b> {title} ({sdk_msg})\n\n"
+            f"<b>Title:</b> {title}{sdk_suffix}\n\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
             + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else '')
