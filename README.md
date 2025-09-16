@@ -65,6 +65,7 @@
 
 ## XPAD
 * Infinix XPAD (X1101)
+* Infinix XPAD 20 Pro (X1201)
 * Infinix XPAD GT SD888 (X1301)
 
 ## HOT SERIES
