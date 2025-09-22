@@ -92,7 +92,7 @@
 
 ## GT SERIES
 * Infinix GT 20 Pro (X6871) (X6871-IN)
-* Infinix GT 30 Pro (X6873)
+* Infinix GT 30 Pro (X6873) (X6873-IN)
 * Infinix GT 30 (X6876)
 
 ## NOTE SERIES
