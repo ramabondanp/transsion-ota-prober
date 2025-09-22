@@ -1,4 +1,4 @@
-# List of supported Transsion devices
+# List of Tracked Transsion Devices
 
 ## PHANTOM SERIES
 * TECNO PHANTOM V Fold 5G (AD10)
@@ -105,8 +105,7 @@
 * Infinix NOTE 40 (X6853)
 * Infinix NOTE 50 Pro 4G (X6855)
 * Infinix NOTE 50 Pro+ 5G (X6856)
-* Infinix NOTE 50X 5G (X6857)
-* Infinix NOTE 50X 5G (India) (X6857B-IN)
+* Infinix NOTE 50X 5G (X6857) (X6857B-IN)
 * Infinix NOTE 50 4G (X6858)
 * Infinix NOTE 50s 5G (X6870)
 
