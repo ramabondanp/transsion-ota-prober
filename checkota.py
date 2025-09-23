@@ -584,35 +584,17 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
         Log.e(f"Error creating GitHub release: {e}")
         return False
 
-def main() -> int:
-    if sys.version_info < (3, 7):
-        Log.e("Requires Python 3.7+")
-        return 1
-
-    parser = argparse.ArgumentParser(description='Android OTA Update Checker')
-    parser.add_argument('--debug', action='store_true', help='Enable debugging')
-    parser.add_argument('-c', '--config', type=Path, required=True, help='Config file path')
-    parser.add_argument('--dry-run', action='store_true', help='Simulate actions without making changes or sending notifications')
-    parser.add_argument('--skip-telegram', action='store_true', help='Skip Telegram notifications')
-    parser.add_argument('--register-fingerprint', action='store_true', help='Save the update fingerprint without sending a notification')
-    parser.add_argument('--force-notify', action='store_true', help='Send notification even if the update has been seen before')
-    parser.add_argument('--force-release', action='store_true', help='Create GitHub release even without Telegram token or if fingerprint already exists')
-    parser.add_argument('-i', '--incremental', help='Override incremental version')
-    args = parser.parse_args()
-
+def process_config(config_path: Path, args: argparse.Namespace) -> int:
     try:
-        cfg = Config.from_yaml(args.config)
+        cfg = Config.from_yaml(config_path)
         if args.incremental:
             Log.i(f"Override incremental: {args.incremental}")
             cfg.incremental = args.incremental
     except Exception as e:
-        Log.e(f"Config error: {e}")
+        Log.e(f"Config error for {config_path}: {e}")
         return 1
 
-    config_name = args.config.stem
-
-    if args.dry_run:
-        Log.i("Dry-run mode enabled: no external side effects will occur.")
+    config_name = config_path.stem
 
     tg = None
     if not args.skip_telegram and not args.register_fingerprint:
@@ -758,6 +740,74 @@ def main() -> int:
 
     Log.s("Update check completed successfully")
     return 0
+
+
+def main() -> int:
+    if sys.version_info < (3, 7):
+        Log.e("Requires Python 3.7+")
+        return 1
+
+    parser = argparse.ArgumentParser(description='Android OTA Update Checker')
+    parser.add_argument('--debug', action='store_true', help='Enable debugging')
+    parser.add_argument('-c', '--config', type=Path, help='Config file path')
+    parser.add_argument('-d', '--config-dir', type=Path, help='Directory containing config files to process')
+    parser.add_argument('--dry-run', action='store_true', help='Simulate actions without making changes or sending notifications')
+    parser.add_argument('--skip-telegram', action='store_true', help='Skip Telegram notifications')
+    parser.add_argument('--register-fingerprint', action='store_true', help='Save the update fingerprint without sending a notification')
+    parser.add_argument('--force-notify', action='store_true', help='Send notification even if the update has been seen before')
+    parser.add_argument('--force-release', action='store_true', help='Create GitHub release even without Telegram token or if fingerprint already exists')
+    parser.add_argument('-i', '--incremental', help='Override incremental version')
+    args = parser.parse_args()
+
+    if args.config and args.config_dir:
+        parser.error('Use either --config or --config-dir, not both.')
+
+    if not args.config and not args.config_dir:
+        parser.error('Either --config or --config-dir is required.')
+
+    if args.config and args.config.is_dir():
+        parser.error('--config expects a file. Use --config-dir for directories.')
+
+    config_paths: List[Path]
+    if args.config:
+        config_paths = [args.config]
+    else:
+        if not args.config_dir.exists() or not args.config_dir.is_dir():
+            parser.error('--config-dir must be an existing directory.')
+
+        config_paths = sorted(
+            (
+                path for pattern in ('*.yml', '*.yaml')
+                for path in args.config_dir.glob(pattern)
+                if path.is_file()
+            ),
+            key=lambda p: p.name.lower()
+        )
+
+        if not config_paths:
+            Log.e(f"No config files found in directory: {args.config_dir}")
+            return 1
+
+    if args.incremental and len(config_paths) != 1:
+        Log.e('--incremental can only be used with a single config file')
+        return 1
+
+    if args.dry_run:
+        Log.i("Dry-run mode enabled: no external side effects will occur.")
+
+    exit_code = 0
+    total = len(config_paths)
+    for idx, config_path in enumerate(config_paths, start=1):
+        if total > 1 and idx > 1:
+            print()
+        if total > 1:
+            Log.i(f"Processing config {idx}/{total}: {config_path}")
+        else:
+            Log.i(f"Processing config: {config_path}")
+        result = process_config(config_path, args)
+        exit_code = max(exit_code, result)
+
+    return exit_code
 
 if __name__ == "__main__":
     sys.exit(main())
