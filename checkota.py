@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Set
+from typing import Dict, Optional, Tuple, List, Set, Any
 
 try:
     import requests
@@ -76,11 +76,13 @@ class Config:
     oem: str
     product: str
     variant: Optional[str] = None
+    variant_index: Optional[int] = None
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, str], variant_name: Optional[str] = None) -> 'Config':
+    def _from_dict(cls, data: Dict[str, str], variant_name: Optional[str] = None,
+                   variant_index: Optional[int] = None) -> 'Config':
         field_names = {field.name for field in fields(cls)}
-        required_fields = field_names - {'variant'}
+        required_fields = field_names - {'variant', 'variant_index'}
 
         filtered = {
             key: value for key, value in data.items()
@@ -89,6 +91,8 @@ class Config:
 
         if variant_name:
             filtered['variant'] = variant_name
+        if variant_index is not None:
+            filtered['variant_index'] = variant_index
 
         missing = [key for key in required_fields if key not in filtered]
         if missing:
@@ -129,7 +133,7 @@ class Config:
                 or variant.get('label')
                 or variant.get('product')
             )
-            configs.append(cls._from_dict(merged, variant_name))
+            configs.append(cls._from_dict(merged, variant_name, idx - 1))
 
         return configs
 
@@ -524,6 +528,188 @@ def save_processed_fingerprint(path: Path, fingerprint: str):
         Log.e(f"Failed to save fingerprint to {path}: {e}")
 
 
+def extract_incremental_from_fingerprint(fp: str) -> Optional[str]:
+    if not fp:
+        return None
+    try:
+        fingerprint_suffix = fp.split(':', 1)[1]
+    except IndexError:
+        return None
+
+    parts = fingerprint_suffix.split('/')
+    if len(parts) < 3:
+        return None
+
+    incremental_segment = parts[2]
+    return incremental_segment.split(':', 1)[0] if incremental_segment else None
+
+
+def update_config_incremental(config_path: Path, cfg: Config, new_incremental: str) -> bool:
+    if not new_incremental:
+        Log.w("No incremental value available to update configuration.")
+        return False
+
+    try:
+        raw_text = config_path.read_text()
+    except Exception as e:
+        Log.w(f"Failed to read config file {config_path}: {e}")
+        return False
+
+    lines = raw_text.splitlines(keepends=True)
+
+    def rewrite_line(line: str, value: str) -> str:
+        newline = ''
+        if line.endswith('\r\n'):
+            newline = '\r\n'
+            body = line[:-2]
+        elif line.endswith('\n'):
+            newline = '\n'
+            body = line[:-1]
+        else:
+            body = line
+
+        before_comment, sep, comment = body.partition('#')
+        key_part, _, value_part = before_comment.partition(':')
+        if not _:
+            return line
+
+        value_prefix = value_part[:len(value_part) - len(value_part.lstrip(' '))]
+        value_core = value_part[len(value_prefix):]
+        value_core_stripped = value_core.strip()
+        value_suffix = value_core[len(value_core.rstrip(' ')):] if value_core else ''
+
+        quote_char = ''
+        if value_core_stripped.startswith('"') and value_core_stripped.endswith('"'):
+            quote_char = '"'
+        elif value_core_stripped.startswith("'") and value_core_stripped.endswith("'"):
+            quote_char = "'"
+
+        new_value = f"{quote_char}{value}{quote_char}" if quote_char else str(value)
+        new_before_comment = f"{key_part}:{value_prefix}{new_value}{value_suffix}"
+
+        if sep:
+            return f"{new_before_comment}{sep}{comment}{newline}"
+        return f"{new_before_comment}{newline}"
+
+    def find_incremental_line(start_idx: int, end_indent: int) -> Optional[int]:
+        idx = start_idx
+        while idx < len(lines):
+            line = lines[idx]
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip(' '))
+
+            if indent <= end_indent and stripped.startswith('- '):
+                break
+            if indent <= end_indent and not stripped:
+                idx += 1
+                continue
+            if indent <= end_indent and stripped and not stripped.startswith('- ') and not stripped.startswith('#'):
+                break
+            if stripped.startswith('incremental:'):
+                return idx
+            idx += 1
+        return None
+
+    try:
+        data = yaml.safe_load(raw_text)
+    except Exception:
+        data = None
+
+    if isinstance(data, dict) and isinstance(data.get('variants'), list):
+        variants: List[Dict[str, Any]] = data['variants']
+        match_idx: Optional[int] = None
+        if cfg.variant_index is not None and 0 <= cfg.variant_index < len(variants):
+            candidate = variants[cfg.variant_index]
+            if isinstance(candidate, dict):
+                eff_product = candidate.get('product', data.get('product'))
+                if eff_product == cfg.product:
+                    match_idx = cfg.variant_index
+        if match_idx is None:
+            for i, variant in enumerate(variants):
+                if isinstance(variant, dict):
+                    eff_product = variant.get('product', data.get('product'))
+                    if eff_product == cfg.product:
+                        match_idx = i
+                        break
+        if match_idx is None:
+            Log.w(f"Could not locate matching variant in {config_path} when updating incremental.")
+            return False
+
+        try:
+            current_value = variants[match_idx].get('incremental')
+            if current_value == new_incremental:
+                Log.i(f"{config_path} already uses incremental {new_incremental}.")
+                return True
+        except Exception:
+            pass
+
+        variants_line_idx = next(
+            (i for i, line in enumerate(lines) if line.lstrip().startswith('variants:')),
+            None
+        )
+        if variants_line_idx is None:
+            Log.w(f"Could not find variants section in {config_path}.")
+            return False
+
+        variants_indent = len(lines[variants_line_idx]) - len(lines[variants_line_idx].lstrip(' '))
+
+        variant_counter = -1
+        target_variant_indent = None
+        variant_start_idx = None
+        for i in range(variants_line_idx + 1, len(lines)):
+            line = lines[i]
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip(' '))
+            if indent <= variants_indent and stripped:
+                break
+            if stripped.startswith('- '):
+                variant_counter += 1
+                if variant_counter == match_idx:
+                    target_variant_indent = indent
+                    variant_start_idx = i + 1
+                    break
+        if variant_start_idx is None or target_variant_indent is None:
+            Log.w(f"Failed to locate variant block #{match_idx + 1} in {config_path}.")
+            return False
+
+        inc_idx = find_incremental_line(variant_start_idx, target_variant_indent)
+        if inc_idx is None:
+            insert_line = ' ' * (target_variant_indent + 2) + f'incremental: "{new_incremental}"\n'
+            lines.insert(variant_start_idx, insert_line)
+        else:
+            lines[inc_idx] = rewrite_line(lines[inc_idx], new_incremental)
+    else:
+        # Non-variant config
+        inc_idx = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('variants:'):
+                break
+            if stripped.startswith('incremental:'):
+                inc_idx = i
+                break
+
+        if inc_idx is None:
+            Log.w(f"Could not find incremental entry in {config_path}.")
+            return False
+
+        lines[inc_idx] = rewrite_line(lines[inc_idx], new_incremental)
+
+    new_text = ''.join(lines)
+    if new_text == raw_text:
+        Log.i(f"{config_path} already uses incremental {new_incremental}.")
+        return True
+
+    try:
+        config_path.write_text(new_text)
+    except Exception as e:
+        Log.w(f"Failed to write updated config {config_path}: {e}")
+        return False
+
+    Log.s(f"Updated {config_path} incremental -> {new_incremental}")
+    return True
+
+
 def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) -> Tuple[str, str, str]:
     """Return helper strings for Telegram/log output based on SDK level."""
     if sdk_level is None:
@@ -631,7 +817,7 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
         Log.e(f"Error creating GitHub release: {e}")
         return False
 
-def process_config_variant(cfg: Config, config_name: str, args: argparse.Namespace,
+def process_config_variant(cfg: Config, config_name: str, config_path: Path, args: argparse.Namespace,
                            variant_label: Optional[str] = None) -> int:
     tg = None
     if not args.skip_telegram and not args.register_fingerprint:
@@ -703,6 +889,19 @@ def process_config_variant(cfg: Config, config_name: str, args: argparse.Namespa
     processed_fp_path = Path(PROCESSED_FP_FILE)
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
     is_new_update = target_fp not in processed_fingerprints
+    target_incremental = inc or extract_incremental_from_fingerprint(target_fp)
+
+    if is_new_update and not args.register_fingerprint:
+        if target_incremental:
+            if args.dry_run:
+                Log.i(f"Dry-run: would update {config_path} incremental to {target_incremental}.")
+            else:
+                if update_config_incremental(config_path, cfg, target_incremental):
+                    cfg.incremental = target_incremental
+        else:
+            Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
+    elif is_new_update and args.register_fingerprint:
+        Log.i("--register-fingerprint set. Skipping config incremental update.")
 
     if not is_new_update and not args.force_notify:
         Log.i("This update has already been processed. Skipping.")
@@ -816,7 +1015,7 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
         if slug and variants_total > 1:
             config_name = f"{config_name}-{slug}"
 
-        result = process_config_variant(cfg, config_name, args, variant_label)
+        result = process_config_variant(cfg, config_name, config_path, args, variant_label)
         exit_code = max(exit_code, result)
 
     return exit_code
