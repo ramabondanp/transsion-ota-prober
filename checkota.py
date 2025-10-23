@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Set
 
@@ -33,9 +33,12 @@ OTA_URL_PREFIX = b'https://android.googleapis.com/packages/ota'
 TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
 
 REGION_CODE_MAP = {
+    'GL': 'Global',
     'OP': 'Global',
     'RU': 'Russia',
     'IN': 'India',
+    'EU': 'Europe',
+    'TR': 'Turkey',
 }
 
 SDK_TO_ANDROID = {
@@ -72,9 +75,29 @@ class Config:
     device: str
     oem: str
     product: str
+    variant: Optional[str] = None
 
     @classmethod
-    def from_yaml(cls, file: Path) -> 'Config':
+    def _from_dict(cls, data: Dict[str, str], variant_name: Optional[str] = None) -> 'Config':
+        field_names = {field.name for field in fields(cls)}
+        required_fields = field_names - {'variant'}
+
+        filtered = {
+            key: value for key, value in data.items()
+            if key in field_names
+        }
+
+        if variant_name:
+            filtered['variant'] = variant_name
+
+        missing = [key for key in required_fields if key not in filtered]
+        if missing:
+            raise ValueError(f"Config missing required fields: {', '.join(sorted(missing))}")
+
+        return cls(**filtered)
+
+    @classmethod
+    def from_yaml(cls, file: Path) -> List['Config']:
         if not file.is_file():
             raise FileNotFoundError(f"Config file not found: {file}")
 
@@ -84,7 +107,31 @@ class Config:
         if not isinstance(data, dict):
             raise ValueError("Config file content is not a valid dictionary.")
 
-        return cls(**data)
+        variants = data.get('variants')
+
+        if variants is None:
+            return [cls._from_dict(data)]
+
+        if not isinstance(variants, list) or not variants:
+            raise ValueError("'variants' must be a non-empty list of dictionaries.")
+
+        base = {k: v for k, v in data.items() if k != 'variants'}
+        configs = []
+        for idx, variant in enumerate(variants, start=1):
+            if not isinstance(variant, dict):
+                raise ValueError(f"Variant entry #{idx} is not a dictionary.")
+
+            merged = {**base, **variant}
+            variant_name = (
+                variant.get('variant')
+                or variant.get('name')
+                or variant.get('region')
+                or variant.get('label')
+                or variant.get('product')
+            )
+            configs.append(cls._from_dict(merged, variant_name))
+
+        return configs
 
     def fingerprint(self) -> str:
         return (f'{self.oem}/{self.product}/{self.device}:'
@@ -584,18 +631,8 @@ def create_github_release(config_name: str, update_data: Dict) -> bool:
         Log.e(f"Error creating GitHub release: {e}")
         return False
 
-def process_config(config_path: Path, args: argparse.Namespace) -> int:
-    try:
-        cfg = Config.from_yaml(config_path)
-        if args.incremental:
-            Log.i(f"Override incremental: {args.incremental}")
-            cfg.incremental = args.incremental
-    except Exception as e:
-        Log.e(f"Config error for {config_path}: {e}")
-        return 1
-
-    config_name = config_path.stem
-
+def process_config_variant(cfg: Config, config_name: str, args: argparse.Namespace,
+                           variant_label: Optional[str] = None) -> int:
     tg = None
     if not args.skip_telegram and not args.register_fingerprint:
         token = os.environ.get('bot_token')
@@ -616,6 +653,8 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
     fp = cfg.fingerprint()
     Log.i(f"Device: {cfg.model} ({cfg.device})")
     reg_name = region_from_product(cfg.product)
+    if variant_label:
+        Log.i(f"Variant: {variant_label}")
     if reg_name:
         Log.i(f"Region: {reg_name}")
     Log.i(f"Build: {fp}")
@@ -740,6 +779,47 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
 
     Log.s("Update check completed successfully")
     return 0
+
+
+def process_config(config_path: Path, args: argparse.Namespace) -> int:
+    try:
+        configs = Config.from_yaml(config_path)
+    except Exception as e:
+        Log.e(f"Config error for {config_path}: {e}")
+        return 1
+
+    if args.incremental and len(configs) != 1:
+        Log.e('--incremental can only be used when a single configuration variant is defined')
+        return 1
+
+    exit_code = 0
+    variants_total = len(configs)
+
+    for idx, cfg in enumerate(configs, start=1):
+        variant_label = cfg.variant
+        display_label = variant_label or f"variant {idx}"
+
+        if variants_total > 1:
+            Log.i(f"Processing variant {idx}/{variants_total}: {display_label}")
+
+        if args.incremental:
+            Log.i(f"Override incremental: {args.incremental}")
+            cfg.incremental = args.incremental
+
+        slug = None
+        if variant_label:
+            slug = re.sub(r'[^A-Za-z0-9]+', '-', variant_label).strip('-')
+        if not slug and variants_total > 1:
+            slug = f"variant{idx}"
+
+        config_name = config_path.stem
+        if slug and variants_total > 1:
+            config_name = f"{config_name}-{slug}"
+
+        result = process_config_variant(cfg, config_name, args, variant_label)
+        exit_code = max(exit_code, result)
+
+    return exit_code
 
 
 def main() -> int:

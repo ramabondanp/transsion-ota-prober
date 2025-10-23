@@ -23,7 +23,7 @@
 * TECNO SPARK 20 (KJ5)
 * TECNO SPARK 20 Pro (KJ6)
 * TECNO SPARK 20 Pro+ (KJ7)
-* TECNO SPARK 20 Pro 5G (KJ8-IN)
+* TECNO SPARK 20 Pro 5G (KJ8)
 * TECNO SPARK 30C (KL5)
 * TECNO SPARK 30 4G (KL6)
 * TECNO SPARK 30 Pro (KL7)
@@ -91,8 +91,8 @@
 * Infinix ZERO Flip (X6962)
 
 ## GT SERIES
-* Infinix GT 20 Pro (X6871) (X6871-IN)
-* Infinix GT 30 Pro (X6873) (X6873-IN)
+* Infinix GT 20 Pro (X6871)
+* Infinix GT 30 Pro (X6873)
 * Infinix GT 30 (X6876)
 
 ## NOTE SERIES
@@ -105,7 +105,7 @@
 * Infinix NOTE 40 (X6853)
 * Infinix NOTE 50 Pro 4G (X6855)
 * Infinix NOTE 50 Pro+ 5G (X6856)
-* Infinix NOTE 50X 5G (X6857) (X6857B-IN)
+* Infinix NOTE 50X 5G (X6857) (X6857B)
 * Infinix NOTE 50 4G (X6858)
 * Infinix NOTE 50s 5G (X6870)
 
