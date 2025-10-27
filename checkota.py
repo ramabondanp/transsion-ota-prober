@@ -710,6 +710,97 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
     return True
 
 
+def commit_incremental_update(config_path: Path, new_incremental: str,
+                              variant_label: Optional[str] = None,
+                              extra_paths: Optional[List[Path]] = None) -> bool:
+    git_path = shutil.which('git')
+    if not git_path:
+        Log.w("Git executable not found; skipping auto-commit.")
+        return False
+
+    try:
+        repo_root_result = subprocess.run(
+            [git_path, 'rev-parse', '--show-toplevel'],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(config_path.parent)
+        )
+    except Exception as e:
+        Log.w(f"Failed to locate Git repository root: {e}")
+        return False
+
+    if repo_root_result.returncode != 0:
+        stderr = repo_root_result.stderr.strip() if repo_root_result.stderr else 'Unknown error'
+        Log.w(f"Could not determine Git repository root ({stderr}); skipping auto-commit.")
+        return False
+
+    repo_root = Path(repo_root_result.stdout.strip() or '.')
+
+    paths: List[Path] = [config_path]
+    if extra_paths:
+        for p in extra_paths:
+            if p and p.exists():
+                paths.append(p)
+
+    unique_paths: List[Path] = []
+    seen: Set[Path] = set()
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_paths.append(resolved)
+
+    if not unique_paths:
+        Log.i("No files to add for incremental update commit.")
+        return False
+
+    add_args: List[str] = []
+    for path in unique_paths:
+        try:
+            add_args.append(str(path.resolve().relative_to(repo_root)))
+        except Exception:
+            add_args.append(str(path))
+
+    add_cmd = [git_path, 'add', '--'] + add_args
+    add_result = subprocess.run(add_cmd, capture_output=True, text=True, cwd=str(repo_root))
+    if add_result.returncode != 0:
+        stderr = add_result.stderr.strip() or add_result.stdout.strip()
+        Log.w(f"Failed to stage files for commit: {stderr}")
+        return False
+
+    diff_result = subprocess.run(
+        [git_path, 'diff', '--cached', '--quiet'],
+        cwd=str(repo_root)
+    )
+
+    if diff_result.returncode == 0:
+        Log.i("No staged changes detected; skipping incremental update commit.")
+        return False
+    if diff_result.returncode not in (0, 1):
+        Log.w("Unable to inspect staged changes; skipping incremental update commit.")
+        return False
+
+    scope = config_path.stem
+    if variant_label:
+        scope = f"{scope} ({variant_label})"
+    commit_msg = f"{scope}: update incremental to {new_incremental}"
+
+    commit_cmd = [git_path, 'commit', '-m', commit_msg]
+    commit_result = subprocess.run(commit_cmd, capture_output=True, text=True, cwd=str(repo_root))
+    if commit_result.returncode == 0:
+        Log.s(f"Committed incremental update: {commit_msg}")
+        return True
+
+    stderr = commit_result.stderr.strip() or commit_result.stdout.strip()
+    Log.w(f"Git commit failed: {stderr}")
+    return False
+
+
 def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) -> Tuple[str, str, str]:
     """Return helper strings for Telegram/log output based on SDK level."""
     if sdk_level is None:
@@ -835,6 +926,10 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
                 Log.e(f"Telegram setup failed: {e}")
                 args.skip_telegram = True
 
+    config_updated = False
+    fingerprint_saved = False
+    commit_incremental_value: Optional[str] = None
+
     checker = UpdateChecker(cfg)
     fp = cfg.fingerprint()
     Log.i(f"Device: {cfg.model} ({cfg.device})")
@@ -890,6 +985,7 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
     processed_fingerprints = load_processed_fingerprints(processed_fp_path)
     is_new_update = target_fp not in processed_fingerprints
     target_incremental = inc or extract_incremental_from_fingerprint(target_fp)
+    commit_incremental_value = target_incremental
 
     if is_new_update and not args.register_fingerprint:
         if target_incremental:
@@ -898,6 +994,7 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
             else:
                 if update_config_incremental(config_path, cfg, target_incremental):
                     cfg.incremental = target_incremental
+                    config_updated = True
         else:
             Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
     elif is_new_update and args.register_fingerprint:
@@ -914,6 +1011,7 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
             else:
                 Log.i("--register-fingerprint flag is set. Saving new fingerprint without notification.")
                 save_processed_fingerprint(processed_fp_path, target_fp)
+                fingerprint_saved = True
                 Log.s("Update check completed successfully (fingerprint registered).")
         else:
             Log.i("--register-fingerprint flag is set, but fingerprint is already known. No action taken.")
@@ -961,6 +1059,7 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
             if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
                 if is_new_update:
                     save_processed_fingerprint(processed_fp_path, target_fp)
+                    fingerprint_saved = True
                     Log.i("Creating GitHub release for new update...")
                     create_github_release(config_name, data)
             else:
@@ -975,6 +1074,22 @@ def process_config_variant(cfg: Config, config_name: str, config_path: Path, arg
             if create_github_release(config_name, data):
                 if is_new_update and not (not args.skip_telegram and tg):
                     Log.i("Skipping fingerprint save due to force release")
+
+    if (
+        is_new_update
+        and not args.dry_run
+        and config_updated
+        and commit_incremental_value
+    ):
+        extra_paths: List[Path] = []
+        if fingerprint_saved:
+            extra_paths.append(processed_fp_path)
+        commit_incremental_update(
+            config_path,
+            commit_incremental_value,
+            variant_label,
+            extra_paths
+        )
 
     Log.s("Update check completed successfully")
     return 0
