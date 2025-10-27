@@ -13,7 +13,7 @@ if SUBMODULE_DIR.is_dir():
     if subs_path not in sys.path:
         sys.path.insert(0, subs_path)
 
-from modules.manager import Config, region_from_product, update_config_incremental
+from modules.manager import Config, region_code_from_product, region_from_product, update_config_incremental
 from modules.logging import Log
 from modules.git import commit_incremental_update
 from modules.github import create_github_release
@@ -113,7 +113,9 @@ def process_config_variant(
     commit_incremental_value = target_incremental
 
     if is_new_update and not args.register_fingerprint:
-        if target_incremental:
+        if args.incremental:
+            Log.i("--incremental override active; skipping config file update.")
+        elif target_incremental:
             if args.dry_run:
                 Log.i(f"Dry-run: would update {config_path} incremental to {target_incremental}.")
             else:
@@ -222,8 +224,22 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
         Log.e(f"Config error for {config_path}: {exc}")
         return 1
 
+    if args.region:
+        region_code = args.region.strip().upper()
+        Log.i(f"Filtering configuration variants by region code: {region_code}")
+        filtered_configs = [
+            cfg for cfg in configs if region_code_from_product(cfg.product) == region_code
+        ]
+        if not filtered_configs:
+            Log.e(f"No configuration variants in {config_path} match region code {region_code}")
+            return 1
+        configs = filtered_configs
+
     if args.incremental and len(configs) != 1:
-        Log.e("--incremental can only be used when a single configuration variant is defined")
+        Log.e(
+            "--incremental requires a single configuration variant. "
+            "Use --reg to select a specific region when multiple variants exist."
+        )
         return 1
 
     exit_code = 0
@@ -271,6 +287,7 @@ def main() -> int:
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
     parser.add_argument("--force-release", action="store_true", help="Create GitHub release even without Telegram token or if fingerprint already exists")
     parser.add_argument("-i", "--incremental", help="Override incremental version")
+    parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     args = parser.parse_args()
 
     if args.config and args.config_dir:

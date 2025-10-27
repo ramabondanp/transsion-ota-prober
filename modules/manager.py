@@ -97,6 +97,18 @@ def region_from_product(product: str) -> Optional[str]:
         return None
 
 
+def region_code_from_product(product: str) -> Optional[str]:
+    if not product:
+        return None
+    try:
+        if "-" not in product:
+            return None
+        code = product.rsplit("-", 1)[-1].strip().upper()
+        return code or None
+    except Exception:
+        return None
+
+
 def update_config_incremental(config_path: Path, cfg: Config, new_incremental: str) -> bool:
     if not new_incremental:
         Log.w("No incremental value available to update configuration.")
