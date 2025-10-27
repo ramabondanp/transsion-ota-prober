@@ -16,3 +16,11 @@ variants:
   - variant: "India"
     product: "X6873-IN"
     incremental: "153034"
+
+  - variant: "Russia"
+    product: "X6873-RU"
+    incremental: "153038"
+
+  - variant: "Turkey"
+    product: "X6873-TR"
+    incremental: "153034"
