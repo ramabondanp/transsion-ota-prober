@@ -16,7 +16,6 @@ if SUBMODULE_DIR.is_dir():
 from modules.manager import Config, region_code_from_product, region_from_product, update_config_incremental
 from modules.logging import Log
 from modules.git import commit_incremental_update
-from modules.github import create_github_release
 from modules.telegram import TgNotify
 from modules.metadata import (
     build_sdk_strings,
@@ -119,7 +118,7 @@ def process_config_variant(
         return 0
 
     if not is_new_update:
-        if not args.force_notify and not args.force_release:
+        if not args.force_notify:
             Log.i("This update has already been processed. Skipping.")
             return 0
 
@@ -164,9 +163,6 @@ def process_config_variant(
     if not is_new_update and args.force_notify:
         Log.w(f"Forcing notification for an already processed update: {title}")
 
-    if not is_new_update and args.force_release:
-        Log.w(f"Forcing GitHub release for an already processed update: {title}")
-
     data["fingerprint"] = target_fp
     if inc:
         data["post_build_incremental"] = inc
@@ -198,26 +194,14 @@ def process_config_variant(
             Log.i("Dry-run: would send Telegram notification with OTA details.")
             if is_new_update:
                 Log.i("Dry-run: would save new update title after successful notification.")
-                Log.i("Dry-run: would create GitHub release for new update.")
         else:
             if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
                 if is_new_update:
                     save_processed_title(processed_path, title)
                     title_saved = True
-                    Log.i("Creating GitHub release for new update...")
-                    create_github_release(config_name, data)
             else:
                 Log.e("Failed to send notification. Update title will not be saved.")
                 return 1
-
-    if args.force_release:
-        if args.dry_run:
-            Log.i("Dry-run: would create GitHub release due to --force-release.")
-        else:
-            Log.i("Force release flag detected. Creating GitHub release...")
-            if create_github_release(config_name, data):
-                if is_new_update and not (not args.skip_telegram and tg):
-                    Log.i("Skipping update title save due to force release")
 
     if is_new_update and not args.dry_run and config_updated and commit_incremental_value:
         extra_paths: List[Path] = []
@@ -312,7 +296,6 @@ def main() -> int:
         help="Save the update title without sending a notification",
     )
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
-    parser.add_argument("--force-release", action="store_true", help="Create GitHub release even without Telegram token or if update title already exists")
     parser.add_argument("-i", "--incremental", help="Override incremental version")
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     args = parser.parse_args()
