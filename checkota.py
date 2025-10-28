@@ -105,11 +105,20 @@ def process_config_variant(
     processed_path = processed_updates_path()
     processed_titles = load_processed_titles(processed_path)
     is_new_update = title not in processed_titles
-
-    if not is_new_update:
-        if args.register_update:
+    if args.register_update:
+        if not is_new_update:
             Log.i("--register-update flag is set, but update title is already known. No action taken.")
             return 0
+        Log.i("--register-update set. Skipping config incremental update.")
+        if args.dry_run:
+            Log.i("--register-update set. Dry-run: would save new update title without notification.")
+        else:
+            Log.i("--register-update flag is set. Saving new update title without notification.")
+            save_processed_title(processed_path, title)
+            Log.s("Update check completed successfully (update title registered).")
+        return 0
+
+    if not is_new_update:
         if not args.force_notify and not args.force_release:
             Log.i("This update has already been processed. Skipping.")
             return 0
@@ -151,18 +160,6 @@ def process_config_variant(
                     config_updated = True
         else:
             Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
-    elif is_new_update and args.register_update:
-        Log.i("--register-update set. Skipping config incremental update.")
-
-    if args.register_update:
-        if args.dry_run:
-            Log.i("--register-update set. Dry-run: would save new update title without notification.")
-        else:
-            Log.i("--register-update flag is set. Saving new update title without notification.")
-            save_processed_title(processed_path, title)
-            title_saved = True
-            Log.s("Update check completed successfully (update title registered).")
-        return 0
 
     if not is_new_update and args.force_notify:
         Log.w(f"Forcing notification for an already processed update: {title}")
