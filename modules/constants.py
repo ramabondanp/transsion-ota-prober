@@ -4,7 +4,7 @@ CHECKIN_URL = "https://android.googleapis.com/checkin"
 USER_AGENT_TPL = "Dalvik/2.1.0 (Linux; U; Android {0}; {1} Build/{2})"
 PROTO_TYPE = "application/x-protobuffer"
 DEBUG_FILE = "debug_checkin_response.txt"
-PROCESSED_FP_FILE = "processed_fingerprints.txt"
+PROCESSED_UPDATES_FILE = "processed_updates.txt"
 OTA_URL_PREFIX = b"https://android.googleapis.com/packages/ota"
 
 TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"

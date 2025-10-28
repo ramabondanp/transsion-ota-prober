@@ -4,21 +4,21 @@ from typing import Set
 from modules.logging import Log
 
 
-def load_processed_fingerprints(path: Path) -> Set[str]:
+def load_processed_titles(path: Path) -> Set[str]:
     if not path.exists():
         return set()
     try:
         with path.open("r") as handle:
             return {line.strip() for line in handle if line.strip()}
     except Exception as exc:
-        Log.e(f"Error reading processed fingerprints file {path}: {exc}")
+        Log.e(f"Error reading processed updates file {path}: {exc}")
         return set()
 
 
-def save_processed_fingerprint(path: Path, fingerprint: str) -> None:
+def save_processed_title(path: Path, title: str) -> None:
     try:
         with path.open("a") as handle:
-            handle.write(f"{fingerprint}\n")
-        Log.s(f"Saved new fingerprint to {path}")
+            handle.write(f"{title}\n")
+        Log.s(f"Saved new update title to {path}")
     except Exception as exc:
-        Log.e(f"Failed to save fingerprint to {path}: {exc}")
+        Log.e(f"Failed to save update title to {path}: {exc}")

@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from modules.constants import PROCESSED_FP_FILE, SDK_TO_ANDROID
+from modules.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
 from modules.logging import Log
 from modules.system import check_cmds
 
@@ -139,5 +139,5 @@ def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) 
     return message, log_line, release_line
 
 
-def processed_fp_path() -> Path:
-    return Path(PROCESSED_FP_FILE)
+def processed_updates_path() -> Path:
+    return Path(PROCESSED_UPDATES_FILE)

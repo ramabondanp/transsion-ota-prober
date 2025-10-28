@@ -22,9 +22,9 @@ from modules.metadata import (
     build_sdk_strings,
     extract_incremental_from_fingerprint,
     get_ota_metadata,
-    processed_fp_path,
+    processed_updates_path,
 )
-from modules.fingerprints import load_processed_fingerprints, save_processed_fingerprint
+from modules.fingerprints import load_processed_titles, save_processed_title
 from modules.update_checker import UpdateChecker
 
 
@@ -36,13 +36,18 @@ def process_config_variant(
     variant_label: Optional[str] = None,
 ) -> int:
     tg = None
-    if not args.skip_telegram and not args.register_fingerprint:
+    if not args.skip_telegram and not args.register_update:
         token = os.environ.get("bot_token")
         chat = os.environ.get("chat_id")
         telegraph_token = os.environ.get("telegraph_token")
 
         if not token or not chat or not telegraph_token:
-            Log.w("Telegram env vars not set, skipping notifications")
+            if args.dry_run:
+                if not getattr(args, "_printed_dry_run_telegram_notice", False):
+                    Log.i("Dry-run mode: Telegram env vars not set; notifications skipped.")
+                    setattr(args, "_printed_dry_run_telegram_notice", True)
+            else:
+                Log.w("Telegram env vars not set, skipping notifications")
             args.skip_telegram = True
         else:
             try:
@@ -52,17 +57,30 @@ def process_config_variant(
                 args.skip_telegram = True
 
     config_updated = False
-    fingerprint_saved = False
+    title_saved = False
     commit_incremental_value: Optional[str] = None
 
     checker = UpdateChecker(cfg)
     fingerprint = cfg.fingerprint()
     Log.i(f"Device: {cfg.model} ({cfg.device})")
     region_name = region_from_product(cfg.product)
-    if variant_label:
-        Log.i(f"Variant: {variant_label}")
-    if region_name:
-        Log.i(f"Region: {region_name}")
+    region_code = region_code_from_product(cfg.product)
+    normalized_variant = variant_label.strip().lower() if variant_label else None
+    normalized_region = region_name.strip().lower() if region_name else None
+
+    if variant_label and region_name and normalized_variant == normalized_region:
+        combined = variant_label
+        if region_code:
+            combined = f"{combined} ({region_code})"
+        Log.i(f"Variant / Region: {combined}")
+    else:
+        if variant_label:
+            Log.i(f"Variant: {variant_label}")
+        if region_name:
+            region_display = region_name
+            if region_code:
+                region_display = f"{region_display} ({region_code})"
+            Log.i(f"Region: {region_display}")
     Log.i(f"Build: {fingerprint}")
 
     found, data = checker.check(args.debug)
@@ -84,9 +102,21 @@ def process_config_variant(
     Log.i(f"Size: {size}")
     Log.i(f"URL: {url}")
 
+    processed_path = processed_updates_path()
+    processed_titles = load_processed_titles(processed_path)
+    is_new_update = title not in processed_titles
+
+    if not is_new_update:
+        if args.register_update:
+            Log.i("--register-update flag is set, but update title is already known. No action taken.")
+            return 0
+        if not args.force_notify and not args.force_release:
+            Log.i("This update has already been processed. Skipping.")
+            return 0
+
     ota_meta = get_ota_metadata(url)
     if not ota_meta or not ota_meta.get("fingerprint"):
-        Log.e("Could not determine target fingerprint. Cannot verify if update is new.")
+        Log.e("Could not determine target fingerprint from OTA metadata. Cannot derive incremental information.")
         return 1
 
     target_fp = ota_meta["fingerprint"]
@@ -106,13 +136,10 @@ def process_config_variant(
     if sdk_log_line:
         Log.i(sdk_log_line)
 
-    processed_path = processed_fp_path()
-    processed_fingerprints = load_processed_fingerprints(processed_path)
-    is_new_update = target_fp not in processed_fingerprints
     target_incremental = inc or extract_incremental_from_fingerprint(target_fp)
     commit_incremental_value = target_incremental
 
-    if is_new_update and not args.register_fingerprint:
+    if is_new_update and not args.register_update:
         if args.incremental:
             Log.i("--incremental override active; skipping config file update.")
         elif target_incremental:
@@ -124,31 +151,24 @@ def process_config_variant(
                     config_updated = True
         else:
             Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
-    elif is_new_update and args.register_fingerprint:
-        Log.i("--register-fingerprint set. Skipping config incremental update.")
+    elif is_new_update and args.register_update:
+        Log.i("--register-update set. Skipping config incremental update.")
 
-    if not is_new_update and not args.force_notify:
-        Log.i("This update has already been processed. Skipping.")
-        return 0
-
-    if args.register_fingerprint:
-        if is_new_update:
-            if args.dry_run:
-                Log.i("--register-fingerprint set. Dry-run: would save new fingerprint without notification.")
-            else:
-                Log.i("--register-fingerprint flag is set. Saving new fingerprint without notification.")
-                save_processed_fingerprint(processed_path, target_fp)
-                fingerprint_saved = True
-                Log.s("Update check completed successfully (fingerprint registered).")
+    if args.register_update:
+        if args.dry_run:
+            Log.i("--register-update set. Dry-run: would save new update title without notification.")
         else:
-            Log.i("--register-fingerprint flag is set, but fingerprint is already known. No action taken.")
+            Log.i("--register-update flag is set. Saving new update title without notification.")
+            save_processed_title(processed_path, title)
+            title_saved = True
+            Log.s("Update check completed successfully (update title registered).")
         return 0
 
     if not is_new_update and args.force_notify:
-        Log.w(f"Forcing notification for an already processed update: {target_fp}")
+        Log.w(f"Forcing notification for an already processed update: {title}")
 
     if not is_new_update and args.force_release:
-        Log.w(f"Forcing GitHub release for an already processed update: {target_fp}")
+        Log.w(f"Forcing GitHub release for an already processed update: {title}")
 
     data["fingerprint"] = target_fp
     if inc:
@@ -180,17 +200,17 @@ def process_config_variant(
         if args.dry_run:
             Log.i("Dry-run: would send Telegram notification with OTA details.")
             if is_new_update:
-                Log.i("Dry-run: would save new fingerprint after successful notification.")
+                Log.i("Dry-run: would save new update title after successful notification.")
                 Log.i("Dry-run: would create GitHub release for new update.")
         else:
             if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
                 if is_new_update:
-                    save_processed_fingerprint(processed_path, target_fp)
-                    fingerprint_saved = True
+                    save_processed_title(processed_path, title)
+                    title_saved = True
                     Log.i("Creating GitHub release for new update...")
                     create_github_release(config_name, data)
             else:
-                Log.e("Failed to send notification. Fingerprint will not be saved.")
+                Log.e("Failed to send notification. Update title will not be saved.")
                 return 1
 
     if args.force_release:
@@ -200,11 +220,11 @@ def process_config_variant(
             Log.i("Force release flag detected. Creating GitHub release...")
             if create_github_release(config_name, data):
                 if is_new_update and not (not args.skip_telegram and tg):
-                    Log.i("Skipping fingerprint save due to force release")
+                    Log.i("Skipping update title save due to force release")
 
     if is_new_update and not args.dry_run and config_updated and commit_incremental_value:
         extra_paths: List[Path] = []
-        if fingerprint_saved:
+        if title_saved:
             extra_paths.append(processed_path)
         commit_incremental_update(
             config_path,
@@ -245,10 +265,15 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
     exit_code = 0
     variants_total = len(configs)
 
+    if variants_total > 1:
+        print()
+
     for idx, cfg in enumerate(configs, start=1):
         variant_label = cfg.variant
         display_label = variant_label or f"variant {idx}"
 
+        if variants_total > 1 and idx > 1:
+            print()
         if variants_total > 1:
             Log.i(f"Processing variant {idx}/{variants_total}: {display_label}")
 
@@ -283,9 +308,14 @@ def main() -> int:
     parser.add_argument("-d", "--config-dir", type=Path, help="Directory containing config files to process")
     parser.add_argument("--dry-run", action="store_true", help="Simulate actions without making changes or sending notifications")
     parser.add_argument("--skip-telegram", action="store_true", help="Skip Telegram notifications")
-    parser.add_argument("--register-fingerprint", action="store_true", help="Save the update fingerprint without sending a notification")
+    parser.add_argument(
+        "--register-update",
+        action="store_true",
+        dest="register_update",
+        help="Save the update title without sending a notification",
+    )
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
-    parser.add_argument("--force-release", action="store_true", help="Create GitHub release even without Telegram token or if fingerprint already exists")
+    parser.add_argument("--force-release", action="store_true", help="Create GitHub release even without Telegram token or if update title already exists")
     parser.add_argument("-i", "--incremental", help="Override incremental version")
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     args = parser.parse_args()
@@ -325,16 +355,20 @@ def main() -> int:
 
     if args.dry_run:
         Log.i("Dry-run mode enabled: no external side effects will occur.")
+        token = os.environ.get("bot_token")
+        chat = os.environ.get("chat_id")
+        telegraph_token = os.environ.get("telegraph_token")
+        if not token or not chat or not telegraph_token:
+            Log.i("Dry-run mode: Telegram env vars not set; notifications skipped.")
+            setattr(args, "_printed_dry_run_telegram_notice", True)
 
     exit_code = 0
     total = len(config_paths)
     for idx, config_path in enumerate(config_paths, start=1):
-        if total > 1 and idx > 1:
+        if idx > 1:
             print()
-        if total > 1:
-            Log.i(f"Processing config {idx}/{total}: {config_path}")
-        else:
-            Log.i(f"Processing config: {config_path}")
+        header = f"Processing config {idx}/{total}: {config_path}" if total > 1 else f"Processing config: {config_path}"
+        Log.i(header)
         result = process_config(config_path, args)
         exit_code = max(exit_code, result)
 
