@@ -58,6 +58,8 @@ def process_config_variant(
     config_updated = False
     title_saved = False
     commit_incremental_value: Optional[str] = None
+    register_update_apply_incremental = bool(getattr(args, "register_update_inc", False))
+    register_mode_label = "--register-update-inc" if register_update_apply_incremental else "--register-update"
 
     checker = UpdateChecker(cfg)
     fingerprint = cfg.fingerprint()
@@ -106,16 +108,26 @@ def process_config_variant(
     is_new_update = title not in processed_titles
     if args.register_update:
         if not is_new_update:
-            Log.i("--register-update flag is set, but update title is already known. No action taken.")
+            Log.i(f"{register_mode_label} flag is set, but update title is already known. No action taken.")
             return 0
-        Log.i("--register-update set. Skipping config incremental update.")
-        if args.dry_run:
-            Log.i("--register-update set. Dry-run: would save new update title without notification.")
+        if register_update_apply_incremental:
+            Log.i(f"{register_mode_label} active; applying incremental update without notifications.")
+            args.skip_telegram = True
+            if args.dry_run:
+                Log.i(f"{register_mode_label} set. Dry-run: would save new update title without notification.")
+            else:
+                save_processed_title(processed_path, title)
+                title_saved = True
+                Log.i("Update title registered without notification.")
         else:
-            Log.i("--register-update flag is set. Saving new update title without notification.")
-            save_processed_title(processed_path, title)
-            Log.s("Update check completed successfully (update title registered).")
-        return 0
+            Log.i(f"{register_mode_label} set. Skipping config incremental update.")
+            if args.dry_run:
+                Log.i(f"{register_mode_label} set. Dry-run: would save new update title without notification.")
+            else:
+                Log.i(f"{register_mode_label} flag is set. Saving new update title without notification.")
+                save_processed_title(processed_path, title)
+                Log.s("Update check completed successfully (update title registered).")
+            return 0
 
     if not is_new_update:
         if not args.force_notify:
@@ -210,10 +222,14 @@ def process_config_variant(
         and config_updated
         and commit_incremental_value
         and not skip_commit
+        and not args.register_update
     )
 
-    if is_new_update and config_updated and skip_commit:
-        Log.i("--skip-commit set; incremental update will not be committed.")
+    if is_new_update and config_updated:
+        if skip_commit:
+            Log.i("--skip-commit set; incremental update will not be committed.")
+        elif args.register_update:
+            Log.i(f"{register_mode_label} mode active; incremental update will not be committed.")
 
     if should_commit:
         extra_paths: List[Path] = []
@@ -308,10 +324,18 @@ def main() -> int:
         dest="register_update",
         help="Save the update title without sending a notification",
     )
+    parser.add_argument(
+        "--register-update-inc",
+        action="store_true",
+        help="Register update title and update the config incremental value without notifications",
+    )
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
     parser.add_argument("-i", "--incremental", help="Override incremental version")
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     args = parser.parse_args()
+
+    if args.register_update_inc:
+        args.register_update = True
 
     if args.config and args.config_dir:
         parser.error("Use either --config or --config-dir, not both.")
