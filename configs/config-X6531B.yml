@@ -7,5 +7,5 @@ product: "X6531B-OP"         # The product code. May be same as device code or m
 device: "Infinix-X6531B"          # The device code. May be same as model code.
 android_version: "14" # Only put in the major version number.
 build_tag: "UP1A.231005.007"       # Example: RKQ1.211119.001
-incremental: "250808V1060"     # Example: 2206131341
+incremental: "251011V1074"     # Example: 2206131341
 model: "Infinix HOT 50i (B)"           # The model code. (e.g. SM-T380)
