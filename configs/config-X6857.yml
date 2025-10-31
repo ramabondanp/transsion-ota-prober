@@ -11,9 +11,9 @@ model: "Infinix NOTE 50X 5G"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "X6857-OP"         # The product code. May be same as device code or model code.
-    incremental: "153014"     # Example: 2206131341
+    incremental: "128010"     # Example: 2206131341
 
   - variant: "India"
     product: "X6857B-IN"
     device: "Infinix-X6857B"
-    incremental: "153003"
+    incremental: "128006"

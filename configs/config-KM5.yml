@@ -7,5 +7,5 @@ product: "KM5-OP"         # The product code. May be same as device code or mode
 device: "TECNO-KM5"          # The device code. May be same as model code.
 android_version: "15" # Only put in the major version number.
 build_tag: "AP3A.240905.015.A2"       # Example: RKQ1.211119.001
-incremental: "121014"     # Example: 2206131341
+incremental: "129004"     # Example: 2206131341
 model: "TECNO SPARK 40 / 40S"           # The model code. (e.g. SM-T380)
