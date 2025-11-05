@@ -215,21 +215,21 @@ def process_config_variant(
                 Log.e("Failed to send notification. Update title will not be saved.")
                 return 1
 
-    skip_commit = getattr(args, "skip_commit", False)
+    make_commit = getattr(args, "make_commit", False)
     should_commit = (
         is_new_update
         and not args.dry_run
         and config_updated
         and commit_incremental_value
-        and not skip_commit
+        and make_commit
         and not args.register_update
     )
 
     if is_new_update and config_updated:
-        if skip_commit:
-            Log.i("--skip-commit set; incremental update will not be committed.")
-        elif args.register_update:
+        if args.register_update:
             Log.i(f"{register_mode_label} mode active; incremental update will not be committed.")
+        elif not make_commit:
+            Log.i("Incremental update not committed (default). Use --make-commit to commit.")
 
     if should_commit:
         extra_paths: List[Path] = []
@@ -317,7 +317,7 @@ def main() -> int:
     parser.add_argument("-d", "--config-dir", type=Path, help="Directory containing config files to process")
     parser.add_argument("--dry-run", action="store_true", help="Simulate actions without making changes or sending notifications")
     parser.add_argument("--skip-telegram", action="store_true", help="Skip Telegram notifications")
-    parser.add_argument("--skip-commit", action="store_true", help="Skip committing incremental updates")
+    parser.add_argument("--make-commit", action="store_true", help="Commit incremental updates when they change")
     parser.add_argument(
         "--register-update",
         action="store_true",
