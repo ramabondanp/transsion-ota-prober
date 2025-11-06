@@ -85,6 +85,53 @@ class TgNotify:
         result += link_text
         return result
 
+    @staticmethod
+    def _sanitize_html(html: str) -> str:
+        if not html:
+            return html
+
+        # Remove tags that Telegram HTML does not support while preserving text content.
+        sanitized = re.sub(r"<\s*/?\s*small\s*>", "", html, flags=re.IGNORECASE)
+        sanitized = re.sub(r"<\s*font\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"</\s*font\s*>", "", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"<\s*br\s*/?\s*>", "\n", sanitized, flags=re.IGNORECASE)
+        # Telegram only allows href in <a>; strip other attributes if present.
+        def _clean_anchor(match: re.Match) -> str:
+            return ""
+
+        sanitized = re.sub(r"<\s*a\b([^>]*?)>", _clean_anchor, sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"</\s*a\s*>", "", sanitized, flags=re.IGNORECASE)
+
+        # Normalize common bullet characters to a dash for readability.
+        for bullet in ("\u2022", "\u2023", "\u2043", "\u2219", "\xb7"):
+            sanitized = sanitized.replace(bullet, "- ")
+        sanitized = sanitized.replace("\u00c2", "")
+
+        # Normalize whitespace: collapse extra spaces on blank lines and limit consecutive blanks.
+        lines = []
+        prev_blank = False
+        for line in sanitized.splitlines():
+            stripped = line.strip()
+            if stripped:
+                lines.append(stripped)
+                prev_blank = False
+            else:
+                if not prev_blank:
+                    lines.append("")
+                prev_blank = True
+
+        sanitized = "\n".join(lines).strip()
+        sanitized = re.sub(r":\n\n", ":\n", sanitized)
+        sanitized = re.sub(r"\n\n(-\s+)", r"\n\1", sanitized)
+        sanitized = re.sub(r"\n\n(\d+\.)", r"\n\1", sanitized)
+        sanitized = re.sub(r"-\s{2,}", "- ", sanitized)
+        sanitized = re.sub(r"[ \t]*\(\s*https?://[^\)]*\)", "", sanitized)
+        sanitized = re.sub(r"https?://\S+", "", sanitized)
+        sanitized = re.sub(r"\n[ \t]+", "\n", sanitized)
+        sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
+        sanitized = sanitized.replace(" \n", "\n").strip()
+        return sanitized
+
     def send(
         self,
         msg: str,
@@ -94,6 +141,8 @@ class TgNotify:
         device_title: Optional[str] = None,
     ) -> bool:
         Log.i("Sending Telegram notification...")
+
+        msg = self._sanitize_html(msg)
 
         telegraph_url = None
 
@@ -133,6 +182,15 @@ class TgNotify:
             Log.s("Notification sent successfully")
             return True
 
+        except requests.HTTPError as exc:
+            detail = ""
+            if exc.response is not None:
+                try:
+                    detail = exc.response.text
+                except Exception:
+                    detail = str(exc.response)
+            Log.e(f"Failed to send notification: {exc} - {detail}")
+            return False
         except Exception as exc:
             Log.e(f"Failed to send notification: {exc}")
             return False

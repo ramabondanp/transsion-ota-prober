@@ -122,7 +122,7 @@ class UpdateChecker:
             if name == "update_title":
                 info["title"] = value.strip()
             elif name == "update_description":
-                info["description"] = self._clean_desc(value)
+                info["description"] = value.strip()
             elif name == "update_size":
                 info["size"] = value
 
