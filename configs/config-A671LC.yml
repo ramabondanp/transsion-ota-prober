@@ -7,5 +7,5 @@ product: "A671LC-OP"         # The product code. May be same as device code or m
 device: "itel-A671LC"          # The device code. May be same as model code.
 android_version: "14" # Only put in the major version number.
 build_tag: "UP1A.231005.007"       # Example: RKQ1.211119.001
-incremental: "250813V1636"     # Example: 2206131341
+incremental: "251020V1663"     # Example: 2206131341
 model: "itel A80"           # The model code. (e.g. SM-T380)
