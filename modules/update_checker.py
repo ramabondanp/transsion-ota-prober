@@ -1,3 +1,4 @@
+import time
 import datetime
 import gzip
 from pathlib import Path
@@ -67,29 +68,40 @@ class UpdateChecker:
 
     def check(self, debug: bool = False) -> Tuple[bool, Optional[Dict]]:
         Log.i("Checking for updates...")
+        retries = 3
+        delay = 5
 
-        try:
-            data = self._build_request()
-            response = requests.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
-            response.raise_for_status()
+        for attempt in range(retries):
+            try:
+                data = self._build_request()
+                response = requests.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
+                response.raise_for_status()
 
-            resp = checkin_generator_pb2.AndroidCheckinResponse()
-            resp.ParseFromString(response.content)
+                resp = checkin_generator_pb2.AndroidCheckinResponse()
+                resp.ParseFromString(response.content)
 
-            if debug:
-                Path(DEBUG_FILE).write_text(text_format.MessageToString(resp))
-                Log.i(f"Debug response saved to {DEBUG_FILE}")
+                if debug:
+                    Path(DEBUG_FILE).write_text(text_format.MessageToString(resp))
+                    Log.i(f"Debug response saved to {DEBUG_FILE}")
 
-            info = self._parse(resp)
-            has_update = info.get("found", False) and "url" in info
-            return has_update, info
+                info = self._parse(resp)
+                has_update = info.get("found", False) and "url" in info
+                return has_update, info
 
-        except Exception as exc:
-            Log.e(f"Update check failed: {exc}")
-            if debug and "response" in locals():
-                Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(response.content)
-                Log.i("Raw error response saved")
-            return False, None
+            except requests.exceptions.Timeout:
+                Log.w(f"Update check timed out. Retrying in {delay} seconds... ({attempt + 1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                else:
+                    Log.e("Update check failed after multiple retries due to timeout.")
+                    return False, None
+            except Exception as exc:
+                Log.e(f"Update check failed: {exc}")
+                if debug and "response" in locals():
+                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(response.content)
+                    Log.i("Raw error response saved")
+                return False, None
+        return False, None
 
     def _parse(self, resp: checkin_generator_pb2.AndroidCheckinResponse) -> Dict:
         info = {
