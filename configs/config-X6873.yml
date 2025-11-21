@@ -11,16 +11,16 @@ model: "Infinix GT 30 Pro"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "X6873-OP"         # The product code. May be same as device code or model code.
-    incremental: "153038"     # Example: 2206131341
+    incremental: "131031"     # Example: 2206131341
 
   - variant: "India"
     product: "X6873-IN"
-    incremental: "153034"
+    incremental: "131031"
 
   - variant: "Russia"
     product: "X6873-RU"
-    incremental: "153038"
+    incremental: "131033"
 
   - variant: "Turkey"
     product: "X6873-TR"
-    incremental: "153034"
+    incremental: "131031"
