@@ -24,3 +24,7 @@ variants:
   - variant: "Turkey"
     product: "X6873-TR"
     incremental: "131031"
+
+  - variant: "Europe"
+    product: "X6873-EU"
+    incremental: "131015"
