@@ -11,12 +11,12 @@ model: "Infinix ZERO Flip"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "X6962-OP"         # The product code. May be same as device code or model code.
-    incremental: "250819V2389"     # Example: 2206131341
+    incremental: "251107V2494"     # Example: 2206131341
 
   - variant: "India"
     product: "X6962-IN"
-    incremental: "250819V2389"
+    incremental: "251107V2494"
 
   - variant: "Russia"
     product: "X6962-RU"
-    incremental: "250819V2389"
+    incremental: "251107V2494"
