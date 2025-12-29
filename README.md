@@ -64,6 +64,7 @@
 * itel S25 Ultra (S686LN)
 * itel Super 26 Ultra (S688LN)
 * itel VistaTab 30 Pro (P13001L)
+* itel CITY 200 (C681L)
 
 ## XPAD
 * Infinix XPAD (X1101)
