@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import argparse
+import html
 import os
 import re
 import sys
@@ -200,6 +201,7 @@ def process_config_variant(
             + (f"<b>Security patch:</b> {spl}\n" if spl else "")
             + f"<b>Fingerprint:</b> <code>{target_fp}</code>"
             + (f"\n<b>Build date:</b> {build_date} (CST)" if build_date else "")
+            + (f"\n<b>Google OTA link:</b> {html.escape(url, quote=False)}" if url else "")
         )
 
         if args.dry_run:
@@ -207,7 +209,7 @@ def process_config_variant(
             if is_new_update:
                 Log.i("Dry-run: would save new update title after successful notification.")
         else:
-            if tg.send(msg, "Google OTA Link", url, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
+            if tg.send(msg, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
                 if is_new_update:
                     save_processed_title(processed_path, title)
                     title_saved = True

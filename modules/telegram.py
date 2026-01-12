@@ -126,7 +126,6 @@ class TgNotify:
         sanitized = re.sub(r"\n\n(\d+\.)", r"\n\1", sanitized)
         sanitized = re.sub(r"-\s{2,}", "- ", sanitized)
         sanitized = re.sub(r"[ \t]*\(\s*https?://[^\)]*\)", "", sanitized)
-        sanitized = re.sub(r"https?://\S+", "", sanitized)
         sanitized = re.sub(r"\n[ \t]+", "\n", sanitized)
         sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
         sanitized = sanitized.replace(" \n", "\n").strip()
