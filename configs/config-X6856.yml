@@ -11,7 +11,7 @@ model: "Infinix NOTE 50 Pro+ 5G"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "X6856-OP"         # The product code. May be same as device code or model code.
-    incremental: "155006"     # Example: 2206131341
+    incremental: "145016"     # Example: 2206131341
 
   - variant: "Europe"
     product: "X6856-EU"
@@ -19,8 +19,8 @@ variants:
 
   - variant: "Turkey"
     product: "X6856-TR"
-    incremental: "155006"
+    incremental: "145016"
 
   - variant: "Russia"
     product: "X6856-RU"
-    incremental: "155006"
+    incremental: "145016"
