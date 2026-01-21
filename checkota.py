@@ -2,11 +2,15 @@
 
 import argparse
 import html
+import io
 import os
 import re
 import sys
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 SUBMODULE_DIR = Path(__file__).resolve().parent / "google-ota-prober"
 if SUBMODULE_DIR.is_dir():
@@ -16,7 +20,6 @@ if SUBMODULE_DIR.is_dir():
 
 from modules.manager import Config, region_code_from_product, region_from_product, update_config_incremental
 from modules.logging import Log
-from modules.git import commit_incremental_update
 from modules.telegram import TgNotify
 from modules.metadata import (
     build_sdk_strings,
@@ -27,6 +30,9 @@ from modules.metadata import (
 from modules.fingerprints import load_processed_titles, save_processed_title
 from modules.update_checker import UpdateChecker
 
+FILE_LOCK = threading.Lock()
+TELEGRAM_LOCK = threading.Lock()
+
 
 def process_config_variant(
     cfg: Config,
@@ -36,6 +42,9 @@ def process_config_variant(
     variant_label: Optional[str] = None,
 ) -> int:
     tg = None
+    update_incremental_only = bool(getattr(args, "update_incremental", False))
+    if update_incremental_only:
+        args.skip_telegram = True
     if not args.skip_telegram and not args.register_update:
         token = os.environ.get("bot_token")
         chat = os.environ.get("chat_id")
@@ -58,9 +67,6 @@ def process_config_variant(
 
     config_updated = False
     title_saved = False
-    commit_incremental_value: Optional[str] = None
-    register_update_apply_incremental = bool(getattr(args, "register_update_inc", False))
-    register_mode_label = "--register-update-inc" if register_update_apply_incremental else "--register-update"
 
     checker = UpdateChecker(cfg)
     fingerprint = cfg.fingerprint()
@@ -107,31 +113,25 @@ def process_config_variant(
     processed_path = processed_updates_path()
     processed_titles = load_processed_titles(processed_path)
     is_new_update = title not in processed_titles
+
     if args.register_update:
         if not is_new_update:
-            Log.i(f"{register_mode_label} flag is set, but update title is already known. No action taken.")
+            Log.i("--register-update flag is set, but update title is already known. No action taken.")
             return 0
-        if register_update_apply_incremental:
-            Log.i(f"{register_mode_label} active; applying incremental update without notifications.")
-            args.skip_telegram = True
-            if args.dry_run:
-                Log.i(f"{register_mode_label} set. Dry-run: would save new update title without notification.")
-            else:
-                save_processed_title(processed_path, title)
-                title_saved = True
-                Log.i("Update title registered without notification.")
+        Log.i("--register-update set. Skipping config incremental update.")
+        if args.dry_run:
+            Log.i("--register-update set. Dry-run: would save new update title without notification.")
         else:
-            Log.i(f"{register_mode_label} set. Skipping config incremental update.")
-            if args.dry_run:
-                Log.i(f"{register_mode_label} set. Dry-run: would save new update title without notification.")
-            else:
-                Log.i(f"{register_mode_label} flag is set. Saving new update title without notification.")
+            Log.i("--register-update flag is set. Saving new update title without notification.")
+            with FILE_LOCK:
                 save_processed_title(processed_path, title)
-                Log.s("Update check completed successfully (update title registered).")
-            return 0
+            Log.s("Update check completed successfully (update title registered).")
+        return 0
 
     if not is_new_update:
-        if not args.force_notify:
+        if update_incremental_only:
+            Log.i("Update title already known; continuing due to --update-incremental.")
+        elif not args.force_notify:
             Log.i("This update has already been processed. Skipping.")
             return 0
 
@@ -158,18 +158,19 @@ def process_config_variant(
         Log.i(sdk_log_line)
 
     target_incremental = inc or extract_incremental_from_fingerprint(target_fp)
-    commit_incremental_value = target_incremental
-
-    if is_new_update and not args.register_update:
+    if update_incremental_only or (is_new_update and not args.register_update):
         if args.incremental:
             Log.i("--incremental override active; skipping config file update.")
+        elif title and "Tcard" in title:
+            Log.i("Skipping incremental update because update title contains 'Tcard'.")
         elif target_incremental:
             if args.dry_run:
                 Log.i(f"Dry-run: would update {config_path} incremental to {target_incremental}.")
             else:
-                if update_config_incremental(config_path, cfg, new_incremental=target_incremental):
-                    cfg.incremental = target_incremental
-                    config_updated = True
+                with FILE_LOCK:
+                    if update_config_incremental(config_path, cfg, new_incremental=target_incremental):
+                        cfg.incremental = target_incremental
+                        config_updated = True
         else:
             Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
 
@@ -209,40 +210,16 @@ def process_config_variant(
             if is_new_update:
                 Log.i("Dry-run: would save new update title after successful notification.")
         else:
-            if tg.send(msg, truncate_desc=True, device_title=f"{cfg.model} - {title}"):
+            with TELEGRAM_LOCK:
+                sent = tg.send(msg, truncate_desc=True, device_title=f"{cfg.model} - {title}")
+            if sent:
                 if is_new_update:
-                    save_processed_title(processed_path, title)
-                    title_saved = True
+                    with FILE_LOCK:
+                        save_processed_title(processed_path, title)
+                        title_saved = True
             else:
                 Log.e("Failed to send notification. Update title will not be saved.")
                 return 1
-
-    make_commit = getattr(args, "make_commit", False)
-    should_commit = (
-        is_new_update
-        and not args.dry_run
-        and config_updated
-        and commit_incremental_value
-        and make_commit
-        and not args.register_update
-    )
-
-    if is_new_update and config_updated:
-        if args.register_update:
-            Log.i(f"{register_mode_label} mode active; incremental update will not be committed.")
-        elif not make_commit:
-            Log.i("Incremental update not committed (default). Use --make-commit to commit.")
-
-    if should_commit:
-        extra_paths: List[Path] = []
-        if title_saved:
-            extra_paths.append(processed_path)
-        commit_incremental_update(
-            config_path,
-            commit_incremental_value,
-            variant_label,
-            extra_paths,
-        )
 
     Log.s("Update check completed successfully")
     return 0
@@ -277,14 +254,14 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
     variants_total = len(configs)
 
     if variants_total > 1:
-        print()
+        Log.raw("")
 
     for idx, cfg in enumerate(configs, start=1):
         variant_label = cfg.variant
         display_label = variant_label or f"variant {idx}"
 
         if variants_total > 1 and idx > 1:
-            print()
+            Log.raw("")
         if variants_total > 1:
             Log.i(f"Processing variant {idx}/{variants_total}: {display_label}")
 
@@ -319,7 +296,6 @@ def main() -> int:
     parser.add_argument("-d", "--config-dir", type=Path, help="Directory containing config files to process")
     parser.add_argument("--dry-run", action="store_true", help="Simulate actions without making changes or sending notifications")
     parser.add_argument("--skip-telegram", action="store_true", help="Skip Telegram notifications")
-    parser.add_argument("--make-commit", action="store_true", help="Commit incremental updates when they change")
     parser.add_argument(
         "--register-update",
         action="store_true",
@@ -327,17 +303,23 @@ def main() -> int:
         help="Save the update title without sending a notification",
     )
     parser.add_argument(
-        "--register-update-inc",
+        "--update-incremental",
         action="store_true",
-        help="Register update title and update the config incremental value without notifications",
+        help="Update the config incremental value without notifications",
     )
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
     parser.add_argument("-i", "--incremental", help="Override incremental version")
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of config files to process in parallel when using --config-dir (default: 1)",
+    )
     args = parser.parse_args()
 
-    if args.register_update_inc:
-        args.register_update = True
+    if args.update_incremental:
+        args.skip_telegram = True
 
     if args.config and args.config_dir:
         parser.error("Use either --config or --config-dir, not both.")
@@ -381,15 +363,75 @@ def main() -> int:
             Log.i("Dry-run mode: Telegram env vars not set; notifications skipped.")
             setattr(args, "_printed_dry_run_telegram_notice", True)
 
+    if args.jobs < 1:
+        Log.e("--jobs must be >= 1")
+        return 1
+
     exit_code = 0
     total = len(config_paths)
-    for idx, config_path in enumerate(config_paths, start=1):
-        if idx > 1:
-            print()
-        header = f"Processing config {idx}/{total}: {config_path}" if total > 1 else f"Processing config: {config_path}"
+
+    def run_config(index: int, path: Path) -> int:
+        local_args = argparse.Namespace(**vars(args))
+        if index > 1 and args.jobs == 1:
+            Log.raw("")
+        header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
         Log.i(header)
-        result = process_config(config_path, args)
-        exit_code = max(exit_code, result)
+        return process_config(path, local_args)
+
+    if args.jobs == 1 or total == 1:
+        for idx, config_path in enumerate(config_paths, start=1):
+            result = run_config(idx, config_path)
+            exit_code = max(exit_code, result)
+    else:
+        def run_config_buffered(index: int, path: Path) -> tuple[int, int, str]:
+            local_args = argparse.Namespace(**vars(args))
+            header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
+            buffer = io.StringIO()
+            with Log.capture(buffer):
+                Log.i(header)
+                result = process_config(path, local_args)
+            return index, result, buffer.getvalue()
+
+        with ThreadPoolExecutor(max_workers=min(args.jobs, total)) as executor:
+            start_times = {}
+            futures = {}
+            for idx, config_path in enumerate(config_paths, start=1):
+                start_times[idx] = time.monotonic()
+                futures[executor.submit(run_config_buffered, idx, config_path)] = idx
+            results: dict[int, tuple[int, str]] = {}
+            remaining = set(futures.keys())
+            next_index = 1
+            first = True
+            last_heartbeat = time.monotonic()
+
+            while remaining or next_index <= total:
+                if remaining:
+                    done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        index, result, output = future.result()
+                        results[index] = (result, output)
+
+                while next_index in results:
+                    result, output = results.pop(next_index)
+                    if not first:
+                        Log.raw("")
+                    first = False
+                    if output:
+                        print(output, end="" if output.endswith("\n") else "\n")
+                    exit_code = max(exit_code, result)
+                    next_index += 1
+
+                now = time.monotonic()
+                if now - last_heartbeat >= 5 and next_index <= total:
+                    completed = next_index - 1
+                    running = len(remaining)
+                    buffered = len(results)
+                    elapsed = now - start_times.get(next_index, now)
+                    Log.raw(
+                        f"... waiting for config {next_index}/{total} "
+                        f"({completed}/{total} completed, {running} running, {buffered} buffered, {elapsed:.0f}s elapsed)"
+                    )
+                    last_heartbeat = now
 
     return exit_code
 
