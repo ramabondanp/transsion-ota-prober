@@ -7,5 +7,5 @@ product: "X6860-OP"         # The product code. May be same as device code or mo
 device: "Infinix-X6860"          # The device code. May be same as model code.
 android_version: "15" # Only put in the major version number.
 build_tag: "AP3A.240905.015.A2"       # Example: RKQ1.211119.001
-incremental: "145004"     # Example: 2206131341
+incremental: "145011"     # Example: 2206131341
 model: "Infinix ZERO 40 4G"           # The model code. (e.g. SM-T380)

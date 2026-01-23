@@ -7,5 +7,5 @@ product: "X1301-OP"         # The product code. May be same as device code or mo
 device: "Infinix-X1301"          # The device code. May be same as model code.
 android_version: "14" # Only put in the major version number.
 build_tag: "UKQ1.240826.001"       # Example: RKQ1.211119.001
-incremental: "250808V32"     # Example: 2206131341
+incremental: "251218V74"     # Example: 2206131341
 model: "Infinix XPAD GT (SD888)"           # The model code. (e.g. SM-T380)
