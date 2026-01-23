@@ -129,8 +129,11 @@ def process_config_variant(
         return 0
 
     if not is_new_update:
-        if update_incremental_only:
-            Log.i("Update title already known; continuing due to --update-incremental.")
+        if update_incremental_only and not args.force_update_incremental:
+            Log.i("Update title already known; skipping incremental update due to --update-incremental.")
+            return 0
+        if update_incremental_only and args.force_update_incremental:
+            Log.i("Update title already known; continuing due to --force with --update-incremental.")
         elif not args.force_notify:
             Log.i("This update has already been processed. Skipping.")
             return 0
@@ -308,6 +311,12 @@ def main() -> int:
         help="Update the config incremental value without notifications",
     )
     parser.add_argument("--force-notify", action="store_true", help="Send notification even if the update has been seen before")
+    parser.add_argument(
+        "--force",
+        dest="force_update_incremental",
+        action="store_true",
+        help="Allow --update-incremental to update even if the update title is already known",
+    )
     parser.add_argument("-i", "--incremental", help="Override incremental version")
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     parser.add_argument(
