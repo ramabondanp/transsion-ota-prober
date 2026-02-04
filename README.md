@@ -116,6 +116,7 @@
 * Infinix NOTE 50s 5G (X6870)
 * Infinix NOTE Edge (X6887)
 * Infinix NOTE 60 Pro 5G SD7sG4 (X6878)
+* Infinix NOTE 60 5G (X6879)
 
 ## SMART SERIES
 * Infinix SMART 10 (X6725)
