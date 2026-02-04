@@ -7,5 +7,5 @@ product: "X6878-OP"         # The product code. May be same as device code or mo
 device: "Infinix-X6878"          # The device code. May be same as model code.
 android_version: "16" # Only put in the major version number.
 build_tag: "BQ2A.250811.001-BP2A.250605.031.A3"       # Example: RKQ1.211119.001
-incremental: "101200054"     # Example: 2206131341
+incremental: "101250041"     # Example: 2206131341
 model: "Infinix NOTE 60 Pro 5G (SD7sG4)"           # The model code. (e.g. SM-T380)

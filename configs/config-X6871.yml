@@ -15,8 +15,8 @@ variants:
 
   - variant: "India"
     product: "X6871-IN"
-    incremental: "145008"
+    incremental: "145015"
 
   - variant: "Russia"
     product: "X6871-RU"
-    incremental: "129007"
+    incremental: "145015"

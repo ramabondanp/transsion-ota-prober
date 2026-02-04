@@ -15,7 +15,7 @@ variants:
 
   - variant: "India"
     product: "X6852-IN"
-    incremental: "151009"
+    incremental: "155001"
 
   - variant: "Europe"
     product: "X6852-EU"
