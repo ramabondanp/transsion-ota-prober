@@ -194,11 +194,13 @@ def process_config_variant(
 
     if not args.skip_telegram and tg:
         region_line = f" ({region_name})" if region_name else ""
-        sdk_suffix = f" ({sdk_message})" if sdk_message else ""
+        os_line = f"<b>OS:</b> {sdk_message}\n" if sdk_message else ""
         msg = (
             f"<blockquote><b>OTA Update Available</b></blockquote>\n\n"
-            f"<b>Device:</b> {cfg.model}{region_line}\n\n"
-            f"<b>Title:</b> {title}{sdk_suffix}\n\n"
+            f"<b>Device:</b> {cfg.model}{region_line}\n"
+            f"\n"
+            f"<b>Title:</b> {title}\n"
+            f"{os_line}\n"
             f"{desc}\n\n"
             f"<b>Size:</b> {size}\n"
             + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else "")
