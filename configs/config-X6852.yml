@@ -11,7 +11,7 @@ model: "Infinix NOTE 40 5G"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "X6852-OP"         # The product code. May be same as device code or model code.
-    incremental: "145002"     # Example: 2206131341
+    incremental: "155004"     # Example: 2206131341
 
   - variant: "India"
     product: "X6852-IN"
@@ -19,4 +19,4 @@ variants:
 
   - variant: "Europe"
     product: "X6852-EU"
-    incremental: "127002"
+    incremental: "155005"
