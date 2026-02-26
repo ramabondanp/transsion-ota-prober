@@ -42,6 +42,7 @@ def process_config_variant(
     variant_label: Optional[str] = None,
 ) -> int:
     tg = None
+    gen_fp_only = bool(getattr(args, "gen_fp", False))
     update_incremental_only = bool(getattr(args, "update_incremental", False))
     if update_incremental_only:
         args.skip_telegram = True
@@ -101,6 +102,17 @@ def process_config_variant(
     url = data.get("url")
     size = data.get("size")
     desc = data.get("description", "No description")
+
+    if gen_fp_only:
+        if not url:
+            Log.e("Missing OTA URL in update response; cannot fetch target fingerprint.")
+            return 1
+        ota_meta = get_ota_metadata(url)
+        if not ota_meta or not ota_meta.get("fingerprint"):
+            Log.e("Could not determine target fingerprint from OTA metadata.")
+            return 1
+        Log.raw(ota_meta["fingerprint"])
+        return 0
 
     if not all([title, url, size]):
         Log.e("Missing essential update info (title, url, or size)")
@@ -320,6 +332,11 @@ def main() -> int:
         help="Allow --update-incremental to update even if the update title is already known",
     )
     parser.add_argument("-i", "--incremental", help="Override incremental version")
+    parser.add_argument(
+        "--gen-fp",
+        action="store_true",
+        help="Print update target fingerprint(s) only when OTA updates are available",
+    )
     parser.add_argument("--reg", "--region", dest="region", help="Process only variants matching the given region code (e.g. OP, RU)")
     parser.add_argument(
         "--jobs",
@@ -330,6 +347,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.update_incremental:
+        args.skip_telegram = True
+    if args.gen_fp:
         args.skip_telegram = True
 
     if args.config and args.config_dir:
@@ -396,9 +415,9 @@ def main() -> int:
     else:
         def run_config_buffered(index: int, path: Path) -> tuple[int, int, str]:
             local_args = argparse.Namespace(**vars(args))
-            header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
             buffer = io.StringIO()
             with Log.capture(buffer):
+                header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
                 Log.i(header)
                 result = process_config(path, local_args)
             return index, result, buffer.getvalue()
