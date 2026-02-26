@@ -15,8 +15,12 @@ variants:
 
   - variant: "India"
     product: "X6962-IN"
-    incremental: "251107V2494"
+    incremental: "114014"
+    android_version: "15" # Only put in the major version number.
+    build_tag: "AP3A.240905.015.A2"       # Example: RKQ1.211119.001
 
   - variant: "Russia"
     product: "X6962-RU"
-    incremental: "251107V2494"
+    incremental: "114014"
+    android_version: "15" # Only put in the major version number.
+    build_tag: "AP3A.240905.015.A2"       # Example: RKQ1.211119.001
