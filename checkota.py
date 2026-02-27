@@ -7,8 +7,10 @@ import os
 import re
 import sys
 import threading
+import textwrap
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +34,138 @@ from modules.update_checker import UpdateChecker
 
 FILE_LOCK = threading.Lock()
 TELEGRAM_LOCK = threading.Lock()
+
+
+class TerminalParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.indent = 0
+        self.bold = False
+        self.list_stack = []
+        self.ol_counter = []
+        self.buffer = ""
+        self.lines = []
+
+    def _push(self, line: str = ""):
+        self.lines.append(line)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "b":
+            self.bold = True
+        elif tag == "h3":
+            self.flush()
+        elif tag == "h4":
+            self.flush()
+        elif tag == "ol":
+            self.flush()
+            self.list_stack.append("ol")
+            self.ol_counter.append(0)
+            self.indent += 2
+        elif tag == "ul":
+            self.flush()
+            self.list_stack.append("ul")
+            self.indent += 2
+        elif tag == "li":
+            self.flush()
+        elif tag == "br":
+            self.flush()
+            self._push("")
+
+    def handle_endtag(self, tag):
+        if tag == "b":
+            self.bold = False
+        elif tag in ("h3", "h4"):
+            self.flush(style=tag)
+        elif tag in ("ol", "ul"):
+            self.flush()
+            if self.list_stack:
+                lst = self.list_stack.pop()
+                if lst == "ol" and self.ol_counter:
+                    self.ol_counter.pop()
+            self.indent = max(0, self.indent - 2)
+
+    def handle_data(self, data):
+        self.buffer += html.unescape(data)
+
+    def flush(self, style=None):
+        text = self.buffer.strip()
+        self.buffer = ""
+        if not text:
+            return
+
+        prefix = " " * self.indent
+        width = max(20, 100 - self.indent)
+
+        if style == "h3":
+            self._push("\033[1;36m" + "=" * 60 + "\033[0m")
+            self._push("\033[1;36m  " + text.upper() + "\033[0m")
+            self._push("\033[1;36m" + "=" * 60 + "\033[0m")
+            return
+        if style == "h4":
+            self._push("\033[1;33m  " + text + "\033[0m")
+            return
+
+        if self.list_stack:
+            lst_type = self.list_stack[-1]
+            if lst_type == "ol":
+                self.ol_counter[-1] += 1
+                bullet = f"{self.ol_counter[-1]}."
+            else:
+                bullet = "•"
+
+            lines = textwrap.wrap(text, width - len(bullet) - 1) or [text]
+            for idx, line in enumerate(lines):
+                if idx == 0:
+                    if self.bold or text.endswith(":"):
+                        self._push(prefix + f"\033[1;32m{bullet} {line}\033[0m")
+                    else:
+                        self._push(prefix + f"{bullet} {line}")
+                else:
+                    self._push(prefix + "  " + line)
+            return
+
+        if self.bold:
+            self._push("\033[1m" + prefix + text + "\033[0m")
+            return
+
+        for line in textwrap.wrap(text, width) or [text]:
+            self._push(prefix + line)
+
+    def render(self, markup: str) -> str:
+        self.feed(markup)
+        self.flush()
+        return "\n".join(self.lines).rstrip()
+
+
+def format_update_description(description: str) -> str:
+    parser = TerminalParser()
+    return parser.render(description or "")
+
+
+def config_from_fingerprint(fingerprint: str) -> Config:
+    pattern = re.compile(
+        r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
+        r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
+    )
+    match = pattern.match(fingerprint.strip())
+    if not match:
+        raise ValueError(
+            "Invalid fingerprint format. Expected: "
+            "oem/product/device:android_version/build_tag/incremental:user/release-keys"
+        )
+
+    parsed = match.groupdict()
+    return Config(
+        build_tag=parsed["build_tag"],
+        incremental=parsed["incremental"],
+        android_version=parsed["android_version"],
+        model=parsed["device"],
+        device=parsed["device"],
+        oem=parsed["oem"],
+        product=parsed["product"],
+        variant=None,
+        variant_index=None,
+    )
 
 
 def process_config_variant(
@@ -114,13 +248,20 @@ def process_config_variant(
         Log.raw(ota_meta["fingerprint"])
         return 0
 
-    if not all([title, url, size]):
+    if args.dry_run and not title and url and size:
+        title = "UNKNOWN_TITLE_DRY_RUN"
+        Log.w("Missing update title; continuing because --dry-run is enabled.")
+    elif not all([title, url, size]):
         Log.e("Missing essential update info (title, url, or size)")
         return 1
 
     Log.s(f"New OTA update found: {title}")
     Log.i(f"Size: {size}")
     Log.i(f"URL: {url}")
+    if args.dry_run and args.fp and desc:
+        Log.i("Description:")
+        formatted_desc = format_update_description(desc)
+        Log.raw(formatted_desc if formatted_desc else desc)
 
     processed_path = processed_updates_path()
     processed_titles = load_processed_titles(processed_path)
@@ -176,6 +317,8 @@ def process_config_variant(
     if update_incremental_only or (is_new_update and not args.register_update):
         if args.incremental:
             Log.i("--incremental override active; skipping config file update.")
+        elif getattr(args, "no_config", False):
+            Log.i("No config file mode; skipping incremental config update.")
         elif title and "Tcard" in title:
             Log.i("Skipping incremental update because update title contains 'Tcard'.")
         elif target_incremental:
@@ -311,6 +454,7 @@ def main() -> int:
     parser.add_argument("--debug", action="store_true", help="Enable debugging")
     parser.add_argument("-c", "--config", type=Path, help="Config file path")
     parser.add_argument("-d", "--config-dir", type=Path, help="Directory containing config files to process")
+    parser.add_argument("--fp", help="Use this full Android fingerprint directly and skip config file loading")
     parser.add_argument("--dry-run", action="store_true", help="Simulate actions without making changes or sending notifications")
     parser.add_argument("--skip-telegram", action="store_true", help="Skip Telegram notifications")
     parser.add_argument(
@@ -354,11 +498,38 @@ def main() -> int:
     if args.config and args.config_dir:
         parser.error("Use either --config or --config-dir, not both.")
 
-    if not args.config and not args.config_dir:
-        parser.error("Either --config or --config-dir is required.")
+    if args.fp and (args.config or args.config_dir):
+        parser.error("Use --fp alone, or use --config/--config-dir.")
+
+    if args.region and args.fp:
+        parser.error("--region cannot be used with --fp.")
+
+    if args.fp and args.incremental:
+        parser.error("--incremental cannot be used with --fp.")
+
+    if not args.fp and not args.config and not args.config_dir:
+        parser.error("Either --fp or --config/--config-dir is required.")
 
     if args.config and args.config.is_dir():
         parser.error("--config expects a file. Use --config-dir for directories.")
+
+    if args.fp:
+        args.no_config = True
+        try:
+            cfg = config_from_fingerprint(args.fp)
+        except ValueError as exc:
+            Log.e(str(exc))
+            return 1
+        Log.i("Processing direct fingerprint input")
+        return process_config_variant(
+            cfg=cfg,
+            config_name=f"fingerprint-{cfg.device}",
+            config_path=Path("<fingerprint>"),
+            args=args,
+            variant_label=None,
+        )
+
+    args.no_config = False
 
     if args.config:
         config_paths = [args.config]
