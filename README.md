@@ -122,3 +122,4 @@
 ## SMART SERIES
 * Infinix SMART 10 (X6725)
 * Infinix SMART 10 PLUS (X6725C)
+* Infinix SMART 20 (X6840)
