@@ -11,8 +11,8 @@ model: "TECNO POVA Curve 2 5G"           # The model code. (e.g. SM-T380)
 variants:
   - variant: "Global"
     product: "LK7k-OP"
-    incremental: "101350022"
+    incremental: "101400030"
 
   - variant: "India"
     product: "LK7k-IN"
-    incremental: "101400030"
+    incremental: "101500150"
