@@ -24,7 +24,3 @@ variants:
   - variant: "India"
     product: "AE11-IN"
     incremental: "250818V4337"
-
-  - variant: "Unknown"
-    product: "AE11-COCL-ST"
-    incremental: "250818V4337"
