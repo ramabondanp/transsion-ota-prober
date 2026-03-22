@@ -1,6 +1,7 @@
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import re
 
 import yaml
 
@@ -109,10 +110,26 @@ def region_code_from_product(product: str) -> Optional[str]:
         return None
 
 
-def update_config_incremental(config_path: Path, cfg: Config, new_incremental: str) -> bool:
-    if not new_incremental:
-        Log.w("No incremental value available to update configuration.")
+def parse_fingerprint(fingerprint: str) -> Optional[Dict[str, str]]:
+    pattern = re.compile(
+        r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
+        r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
+    )
+    match = pattern.match((fingerprint or "").strip())
+    return match.groupdict() if match else None
+
+
+def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: str) -> bool:
+    parsed = parse_fingerprint(fingerprint)
+    if not parsed:
+        Log.w("No valid target fingerprint available to update configuration.")
         return False
+
+    updates = {
+        "android_version": parsed["android_version"],
+        "build_tag": parsed["build_tag"],
+        "incremental": parsed["incremental"],
+    }
 
     try:
         raw_text = config_path.read_text()
@@ -156,7 +173,7 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
             return f"{new_before_comment}{sep}{comment}{newline}"
         return f"{new_before_comment}{newline}"
 
-    def find_incremental_line(start_idx: int, end_indent: int) -> Optional[int]:
+    def find_key_line(key: str, start_idx: int, end_indent: int) -> Optional[int]:
         idx = start_idx
         while idx < len(lines):
             line = lines[idx]
@@ -170,10 +187,13 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
                 continue
             if indent <= end_indent and stripped and not stripped.startswith("- ") and not stripped.startswith("#"):
                 break
-            if stripped.startswith("incremental:"):
+            if stripped.startswith(f"{key}:"):
                 return idx
             idx += 1
         return None
+
+    def insert_key_line(start_idx: int, indent: int, key: str, value: str) -> None:
+        lines.insert(start_idx, " " * indent + f'{key}: "{value}"\n')
 
     try:
         data = yaml.safe_load(raw_text)
@@ -201,9 +221,12 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
             return False
 
         try:
-            current_value = variants[match_idx].get("incremental")
-            if current_value == new_incremental:
-                Log.i(f"{config_path} already uses incremental {new_incremental}.")
+            current_value = {
+                key: variants[match_idx].get(key, data.get(key))
+                for key in ("android_version", "build_tag", "incremental")
+            }
+            if all(str(current_value.get(key, "")) == str(value) for key, value in updates.items()):
+                Log.i(f"{config_path} already matches target fingerprint values.")
                 return True
         except Exception:
             pass
@@ -234,31 +257,36 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
             Log.w(f"Failed to locate variant block #{match_idx + 1} in {config_path}.")
             return False
 
-        inc_idx = find_incremental_line(variant_start_idx, target_variant_indent)
-        if inc_idx is None:
-            insert_line = " " * (target_variant_indent + 2) + f'incremental: "{new_incremental}"\n'
-            lines.insert(variant_start_idx, insert_line)
-        else:
-            lines[inc_idx] = rewrite_line(lines[inc_idx], new_incremental)
+        insert_idx = variant_start_idx
+        for key in ("android_version", "build_tag", "incremental"):
+            line_idx = find_key_line(key, variant_start_idx, target_variant_indent)
+            if line_idx is None:
+                insert_key_line(insert_idx, target_variant_indent + 2, key, updates[key])
+                insert_idx += 1
+            else:
+                lines[line_idx] = rewrite_line(lines[line_idx], updates[key])
     else:
-        inc_idx = None
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("variants:"):
-                break
-            if stripped.startswith("incremental:"):
-                inc_idx = i
-                break
-
-        if inc_idx is None:
-            Log.w(f"Could not find incremental entry in {config_path}.")
-            return False
-
-        lines[inc_idx] = rewrite_line(lines[inc_idx], new_incremental)
+        top_level_end = next(
+            (i for i, line in enumerate(lines) if line.strip().startswith("variants:")),
+            len(lines),
+        )
+        for key in ("android_version", "build_tag", "incremental"):
+            line_idx = next(
+                (
+                    i
+                    for i, line in enumerate(lines[:top_level_end])
+                    if line.strip().startswith(f"{key}:")
+                ),
+                None,
+            )
+            if line_idx is None:
+                Log.w(f"Could not find {key} entry in {config_path}.")
+                return False
+            lines[line_idx] = rewrite_line(lines[line_idx], updates[key])
 
     new_text = "".join(lines)
     if new_text == raw_text:
-        Log.i(f"{config_path} already uses incremental {new_incremental}.")
+        Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
     try:
@@ -267,5 +295,8 @@ def update_config_incremental(config_path: Path, cfg: Config, new_incremental: s
         Log.w(f"Failed to write updated config {config_path}: {exc}")
         return False
 
-    Log.s(f"Updated {config_path} incremental -> {new_incremental}")
+    Log.s(
+        f"Updated {config_path} -> Android {updates['android_version']}, "
+        f"build {updates['build_tag']}, incremental {updates['incremental']}"
+    )
     return True

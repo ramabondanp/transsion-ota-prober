@@ -23,7 +23,7 @@ if SUBMODULE_DIR.is_dir():
     if subs_path not in sys.path:
         sys.path.insert(0, subs_path)
 
-from modules.manager import Config, region_code_from_product, region_from_product, update_config_incremental
+from modules.manager import Config, parse_fingerprint, region_code_from_product, region_from_product, update_config_from_fingerprint
 from modules.logging import Log
 from modules.telegram import TgNotify
 from modules.metadata import (
@@ -427,19 +427,35 @@ def collect_update_info(
 def apply_update_actions(ctx: RunContext, update: VariantUpdate, args: argparse.Namespace) -> int:
     update_incremental_only = bool(getattr(args, "update_incremental", False))
     if update_incremental_only or update.is_new_update:
+        parsed_target = parse_fingerprint(update.target_fp)
         if args.incremental:
             Log.i("--incremental override active; skipping config file update.")
         elif getattr(args, "no_config", False):
             Log.i("No config file mode; skipping incremental config update.")
-        elif "Tcard" in update.title:
-            Log.i("Skipping incremental update because update title contains 'Tcard'.")
+        elif (
+            "Tcard" in update.title
+            and parsed_target
+            and parsed_target["android_version"] == update.cfg.android_version
+        ):
+            Log.i("Skipping config update because update title contains 'Tcard' without an Android version change.")
         elif update.target_incremental:
             if args.dry_run:
-                Log.i(f"Dry-run: would update {update.config_path} incremental to {update.target_incremental}.")
+                if parsed_target:
+                    Log.i(
+                        f"Dry-run: would update {update.config_path} "
+                        f"android_version={parsed_target['android_version']}, "
+                        f"build_tag={parsed_target['build_tag']}, "
+                        f"incremental={parsed_target['incremental']}."
+                    )
+                else:
+                    Log.i(f"Dry-run: would update {update.config_path} incremental to {update.target_incremental}.")
             else:
                 with ctx.file_lock:
-                    if update_config_incremental(update.config_path, update.cfg, new_incremental=update.target_incremental):
-                        update.cfg.incremental = update.target_incremental
+                    if update_config_from_fingerprint(update.config_path, update.cfg, update.target_fp):
+                        if parsed_target:
+                            update.cfg.android_version = parsed_target["android_version"]
+                            update.cfg.build_tag = parsed_target["build_tag"]
+                            update.cfg.incremental = parsed_target["incremental"]
         else:
             Log.w("Unable to determine new incremental value from OTA metadata; config not updated.")
 
