@@ -1,11 +1,7 @@
-# Configure this correctly. Otherwise, the prober will not succeed in getting OTA URLs!
-# All Android fingerprints follow the following format:
-#   <oem>/<product>/<device>:<android_version>/<build_tag>/<incremental>:user/release-keys
-
-oem: "TECNO"             # The company that made your device (e.g. Samsung)
-product: "CN7c-OP"         # The product code. May be same as device code or model code.
-device: "TECNO-CN7c"          # The device code. May be same as model code.
-android_version: "16" # Only put in the major version number.
-build_tag: "BP2A.250605.031.A3"       # Example: RKQ1.211119.001
-incremental: "101500095"     # Example: 2206131341
-model: "TECNO CAMON 50 Ultra 5G / Pro 5G"           # The model code. (e.g. SM-T380)
+oem: "TECNO"
+product: "CN7c-OP"
+device: "TECNO-CN7c"
+android_version: "16"
+build_tag: "BP2A.250605.031.A3"
+incremental: "101500095"
+model: "TECNO CAMON 50 Ultra 5G / Pro 5G"
