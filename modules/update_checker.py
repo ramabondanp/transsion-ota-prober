@@ -25,8 +25,9 @@ from modules.logging import Log
 
 
 class UpdateChecker:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, session: Optional[requests.Session] = None):
         self.cfg = cfg
+        self.session = session or requests.Session()
         self.ua = USER_AGENT_TPL.format(cfg.android_version, cfg.model, cfg.build_tag)
         self.headers = {
             "accept-encoding": "gzip, deflate",
@@ -74,7 +75,7 @@ class UpdateChecker:
         for attempt in range(retries):
             try:
                 data = self._build_request()
-                response = requests.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
+                response = self.session.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
                 response.raise_for_status()
 
                 resp = checkin_generator_pb2.AndroidCheckinResponse()

@@ -3,6 +3,7 @@ from zipfile import BadZipFile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import requests
 from remotezip import RemoteIOError, RemoteZip, RemoteZipError
 
 from modules.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
@@ -19,12 +20,13 @@ METADATA_KEYS = {
 }
 
 
-def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
+def get_ota_metadata(url: str, session: Optional[requests.Session] = None) -> Optional[Dict[str, str]]:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
     try:
         with RemoteZip(
             url,
             timeout=60,
+            session=session,
             support_suffix_range=False,
             headers={"User-Agent": "transsion-ota-prober/1.0"},
         ) as ota_zip:

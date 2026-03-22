@@ -11,7 +11,13 @@ class TgNotify:
     MAX_LEN = 4090
     DESC_MAX_LEN = 1500
 
-    def __init__(self, token: str, chat_id: str, telegraph_token: str):
+    def __init__(
+        self,
+        token: str,
+        chat_id: str,
+        telegraph_token: str,
+        session: Optional[requests.Session] = None,
+    ):
         if not token or not chat_id:
             raise ValueError("Bot token and chat ID required")
         if not telegraph_token:
@@ -20,6 +26,7 @@ class TgNotify:
         self.chat_id = chat_id
         self.telegraph_token = telegraph_token
         self.url = f"https://api.telegram.org/bot{token}"
+        self.session = session or requests.Session()
 
     def _create_telegraph_page(self, title: str, content: str) -> Optional[str]:
         try:
@@ -34,7 +41,7 @@ class TgNotify:
                 "return_content": False,
             }
 
-            response = requests.post(TELEGRAPH_API_URL, json=payload, timeout=10)
+            response = self.session.post(TELEGRAPH_API_URL, json=payload, timeout=10)
             response.raise_for_status()
 
             result = response.json()
@@ -175,7 +182,7 @@ class TgNotify:
             if btn_text and btn_url:
                 payload["reply_markup"] = {"inline_keyboard": [[{"text": btn_text, "url": btn_url}]]}
 
-            response = requests.post(f"{self.url}/sendMessage", json=payload, timeout=15)
+            response = self.session.post(f"{self.url}/sendMessage", json=payload, timeout=15)
             response.raise_for_status()
 
             Log.s("Notification sent successfully")
