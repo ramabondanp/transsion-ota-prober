@@ -7,12 +7,16 @@ model: "TECNO PHANTOM V Fold 5G"
 
 variants:
   - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "AD10-GL"
-    incremental: "251023V1622"
+    incremental: "115034"
 
   - variant: "Turkey"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "AD10-TR"
-    incremental: "251023V1622"
+    incremental: "115032"
 
   - variant: "Russia"
     product: "AD10-RU"

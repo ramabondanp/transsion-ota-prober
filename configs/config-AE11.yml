@@ -10,13 +10,19 @@ variants:
     incremental: "250818V4337"
 
   - variant: "Turkey"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "AE11-TR"
-    incremental: "250818V4337"
+    incremental: "112044"
 
   - variant: "Russia"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "AE11-RU"
-    incremental: "250818V4337"
+    incremental: "112044"
 
   - variant: "India"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "AE11-IN"
-    incremental: "250818V4337"
+    incremental: "112044"
