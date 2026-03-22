@@ -1,46 +1,35 @@
 import datetime
-import subprocess
+from zipfile import BadZipFile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from remotezip import RemoteIOError, RemoteZip, RemoteZipError
+
 from modules.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
 from modules.logging import Log
-from modules.system import check_cmds
+
+
+METADATA_PATH = "META-INF/com/android/metadata"
+METADATA_KEYS = {
+    "post-build",
+    "post-build-incremental",
+    "post-security-patch-level",
+    "post-timestamp",
+    "post-sdk-level",
+}
 
 
 def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
-    cmds = ["curl", "bsdtar", "grep"]
-    if not check_cmds(cmds):
-        return None
-
-    curl_cmd = ["curl", "--fail", "-Ls", "--max-time", "60", "--limit-rate", "100K", url]
-    bsdtar_cmd = ["bsdtar", "-Oxf", "-", "META-INF/com/android/metadata"]
-    grep_cmd = [
-        "grep",
-        "-E",
-        "^(post-build=|post-build-incremental=|post-security-patch-level=|post-timestamp=|post-sdk-level=)",
-        "-m",
-        "5",
-    ]
-
     try:
-        curl_proc = subprocess.Popen(curl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        bsdtar_proc = subprocess.Popen(
-            bsdtar_cmd, stdin=curl_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-        )
-        if curl_proc.stdout:
-            curl_proc.stdout.close()
-        grep_proc = subprocess.Popen(grep_cmd, stdin=bsdtar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        if bsdtar_proc.stdout:
-            bsdtar_proc.stdout.close()
-
-        try:
-            stdout_bytes, _ = grep_proc.communicate(timeout=90)
-            content = stdout_bytes.decode("utf-8", errors="replace")
-        except subprocess.TimeoutExpired:
-            Log.w("Timeout expired while fetching OTA metadata.")
-            return None
+        with RemoteZip(
+            url,
+            timeout=60,
+            support_suffix_range=False,
+            headers={"User-Agent": "transsion-ota-prober/1.0"},
+        ) as ota_zip:
+            with ota_zip.open(METADATA_PATH) as metadata_file:
+                content = metadata_file.read().decode("utf-8", errors="replace")
 
         if not content.strip():
             Log.w("Could not extract OTA metadata (empty content).")
@@ -50,7 +39,9 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
         for line in content.splitlines():
             if "=" in line:
                 key, value = line.strip().split("=", 1)
-                meta[key.strip()] = value.strip()
+                key = key.strip()
+                if key in METADATA_KEYS:
+                    meta[key] = value.strip()
 
         result: Dict[str, str] = {}
         fingerprint = meta.get("post-build", "")
@@ -87,15 +78,15 @@ def get_ota_metadata(url: str) -> Optional[Dict[str, str]]:
 
         return result
 
+    except KeyError:
+        Log.w(f"{METADATA_PATH} not found in OTA package.")
+        return None
+    except (RemoteIOError, RemoteZipError, BadZipFile) as exc:
+        Log.e(f"Error extracting OTA metadata: {exc}")
+        return None
     except Exception as exc:
         Log.e(f"Error extracting OTA metadata: {exc}")
         return None
-    finally:
-        if "curl_proc" in locals() and curl_proc and curl_proc.poll() is None:
-            try:
-                curl_proc.kill()
-            except Exception:
-                pass
 
 
 def extract_incremental_from_fingerprint(fingerprint: str) -> Optional[str]:
