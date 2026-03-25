@@ -102,6 +102,7 @@
 * Infinix GT 20 Pro (X6871)
 * Infinix GT 30 Pro (X6873)
 * Infinix GT 30 (X6876)
+* Infinix GT 50 Pro (X6891)
 
 ## NOTE SERIES
 * Infinix NOTE 40X 5G (X6838)
