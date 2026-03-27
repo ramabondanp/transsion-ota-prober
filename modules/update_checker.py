@@ -25,9 +25,10 @@ from modules.logging import Log
 
 
 class UpdateChecker:
-    def __init__(self, cfg: Config, session: Optional[requests.Session] = None):
+    def __init__(self, cfg: Config, session: Optional[requests.Session] = None, imei: Optional[str] = None):
         self.cfg = cfg
         self.session = session or requests.Session()
+        self.imei = imei
         self.ua = USER_AGENT_TPL.format(cfg.android_version, cfg.model, cfg.build_tag)
         self.headers = {
             "accept-encoding": "gzip, deflate",
@@ -51,7 +52,7 @@ class UpdateChecker:
         checkin.deviceType = 2
         checkin.voiceCapable = False
 
-        payload.imei = functions.generateImei()
+        payload.imei = self.imei or functions.generateImei()
         payload.id = 0
         payload.digest = functions.generateDigest()
         payload.checkin.CopyFrom(checkin)
@@ -69,6 +70,8 @@ class UpdateChecker:
 
     def check(self, debug: bool = False) -> Tuple[bool, Optional[Dict]]:
         Log.i("Checking for updates...")
+        if self.imei:
+            Log.i(f"Using custom IMEI: {self.imei}")
         retries = 3
         delay = 5
 

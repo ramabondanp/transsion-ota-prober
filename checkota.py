@@ -309,7 +309,7 @@ def collect_update_info(
         args.skip_telegram = True
 
     region_name, _ = log_variant_header(cfg, variant_label)
-    checker = UpdateChecker(cfg, session=ctx.session())
+    checker = UpdateChecker(cfg, session=ctx.session(), imei=args.imei)
     found, data = checker.check(args.debug)
 
     if not found or not data:
@@ -591,6 +591,7 @@ def main() -> int:
         help="Allow --update-incremental to update even if the update title is already known",
     )
     parser.add_argument("-i", "--incremental", help="Override incremental version")
+    parser.add_argument("--imei", help="Override IMEI used in the OTA check-in request")
     parser.add_argument(
         "--gen-fp",
         action="store_true",
