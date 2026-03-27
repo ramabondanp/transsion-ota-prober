@@ -120,6 +120,7 @@
 * Infinix NOTE Edge (X6887)
 * Infinix NOTE 60 Pro 5G SD7sG4 (X6878)
 * Infinix NOTE 60 5G (X6879)
+* Infinix NOTE 60 Ultra (X6877)
 
 ## SMART SERIES
 * Infinix SMART 10 (X6725)
