@@ -2,6 +2,7 @@ import time
 import datetime
 import gzip
 from pathlib import Path
+import threading
 from typing import Dict, Optional, Tuple
 
 import requests
@@ -25,10 +26,17 @@ from modules.logging import Log
 
 
 class UpdateChecker:
-    def __init__(self, cfg: Config, session: Optional[requests.Session] = None, imei: Optional[str] = None):
+    def __init__(
+        self,
+        cfg: Config,
+        session: Optional[requests.Session] = None,
+        imei: Optional[str] = None,
+        stop_event: Optional[threading.Event] = None,
+    ):
         self.cfg = cfg
         self.session = session or requests.Session()
         self.imei = imei
+        self.stop_event = stop_event
         self.ua = USER_AGENT_TPL.format(cfg.android_version, cfg.model, cfg.build_tag)
         self.headers = {
             "accept-encoding": "gzip, deflate",
@@ -36,6 +44,9 @@ class UpdateChecker:
             "content-type": PROTO_TYPE,
             "user-agent": self.ua,
         }
+
+    def _stopped(self) -> bool:
+        return self.stop_event is not None and self.stop_event.is_set()
 
     def _build_request(self) -> bytes:
         payload = checkin_generator_pb2.AndroidCheckinRequest()
@@ -76,6 +87,9 @@ class UpdateChecker:
         delay = 5
 
         for attempt in range(retries):
+            if self._stopped():
+                Log.w("Update check interrupted.")
+                return False, None
             try:
                 data = self._build_request()
                 response = self.session.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
@@ -93,12 +107,28 @@ class UpdateChecker:
                 return has_update, info
 
             except requests.exceptions.Timeout:
+                if self._stopped():
+                    Log.w("Update check interrupted.")
+                    return False, None
                 Log.w(f"Update check timed out. Retrying in {delay} seconds... ({attempt + 1}/{retries})")
                 if attempt < retries - 1:
-                    time.sleep(delay)
+                    if self.stop_event is not None and self.stop_event.wait(delay):
+                        Log.w("Update check interrupted during retry delay.")
+                        return False, None
+                    if self.stop_event is None:
+                        time.sleep(delay)
                 else:
                     Log.e("Update check failed after multiple retries due to timeout.")
                     return False, None
+            except requests.exceptions.RequestException as exc:
+                if self._stopped():
+                    Log.w("Update check interrupted.")
+                    return False, None
+                Log.e(f"Update check failed: {exc}")
+                if debug and "response" in locals():
+                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(response.content)
+                    Log.i("Raw error response saved")
+                return False, None
             except Exception as exc:
                 Log.e(f"Update check failed: {exc}")
                 if debug and "response" in locals():

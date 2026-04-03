@@ -1,3 +1,4 @@
+import threading
 import datetime
 from zipfile import BadZipFile
 from pathlib import Path
@@ -20,8 +21,15 @@ METADATA_KEYS = {
 }
 
 
-def get_ota_metadata(url: str, session: Optional[requests.Session] = None) -> Optional[Dict[str, str]]:
+def get_ota_metadata(
+    url: str,
+    session: Optional[requests.Session] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> Optional[Dict[str, str]]:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
+    if stop_event is not None and stop_event.is_set():
+        Log.w("OTA metadata fetch interrupted before start.")
+        return None
     try:
         with RemoteZip(
             url,
@@ -84,9 +92,15 @@ def get_ota_metadata(url: str, session: Optional[requests.Session] = None) -> Op
         Log.w(f"{METADATA_PATH} not found in OTA package.")
         return None
     except (RemoteIOError, RemoteZipError, BadZipFile) as exc:
+        if stop_event is not None and stop_event.is_set():
+            Log.w("OTA metadata fetch interrupted.")
+            return None
         Log.e(f"Error extracting OTA metadata: {exc}")
         return None
     except Exception as exc:
+        if stop_event is not None and stop_event.is_set():
+            Log.w("OTA metadata fetch interrupted.")
+            return None
         Log.e(f"Error extracting OTA metadata: {exc}")
         return None
 

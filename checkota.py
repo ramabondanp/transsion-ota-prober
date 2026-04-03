@@ -5,6 +5,7 @@ import html
 import io
 import os
 import re
+import signal
 import sys
 import threading
 import textwrap
@@ -13,7 +14,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -47,15 +48,42 @@ class RunContext:
     telegram_lock: threading.Lock = field(default_factory=threading.Lock)
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     notice_lock: threading.Lock = field(default_factory=threading.Lock)
+    session_lock: threading.Lock = field(default_factory=threading.Lock)
+    stop_event: threading.Event = field(default_factory=threading.Event)
     telegram_notice_printed: bool = False
     _local: threading.local = field(default_factory=threading.local, repr=False)
+    _sessions: List[requests.Session] = field(default_factory=list, repr=False)
 
     def session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
         if session is None:
             session = requests.Session()
             self._local.session = session
+            with self.session_lock:
+                self._sessions.append(session)
         return session
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        with self.session_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        for session in sessions:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+def install_interrupt_handler(ctx: RunContext):
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def handle_interrupt(signum, frame):
+        ctx.stop()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_interrupt)
+    return previous_handler
 
 
 @dataclass
@@ -233,12 +261,14 @@ def log_variant_header(cfg: Config, variant_label: Optional[str]) -> Tuple[Optio
 
 
 def get_cached_ota_metadata(ctx: RunContext, url: str) -> Optional[Dict[str, str]]:
+    if ctx.stop_event.is_set():
+        return None
     with ctx.cache_lock:
         cached = ctx.metadata_cache.get(url, None)
         if url in ctx.metadata_cache:
             return cached
 
-    ota_meta = get_ota_metadata(url, session=ctx.session())
+    ota_meta = get_ota_metadata(url, session=ctx.session(), stop_event=ctx.stop_event)
     with ctx.cache_lock:
         ctx.metadata_cache[url] = ota_meta
     return ota_meta
@@ -313,7 +343,7 @@ def collect_update_info(
         args.skip_telegram = True
 
     region_name, _ = log_variant_header(cfg, variant_label)
-    checker = UpdateChecker(cfg, session=ctx.session(), imei=args.imei)
+    checker = UpdateChecker(cfg, session=ctx.session(), imei=args.imei, stop_event=ctx.stop_event)
     found, data = checker.check(args.debug)
 
     if not found or not data:
@@ -633,121 +663,141 @@ def main() -> int:
     if args.config and args.config.is_dir():
         parser.error("--config expects a file. Use --config-dir for directories.")
 
-    if args.fp:
-        args.no_config = True
-        args.run_context = create_run_context(args)
-        try:
-            cfg = config_from_fingerprint(args.fp)
-        except ValueError as exc:
-            Log.e(str(exc))
-            return 1
-        Log.i("Processing direct fingerprint input")
-        return process_config_variant(
-            args.run_context,
-            cfg=cfg,
-            config_path=Path("<fingerprint>"),
-            args=args,
-            variant_label=None,
-        )
-
-    args.no_config = False
     args.run_context = create_run_context(args)
+    previous_sigint = install_interrupt_handler(args.run_context)
 
-    if args.config:
-        config_paths = [args.config]
-    else:
-        if not args.config_dir.exists() or not args.config_dir.is_dir():
-            parser.error("--config-dir must be an existing directory.")
+    try:
+        if args.fp:
+            args.no_config = True
+            try:
+                cfg = config_from_fingerprint(args.fp)
+            except ValueError as exc:
+                Log.e(str(exc))
+                return 1
+            Log.i("Processing direct fingerprint input")
+            return process_config_variant(
+                args.run_context,
+                cfg=cfg,
+                config_path=Path("<fingerprint>"),
+                args=args,
+                variant_label=None,
+            )
 
-        config_paths = sorted(
-            (
-                path
-                for pattern in ("*.yml", "*.yaml")
-                for path in args.config_dir.glob(pattern)
-                if path.is_file()
-            ),
-            key=lambda p: p.name.lower(),
-        )
+        args.no_config = False
 
-        if not config_paths:
-            Log.e(f"No config files found in directory: {args.config_dir}")
+        if args.config:
+            config_paths = [args.config]
+        else:
+            if not args.config_dir.exists() or not args.config_dir.is_dir():
+                parser.error("--config-dir must be an existing directory.")
+
+            config_paths = sorted(
+                (
+                    path
+                    for pattern in ("*.yml", "*.yaml")
+                    for path in args.config_dir.glob(pattern)
+                    if path.is_file()
+                ),
+                key=lambda p: p.name.lower(),
+            )
+
+            if not config_paths:
+                Log.e(f"No config files found in directory: {args.config_dir}")
+                return 1
+
+        if args.incremental and len(config_paths) != 1:
+            Log.e("--incremental can only be used with a single config file")
             return 1
 
-    if args.incremental and len(config_paths) != 1:
-        Log.e("--incremental can only be used with a single config file")
-        return 1
+        if args.jobs < 1:
+            Log.e("--jobs must be >= 1")
+            return 1
 
-    if args.jobs < 1:
-        Log.e("--jobs must be >= 1")
-        return 1
+        exit_code = 0
+        total = len(config_paths)
 
-    exit_code = 0
-    total = len(config_paths)
-
-    def run_config(index: int, path: Path) -> int:
-        local_args = argparse.Namespace(**vars(args))
-        if index > 1 and args.jobs == 1:
-            Log.raw("")
-        header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
-        Log.i(header)
-        return process_config(path, local_args)
-
-    if args.jobs == 1 or total == 1:
-        for idx, config_path in enumerate(config_paths, start=1):
-            result = run_config(idx, config_path)
-            exit_code = max(exit_code, result)
-    else:
-        def run_config_buffered(index: int, path: Path) -> Tuple[int, int, str]:
+        def run_config(index: int, path: Path) -> int:
+            if args.run_context.stop_event.is_set():
+                return 130
             local_args = argparse.Namespace(**vars(args))
-            buffer = io.StringIO()
-            with Log.capture(buffer):
-                header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
-                Log.i(header)
-                result = process_config(path, local_args)
-            return index, result, buffer.getvalue()
+            if index > 1 and args.jobs == 1:
+                Log.raw("")
+            header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
+            Log.i(header)
+            return process_config(path, local_args)
 
-        with ThreadPoolExecutor(max_workers=min(args.jobs, total)) as executor:
-            start_times = {}
-            futures = {}
+        if args.jobs == 1 or total == 1:
             for idx, config_path in enumerate(config_paths, start=1):
-                start_times[idx] = time.monotonic()
-                futures[executor.submit(run_config_buffered, idx, config_path)] = idx
-            results: Dict[int, Tuple[int, str]] = {}
-            remaining = set(futures.keys())
-            next_index = 1
-            first = True
-            last_heartbeat = time.monotonic()
+                if args.run_context.stop_event.is_set():
+                    return 130
+                result = run_config(idx, config_path)
+                exit_code = max(exit_code, result)
+        else:
+            def run_config_buffered(index: int, path: Path) -> Tuple[int, int, str]:
+                if args.run_context.stop_event.is_set():
+                    return index, 130, ""
+                local_args = argparse.Namespace(**vars(args))
+                buffer = io.StringIO()
+                with Log.capture(buffer):
+                    header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
+                    Log.i(header)
+                    result = process_config(path, local_args)
+                return index, result, buffer.getvalue()
 
-            while remaining or next_index <= total:
-                if remaining:
-                    done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
-                    for future in done:
-                        index, result, output = future.result()
-                        results[index] = (result, output)
+            executor = ThreadPoolExecutor(max_workers=min(args.jobs, total))
+            try:
+                start_times = {}
+                futures = {}
+                for idx, config_path in enumerate(config_paths, start=1):
+                    start_times[idx] = time.monotonic()
+                    futures[executor.submit(run_config_buffered, idx, config_path)] = idx
+                results: Dict[int, Tuple[int, str]] = {}
+                remaining = set(futures.keys())
+                next_index = 1
+                first = True
+                last_heartbeat = time.monotonic()
 
-                while next_index in results:
-                    result, output = results.pop(next_index)
-                    if not first:
-                        Log.raw("")
-                    first = False
-                    if output:
-                        print(output, end="" if output.endswith("\n") else "\n")
-                    exit_code = max(exit_code, result)
-                    next_index += 1
+                while remaining or next_index <= total:
+                    if args.run_context.stop_event.is_set():
+                        return 130
+                    if remaining:
+                        done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            index, result, output = future.result()
+                            results[index] = (result, output)
 
-                now = time.monotonic()
-                if now - last_heartbeat >= 5 and next_index <= total:
-                    completed = next_index - 1
-                    running = len(remaining)
-                    buffered = len(results)
-                    elapsed = now - start_times.get(next_index, now)
-                    Log.raw(
-                        f"... waiting for config {next_index}/{total} "
-                        f"({completed}/{total} completed, {running} running, {buffered} buffered, {elapsed:.0f}s elapsed)"
-                    )
-                    last_heartbeat = now
+                    while next_index in results:
+                        result, output = results.pop(next_index)
+                        if not first:
+                            Log.raw("")
+                        first = False
+                        if output:
+                            print(output, end="" if output.endswith("\n") else "\n")
+                        exit_code = max(exit_code, result)
+                        next_index += 1
 
-    return exit_code
+                    now = time.monotonic()
+                    if now - last_heartbeat >= 5 and next_index <= total:
+                        completed = next_index - 1
+                        running = len(remaining)
+                        buffered = len(results)
+                        elapsed = now - start_times.get(next_index, now)
+                        Log.raw(
+                            f"... waiting for config {next_index}/{total} "
+                            f"({completed}/{total} completed, {running} running, {buffered} buffered, {elapsed:.0f}s elapsed)"
+                        )
+                        last_heartbeat = now
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+        return exit_code
+    except KeyboardInterrupt:
+        args.run_context.stop()
+        Log.w("Interrupted. Stopping in-flight requests and exiting.")
+        return 130
+    finally:
+        args.run_context.stop()
+        signal.signal(signal.SIGINT, previous_sigint)
 
 
 if __name__ == "__main__":
