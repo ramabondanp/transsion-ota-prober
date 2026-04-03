@@ -293,7 +293,11 @@ def build_notification_message(update: VariantUpdate) -> str:
         + (f"<b>Security patch:</b> {spl}\n" if spl else "")
         + f"<b>Fingerprint:</b> <code>{update.target_fp}</code>"
         + (f"\n<b>Build date:</b> {build_date} (CST)" if build_date else "")
-        + (f"\n<b>Google OTA link:</b> {html.escape(update.url, quote=False)}" if update.url else "")
+        + (
+            f"\n<b>Google OTA link:</b> <code>{html.escape(update.url, quote=False)}</code>"
+            if update.url
+            else ""
+        )
     )
 
 
