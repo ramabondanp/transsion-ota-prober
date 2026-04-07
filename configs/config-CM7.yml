@@ -6,8 +6,10 @@ model: "TECNO CAMON 40 Pro 5G"
 
 variants:
   - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "CM7-OP"
-    incremental: "145009"
+    incremental: "165004"
 
   - variant: "Turkey"
     product: "CM7-TR"

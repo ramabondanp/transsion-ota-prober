@@ -6,8 +6,10 @@ model: "TECNO POVA Curve 2 5G"
 
 variants:
   - variant: "Global"
+    android_version: "16"
+    build_tag: "BP2A.250605.031.A3"
     product: "LK7k-OP"
-    incremental: "101400030"
+    incremental: "101500150"
 
   - variant: "India"
     product: "LK7k-IN"
