@@ -6,10 +6,14 @@ model: "Infinix NOTE 50X 5G"
 
 variants:
   - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6857-OP"
-    incremental: "145006"
+    incremental: "165005"
 
   - variant: "India"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6857B-IN"
     device: "Infinix-X6857B"
-    incremental: "145002"
+    incremental: "165003"

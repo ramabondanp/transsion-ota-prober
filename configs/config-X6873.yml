@@ -6,12 +6,16 @@ model: "Infinix GT 30 Pro"
 
 variants:
   - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6873-OP"
-    incremental: "145008"
+    incremental: "165010"
 
   - variant: "India"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6873-IN"
-    incremental: "145008"
+    incremental: "165010"
 
   - variant: "Russia"
     product: "X6873-RU"

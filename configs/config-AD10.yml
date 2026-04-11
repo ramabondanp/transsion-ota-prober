@@ -10,7 +10,7 @@ variants:
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"
     product: "AD10-GL"
-    incremental: "115034"
+    incremental: "122003"
 
   - variant: "Turkey"
     android_version: "15"
