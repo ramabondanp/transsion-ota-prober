@@ -1,5 +1,6 @@
 import threading
 import datetime
+import time
 from zipfile import BadZipFile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -30,79 +31,106 @@ def get_ota_metadata(
     if stop_event is not None and stop_event.is_set():
         Log.w("OTA metadata fetch interrupted before start.")
         return None
-    try:
-        with RemoteZip(
-            url,
-            timeout=60,
-            session=session,
-            support_suffix_range=False,
-            headers={"User-Agent": "transsion-ota-prober/1.0"},
-        ) as ota_zip:
-            with ota_zip.open(METADATA_PATH) as metadata_file:
-                content = metadata_file.read().decode("utf-8", errors="replace")
+    retries = 3
+    delay = 5
 
-        if not content.strip():
-            Log.w("Could not extract OTA metadata (empty content).")
-            return None
-
-        meta: Dict[str, str] = {}
-        for line in content.splitlines():
-            if "=" in line:
-                key, value = line.strip().split("=", 1)
-                key = key.strip()
-                if key in METADATA_KEYS:
-                    meta[key] = value.strip()
-
-        result: Dict[str, str] = {}
-        fingerprint = meta.get("post-build", "")
-        if not fingerprint:
-            Log.w("post-build not found in metadata.")
-        else:
-            Log.i(f"Extracted fingerprint: {fingerprint}")
-        result["fingerprint"] = fingerprint
-
-        if meta.get("post-build-incremental"):
-            result["post_build_incremental"] = meta["post-build-incremental"]
-        if meta.get("post-security-patch-level"):
-            result["post_security_patch_level"] = meta["post-security-patch-level"]
-        if meta.get("post-timestamp"):
-            result["post_timestamp"] = meta["post-timestamp"]
-            try:
-                timestamp = int(meta["post-timestamp"])
-                dt_utc = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
-                tz_cst = datetime.timezone(datetime.timedelta(hours=8))
-                dt_cst = dt_utc.astimezone(tz_cst)
-                result["build_date"] = dt_cst.strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
-
-        if meta.get("post-sdk-level"):
-            sdk_level = meta["post-sdk-level"]
-            result["post_sdk_level"] = sdk_level
-            try:
-                sdk_int = int(sdk_level)
-                if sdk_int >= 33:
-                    result["android_version"] = SDK_TO_ANDROID.get(sdk_int)
-            except Exception:
-                pass
-
-        return result
-
-    except KeyError:
-        Log.w(f"{METADATA_PATH} not found in OTA package.")
-        return None
-    except (RemoteIOError, RemoteZipError, BadZipFile) as exc:
+    for attempt in range(retries):
         if stop_event is not None and stop_event.is_set():
             Log.w("OTA metadata fetch interrupted.")
             return None
-        Log.e(f"Error extracting OTA metadata: {exc}")
-        return None
-    except Exception as exc:
-        if stop_event is not None and stop_event.is_set():
-            Log.w("OTA metadata fetch interrupted.")
+        try:
+            with RemoteZip(
+                url,
+                timeout=60,
+                session=session,
+                support_suffix_range=False,
+                headers={"User-Agent": "transsion-ota-prober/1.0"},
+            ) as ota_zip:
+                with ota_zip.open(METADATA_PATH) as metadata_file:
+                    content = metadata_file.read().decode("utf-8", errors="replace")
+
+            if not content.strip():
+                Log.w("Could not extract OTA metadata (empty content).")
+                return None
+
+            meta: Dict[str, str] = {}
+            for line in content.splitlines():
+                if "=" in line:
+                    key, value = line.strip().split("=", 1)
+                    key = key.strip()
+                    if key in METADATA_KEYS:
+                        meta[key] = value.strip()
+
+            result: Dict[str, str] = {}
+            fingerprint = meta.get("post-build", "")
+            if not fingerprint:
+                Log.w("post-build not found in metadata.")
+            else:
+                Log.i(f"Extracted fingerprint: {fingerprint}")
+            result["fingerprint"] = fingerprint
+
+            if meta.get("post-build-incremental"):
+                result["post_build_incremental"] = meta["post-build-incremental"]
+            if meta.get("post-security-patch-level"):
+                result["post_security_patch_level"] = meta["post-security-patch-level"]
+            if meta.get("post-timestamp"):
+                result["post_timestamp"] = meta["post-timestamp"]
+                try:
+                    timestamp = int(meta["post-timestamp"])
+                    dt_utc = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
+                    tz_cst = datetime.timezone(datetime.timedelta(hours=8))
+                    dt_cst = dt_utc.astimezone(tz_cst)
+                    result["build_date"] = dt_cst.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+
+            if meta.get("post-sdk-level"):
+                sdk_level = meta["post-sdk-level"]
+                result["post_sdk_level"] = sdk_level
+                try:
+                    sdk_int = int(sdk_level)
+                    if sdk_int >= 33:
+                        result["android_version"] = SDK_TO_ANDROID.get(sdk_int)
+                except Exception:
+                    pass
+
+            return result
+
+        except KeyError:
+            Log.w(f"{METADATA_PATH} not found in OTA package.")
             return None
-        Log.e(f"Error extracting OTA metadata: {exc}")
-        return None
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, RemoteIOError) as exc:
+            if stop_event is not None and stop_event.is_set():
+                Log.w("OTA metadata fetch interrupted.")
+                return None
+            if attempt < retries - 1:
+                Log.w(
+                    f"Connection error extracting OTA metadata: {exc}. "
+                    f"Retrying in {delay} seconds... ({attempt + 1}/{retries})"
+                )
+                if stop_event is not None:
+                    if stop_event.wait(delay):
+                        Log.w("OTA metadata fetch interrupted during retry delay.")
+                        return None
+                else:
+                    time.sleep(delay)
+                continue
+            Log.e(f"Error extracting OTA metadata after multiple retries: {exc}")
+            return None
+        except (RemoteZipError, BadZipFile) as exc:
+            if stop_event is not None and stop_event.is_set():
+                Log.w("OTA metadata fetch interrupted.")
+                return None
+            Log.e(f"Error extracting OTA metadata: {exc}")
+            return None
+        except Exception as exc:
+            if stop_event is not None and stop_event.is_set():
+                Log.w("OTA metadata fetch interrupted.")
+                return None
+            Log.e(f"Error extracting OTA metadata: {exc}")
+            return None
+
+    return None
 
 
 def extract_incremental_from_fingerprint(fingerprint: str) -> Optional[str]:
