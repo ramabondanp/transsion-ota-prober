@@ -16,10 +16,10 @@ variants:
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"
     product: "AD10-TR"
-    incremental: "115032"
+    incremental: "122016"
 
   - variant: "Russia"
     product: "AD10-RU"
-    incremental: "115035"
+    incremental: "122017"
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"

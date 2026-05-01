@@ -6,17 +6,19 @@ model: "Infinix ZERO Flip"
 
 variants:
   - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6962-OP"
-    incremental: "251107V2494"
+    incremental: "124011"
 
   - variant: "India"
     product: "X6962-IN"
-    incremental: "114014"
+    incremental: "124011"
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"
 
   - variant: "Russia"
     product: "X6962-RU"
-    incremental: "114014"
+    incremental: "124011"
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"

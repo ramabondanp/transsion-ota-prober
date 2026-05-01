@@ -12,9 +12,13 @@ variants:
     incremental: "165003"
 
   - variant: "India"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6871-IN"
-    incremental: "145015"
+    incremental: "165003"
 
   - variant: "Russia"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6871-RU"
-    incremental: "145015"
+    incremental: "165003"

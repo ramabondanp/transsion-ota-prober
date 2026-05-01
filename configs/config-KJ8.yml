@@ -10,5 +10,7 @@ variants:
     incremental: "250108V1200"
 
   - variant: "India"
+    android_version: "14"
+    build_tag: "UP1A.231005.007"
     product: "KJ8-IN"
-    incremental: "260112V1329"
+    incremental: "260410V1339"
