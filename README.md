@@ -92,6 +92,7 @@
 * Infinix HOT 60 5G (X6726B)
 * Infinix HOT 60 Pro (X6885)
 * Infinix HOT 60 Pro+ (X6886)
+* Infinix HOT 70 (X6895B)
 
 ## ZERO SERIES
 * Infinix ZERO 30 5G (X6731)
