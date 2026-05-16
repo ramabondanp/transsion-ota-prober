@@ -7,7 +7,7 @@ variants:
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "X6856-OP"
-    incremental: "201200022"
+    incremental: "201350009"
 
   - variant: "Europe"
     android_version: "15"
