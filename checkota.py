@@ -544,13 +544,6 @@ def process_config(config_path: Path, args: argparse.Namespace) -> int:
             return 1
         configs = filtered_configs
 
-    if args.incremental and len(configs) != 1:
-        Log.e(
-            "--incremental requires a single configuration variant. "
-            "Use --reg to select a specific region when multiple variants exist."
-        )
-        return 1
-
     exit_code = 0
     variants_total = len(configs)
 
@@ -624,7 +617,7 @@ def main() -> int:
         action="store_true",
         help="Allow --update-incremental to update even if the update title is already known",
     )
-    parser.add_argument("-i", "--incremental", help="Override incremental version")
+    parser.add_argument("-i", "--incremental", help="Override incremental version for all selected configs")
     parser.add_argument("--imei", help="Override IMEI used in the OTA check-in request")
     parser.add_argument(
         "--gen-fp",
@@ -704,10 +697,6 @@ def main() -> int:
             if not config_paths:
                 Log.e(f"No config files found in directory: {args.config_dir}")
                 return 1
-
-        if args.incremental and len(config_paths) != 1:
-            Log.e("--incremental can only be used with a single config file")
-            return 1
 
         if args.jobs < 1:
             Log.e("--jobs must be >= 1")
