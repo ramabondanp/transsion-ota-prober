@@ -12,9 +12,13 @@ variants:
     incremental: "170028"
 
   - variant: "India"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6852-IN"
-    incremental: "155001"
+    incremental: "170032"
 
   - variant: "Europe"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
     product: "X6852-EU"
-    incremental: "155005"
+    incremental: "170031"

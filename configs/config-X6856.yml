@@ -19,10 +19,10 @@ variants:
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "X6856-TR"
-    incremental: "201200022"
+    incremental: "201350009"
 
   - variant: "Russia"
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "X6856-RU"
-    incremental: "201200022"
+    incremental: "201350009"
