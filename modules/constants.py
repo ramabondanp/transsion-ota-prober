@@ -10,12 +10,14 @@ OTA_URL_PREFIX = b"https://android.googleapis.com/packages/ota"
 TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
 
 REGION_CODE_MAP = {
-    "GL": "Global",
-    "OP": "Global",
-    "RU": "Russia",
-    "IN": "India",
-    "EU": "Europe",
-    "TR": "Turkey",
+    "GL": "Global - GL Market",
+    "OP": "Global - OP Market",
+    "RU": "Russia - RU Market",
+    "IN": "India - IN Market",
+    "EU": "Europe - EU Market",
+    "TR": "Turkey - TR Market",
+    "OPPJ": "Global-PayJoy - OPPJ Market",
+    "COCL": "Columbia - COCL Market",
 }
 
 SDK_TO_ANDROID = {
