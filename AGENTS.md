@@ -11,6 +11,8 @@ optionally sends Telegram notifications.
 
 ```
 checkota.py           ← Entry point: CLI, orchestration, parallel execution
+                         TerminalParser (HTML→ANSI) + format_update_description
+                         Config dataclasses (RunContext, VariantUpdate)
 modules/
   constants.py        ← URLs, region codes, SDK versions, regex patterns
   manager.py          ← Config data model (dataclass), YAML parsing, fingerprint handling
@@ -116,6 +118,20 @@ The sanitization pipeline in `telegram.py` runs in 5 ordered steps:
 **Important:** Step 1 must run BEFORE Step 2–3 so the HTML structure (which distinguishes
 headers from `<small>`-wrapped content) is still intact.
 
+### Terminal output formatting (`TerminalParser`)
+The `TerminalParser` class in `checkota.py` converts raw OTA description HTML to
+ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
+
+1. **Bold headers** — same regex as `_sanitize_html` wraps section headers in `<b>`
+   before HTML parsing (runs first, while the `<small>/<font>` structure is intact).
+2. **`<br>` handling** — consecutive empty `<br>` tags create a blank line (section
+   break), but a single `<br>` after content is just a line break (no extra blank).
+   This is tracked via `_empty_br_count`: reset to 0 on content `<br>`, incremented
+   on empty `<br>`, and a blank line is pushed only when `_empty_br_count == 1`.
+3. **`<b>` flush** — `handle_endtag` for `</b>` calls `flush()` immediately **before**
+   clearing `self.bold`, so bold ANSI codes `\033[1m…\033[0m` wrap the text correctly
+   (important because `<br>` would otherwise trigger the flush after bold is already off).
+
 ### Notifications & Truncation
 - Telegram message limit: 4096 chars. Code uses `MAX_LEN = 4090` as safety margin.
 - If the message exceeds `MAX_LEN`, the description section is identified via
@@ -137,6 +153,8 @@ headers from `<small>`-wrapped content) is still intact.
 | `processed_updates.txt` unbounded growth | `fingerprints.py` | Trim to 2000 newest entries after each write |
 | `<br>\n` created double newlines; greedy `\s*` ate template `\n\n` | `telegram.py` | `[^\S\n]*\n?` instead of `\s*` |
 | Description formatting: flat text, no section hierarchy | `telegram.py` | Bold headers via pre-strip regex pass |
+| Terminal output: extra blank lines between every line | `checkota.py` | `_empty_br_count` tracks consecutive `<br>`; blank line only on first empty `<br>` |
+| Terminal output: `<b>` headers not bolded | `checkota.py` | `flush()` on `</b>` before clearing bold flag |
 
 ## Running
 
