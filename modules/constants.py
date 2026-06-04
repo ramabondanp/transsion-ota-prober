@@ -12,6 +12,7 @@ TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
 REGION_CODE_MAP = {
     "GL": "Global - GL Market",
     "OP": "Global - OP Market",
+    "OP-M1": "Global - OP-M1 Market",
     "RU": "Russia - RU Market",
     "IN": "India - IN Market",
     "EU": "Europe - EU Market",

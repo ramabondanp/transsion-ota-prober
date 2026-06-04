@@ -1,7 +1,16 @@
 oem: "TECNO"
-product: "CN7c-OP"
 device: "TECNO-CN7c"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "201400024"
 model: "TECNO CAMON 50 Ultra 5G / Pro 5G"
+
+variants:
+  - variant: "Global"
+    android_version: "16"
+    build_tag: "BP2A.250605.031.A3"
+    product: "CN7c-OP"
+    incremental: "201400024"
+
+  - variant: "Global-M1"
+    android_version: "16"
+    build_tag: "BP2A.250605.031.A3"
+    product: "CN7c-OP-M1"
+    incremental: "101600041"
