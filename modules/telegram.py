@@ -97,23 +97,40 @@ class TgNotify:
         if not html:
             return html
 
-        # Remove tags that Telegram HTML does not support while preserving text content.
-        sanitized = re.sub(r"<\s*/?\s*small\s*>", "", html, flags=re.IGNORECASE)
+        # --- Step 1: Bold section headers in raw HTML ---
+        # Headers are short lines followed by <br> that are NOT wrapped in <small>/<font>.
+        # The structure in OTA descriptions is consistently:
+        #   <small><font>content</font></small><br>
+        #   HEADER<br>
+        # Wrap only the un-wrapped header lines in <b>.
+        sanitized = re.sub(
+            r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>",
+            lambda m: ("\n" if m.group(0).startswith("\n") else "") + "<b>" + m.group(1) + "</b><br>",
+            html,
+        )
+
+        # --- Step 2: Replace <br> with newlines ---
+        # Consume inline whitespace after <br> plus at most one \n,
+        # so <br>\n becomes \n (not \n\n) but <br>\n\n keeps \n\n.
+        sanitized = re.sub(r"<\s*br\s*/?\s*>[^\S\n]*\n?", "\n", sanitized, flags=re.IGNORECASE)
+
+        # --- Step 3: Strip unsupported HTML tags ---
+        sanitized = re.sub(r"<\s*/?\s*small\s*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"<\s*font\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"</\s*font\s*>", "", sanitized, flags=re.IGNORECASE)
-        sanitized = re.sub(r"<\s*br\s*/?\s*>", "\n", sanitized, flags=re.IGNORECASE)
         # Strip all <a> tags, keeping their text content.
         # Telegram HTML only allows <a href="...">, and arbitrary links from OTA
         # descriptions should not be sent as clickable URLs.
         sanitized = re.sub(r"<\s*a\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"</\s*a\s*>", "", sanitized, flags=re.IGNORECASE)
 
-        # Normalize common bullet characters to a dash for readability.
+        # --- Step 4: Normalize common bullet characters ---
         for bullet in ("\u2022", "\u2023", "\u2043", "\u2219", "\xb7"):
             sanitized = sanitized.replace(bullet, "- ")
         sanitized = sanitized.replace("\u00c2", "")
 
-        # Normalize whitespace: collapse extra spaces on blank lines and limit consecutive blanks.
+        # --- Step 5: Normalize whitespace ---
+        # Collapse extra spaces on blank lines and limit consecutive blanks.
         lines = []
         prev_blank = False
         for line in sanitized.splitlines():
