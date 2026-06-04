@@ -112,6 +112,10 @@ class TerminalParser(HTMLParser):
         self.ol_counter = []
         self.buffer = ""
         self.lines = []
+        # Count of consecutive <br> tags that had no preceding content buffer.
+        # Used to create exactly one blank line for section breaks (<br><br>)
+        # without adding blanks after every single <br>.
+        self._empty_br_count = 0
 
     def _push(self, line: str = ""):
         self.lines.append(line)
@@ -135,11 +139,21 @@ class TerminalParser(HTMLParser):
         elif tag == "li":
             self.flush()
         elif tag == "br":
+            had_content = bool(self.buffer.strip())
             self.flush()
-            self._push("")
+            if had_content:
+                # Single <br> after content = line break, no blank line
+                self._empty_br_count = 0
+            else:
+                # Empty separator <br> — first one in a row creates a blank line
+                self._empty_br_count += 1
+                if self._empty_br_count == 1:
+                    if not self.lines or self.lines[-1]:
+                        self._push("")
 
     def handle_endtag(self, tag):
         if tag == "b":
+            self.flush()
             self.bold = False
         elif tag in ("h3", "h4"):
             self.flush(style=tag)
@@ -201,12 +215,24 @@ class TerminalParser(HTMLParser):
     def render(self, markup: str) -> str:
         self.feed(markup)
         self.flush()
-        return "\n".join(self.lines).rstrip()
+        result = "\n".join(self.lines).rstrip()
+        # Collapse 3+ consecutive newlines to 2 (one blank line for section breaks)
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        return result
 
 
 def format_update_description(description: str) -> str:
+    if not description:
+        return ""
+    # Bold section headers before parsing (same pattern as Telegram sanitization).
+    # Lines like "Android Version<br>" that are NOT inside <small>/<font> are headers.
+    bolded = re.sub(
+        r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>",
+        lambda m: ("\n" if m.group(0).startswith("\n") else "") + "<b>" + m.group(1) + "</b><br>",
+        description,
+    )
     parser = TerminalParser()
-    return parser.render(description or "")
+    return parser.render(bolded or "")
 
 
 def config_from_fingerprint(fingerprint: str) -> Config:
