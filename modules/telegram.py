@@ -65,7 +65,7 @@ class TgNotify:
         link_text = f'... <a href="{telegraph_url}">Read full changelogs</a>' if telegraph_url else "..."
         effective_max_len = max_len - len(link_text) if telegraph_url else max_len
 
-        if len(desc) <= max_len:
+        if len(desc) <= effective_max_len:
             return desc
 
         truncated = desc[:effective_max_len]
@@ -102,11 +102,10 @@ class TgNotify:
         sanitized = re.sub(r"<\s*font\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"</\s*font\s*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"<\s*br\s*/?\s*>", "\n", sanitized, flags=re.IGNORECASE)
-        # Telegram only allows href in <a>; strip other attributes if present.
-        def _clean_anchor(match: re.Match) -> str:
-            return ""
-
-        sanitized = re.sub(r"<\s*a\b([^>]*?)>", _clean_anchor, sanitized, flags=re.IGNORECASE)
+        # Strip all <a> tags, keeping their text content.
+        # Telegram HTML only allows <a href="...">, and arbitrary links from OTA
+        # descriptions should not be sent as clickable URLs.
+        sanitized = re.sub(r"<\s*a\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"</\s*a\s*>", "", sanitized, flags=re.IGNORECASE)
 
         # Normalize common bullet characters to a dash for readability.

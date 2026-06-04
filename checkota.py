@@ -145,11 +145,11 @@ class TerminalParser(HTMLParser):
             self.flush(style=tag)
         elif tag in ("ol", "ul"):
             self.flush()
-            if self.list_stack:
-                lst = self.list_stack.pop()
-                if lst == "ol" and self.ol_counter:
+            if self.list_stack and self.list_stack[-1] == tag:
+                self.list_stack.pop()
+                if tag == "ol" and self.ol_counter:
                     self.ol_counter.pop()
-            self.indent = max(0, self.indent - 2)
+                self.indent = max(0, self.indent - 2)
 
     def handle_data(self, data):
         self.buffer += html.unescape(data)
@@ -339,8 +339,6 @@ def collect_update_info(
     variant_label: Optional[str] = None,
 ) -> Tuple[int, Optional[VariantUpdate]]:
     update_incremental_only = bool(getattr(args, "update_incremental", False))
-    if update_incremental_only:
-        args.skip_telegram = True
 
     region_name, _ = log_variant_header(cfg, variant_label)
     checker = UpdateChecker(cfg, session=ctx.session(), imei=args.imei, stop_event=ctx.stop_event)
@@ -396,11 +394,8 @@ def collect_update_info(
         return 0, None
 
     if not is_new_update:
-        if update_incremental_only and not args.force_update_incremental:
-            Log.i("Update title already known; skipping incremental update due to --update-incremental.")
-            return 0, None
-        if update_incremental_only and args.force_update_incremental:
-            Log.i("Update title already known; continuing due to --force with --update-incremental.")
+        if update_incremental_only:
+            Log.i("Update title already known; proceeding to update incremental value (--update-incremental).")
         elif not args.force_notify:
             Log.i("This update has already been processed. Skipping.")
             return 0, None
@@ -615,7 +610,7 @@ def main() -> int:
         "--force",
         dest="force_update_incremental",
         action="store_true",
-        help="Allow --update-incremental to update even if the update title is already known",
+        help="(Deprecated) Previously needed with --update-incremental; --update-incremental now always proceeds.",
     )
     parser.add_argument("-i", "--incremental", help="Override incremental version for all selected configs")
     parser.add_argument("--imei", help="Override IMEI used in the OTA check-in request")
@@ -777,14 +772,25 @@ def main() -> int:
                         )
                         last_heartbeat = now
             finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+                # Shutdown executor without waiting — just stop accepting new tasks.
+                # Running tasks will be waited for in the outer finally block.
+                if sys.version_info >= (3, 9):
+                    executor.shutdown(wait=False, cancel_futures=True)
+                else:
+                    executor.shutdown(wait=False)
 
         return exit_code
     except KeyboardInterrupt:
-        args.run_context.stop()
         Log.w("Interrupted. Stopping in-flight requests and exiting.")
+        args.run_context.stop_event.set()
         return 130
     finally:
+        # Signal all threads to stop
+        args.run_context.stop_event.set()
+        # If parallel mode, wait for running tasks to finish before closing sessions
+        if 'executor' in locals():
+            executor.shutdown(wait=True)
+        # Now close sessions safely (no threads should be using them)
         args.run_context.stop()
         signal.signal(signal.SIGINT, previous_sigint)
 

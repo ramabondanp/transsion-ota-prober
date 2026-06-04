@@ -86,28 +86,20 @@ class Config:
         )
 
 
-def region_from_product(product: str) -> Optional[str]:
-    if not product:
-        return None
-    try:
-        if "-" not in product:
-            return None
-        code = product.split("-")[-1].strip().upper()
-        return REGION_CODE_MAP.get(code)
-    except Exception:
-        return None
-
-
 def region_code_from_product(product: str) -> Optional[str]:
-    if not product:
+    """Extract region code from product name (everything after the first '-')."""
+    if not product or "-" not in product:
         return None
     try:
-        if "-" not in product:
-            return None
-        code = product.rsplit("-", 1)[-1].strip().upper()
-        return code or None
+        return product.split("-", 1)[1].strip().upper()
     except Exception:
         return None
+
+
+def region_from_product(product: str) -> Optional[str]:
+    """Get human-readable region name from product name."""
+    code = region_code_from_product(product)
+    return REGION_CODE_MAP.get(code) if code else None
 
 
 def parse_fingerprint(fingerprint: str) -> Optional[Dict[str, str]]:
