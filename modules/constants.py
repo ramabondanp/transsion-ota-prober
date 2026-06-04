@@ -17,7 +17,7 @@ REGION_CODE_MAP = {
     "IN": "India - IN Market",
     "EU": "Europe - EU Market",
     "TR": "Turkey - TR Market",
-    "OPPJ": "Global-PayJoy - OPPJ Market",
+    "OPPJ": "Global - OPPJ Market",
     "COCL": "Columbia - COCL Market",
 }
 
