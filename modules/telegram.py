@@ -1,6 +1,4 @@
 import re
-from typing import Optional
-
 import requests
 
 from modules.constants import DESC_SECTION_RE, SENTENCE_BOUNDARY_RE, TELEGRAPH_API_URL
@@ -16,7 +14,7 @@ class TgNotify:
         token: str,
         chat_id: str,
         telegraph_token: str,
-        session: Optional[requests.Session] = None,
+        session: requests.Session | None = None,
     ):
         if not token or not chat_id:
             raise ValueError("Bot token and chat ID required")
@@ -28,16 +26,83 @@ class TgNotify:
         self.url = f"https://api.telegram.org/bot{token}"
         self.session = session or requests.Session()
 
-    def _create_telegraph_page(self, title: str, content: str) -> Optional[str]:
+    @staticmethod
+    def _html_to_telegraph_nodes(html_content: str) -> list:
+        """Convert simple HTML (bold tags + newlines) to Telegra.ph NodeElement array.
+
+        Handles:
+          - <b>bold</b>  → {"tag": "b", "children": ["bold"]}
+          - \n           → {"tag": "br"} (single newline within paragraph)
+          - \n\n         → paragraph boundary (new <p> element)
+          - Plain text   → string child
+          - Strips any leftover <small>, <font>, <a> tags (keeps text)
+        """
+        # Strip tags that Telegraph doesn't support, keep text content
+        cleaned = re.sub(r"<\s*/?\s*small\s*>", "", html_content, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<\s*font\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</\s*font\s*>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<\s*a\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</\s*a\s*>", "", cleaned, flags=re.IGNORECASE)
+        # Normalize any leftover <br> variants to newlines (defensive)
+        cleaned = re.sub(r"<\s*br\s*/?\s*>", "\n", cleaned, flags=re.IGNORECASE)
+
+        # Split into paragraphs by double+ newlines
+        paragraphs = re.split(r"\n\n+", cleaned)
+
+        nodes = []
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+
+            # Split paragraph into lines (single \n = <br> in Telegraph)
+            lines = para.split("\n")
+
+            para_children = []
+            for idx, line in enumerate(lines):
+                line = line.strip()
+                if not line:
+                    # Empty line within a paragraph — skip
+                    continue
+
+                # Parse inline <b>bold</b> tags within this line
+                line_children = []
+                last_end = 0
+                for match in re.finditer(r"<b>(.*?)</b>", line):
+                    if match.start() > last_end:
+                        text = line[last_end : match.start()]
+                        if text:
+                            line_children.append(text)
+                    line_children.append({"tag": "b", "children": [match.group(1)]})
+                    last_end = match.end()
+
+                if last_end < len(line):
+                    text = line[last_end:]
+                    if text:
+                        line_children.append(text)
+
+                # Add line children to paragraph
+                para_children.extend(line_children)
+
+                # Add <br> between lines (not after the last line)
+                if idx < len(lines) - 1:
+                    para_children.append({"tag": "br"})
+
+            if para_children:
+                nodes.append({"tag": "p", "children": para_children})
+
+        return nodes if nodes else [{"tag": "p", "children": [html_content]}]
+
+    def _create_telegraph_page(self, title: str, content: str) -> str | None:
         try:
-            clean_content = content.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+            content_nodes = self._html_to_telegraph_nodes(content)
 
             payload = {
                 "access_token": self.telegraph_token,
                 "title": f"Update Details: {title}",
                 "author_name": "TRANSSION Updates Tracker",
                 "author_url": "https://t.me/TranssionUpdatesTracker",
-                "content": [{"tag": "p", "children": [clean_content]}],
+                "content": content_nodes,
                 "return_content": False,
             }
 
@@ -57,12 +122,16 @@ class TgNotify:
             return None
 
     def _truncate_desc(
-        self, desc: str, max_len: int = None, telegraph_url: Optional[str] = None
+        self, desc: str, max_len: int | None = None, telegraph_url: str | None = None
     ) -> str:
         if max_len is None:
             max_len = self.DESC_MAX_LEN
 
-        link_text = f'... <a href="{telegraph_url}">Read full changelogs</a>' if telegraph_url else "..."
+        link_text = (
+            f'... <a href="{telegraph_url}">Read full changelogs</a>'
+            if telegraph_url
+            else "..."
+        )
         effective_max_len = max_len - len(link_text) if telegraph_url else max_len
 
         if len(desc) <= effective_max_len:
@@ -70,7 +139,9 @@ class TgNotify:
 
         truncated = desc[:effective_max_len]
 
-        sentence_endings = [match.end() - 1 for match in SENTENCE_BOUNDARY_RE.finditer(truncated)]
+        sentence_endings = [
+            match.end() - 1 for match in SENTENCE_BOUNDARY_RE.finditer(truncated)
+        ]
 
         if sentence_endings and sentence_endings[-1] > effective_max_len * 0.6:
             result = truncated[: sentence_endings[-1] + 1]
@@ -105,14 +176,21 @@ class TgNotify:
         # Wrap only the un-wrapped header lines in <b>.
         sanitized = re.sub(
             r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>",
-            lambda m: ("\n" if m.group(0).startswith("\n") else "") + "<b>" + m.group(1) + "</b><br>",
+            lambda m: (
+                ("\n" if m.group(0).startswith("\n") else "")
+                + "<b>"
+                + m.group(1)
+                + "</b><br>"
+            ),
             html,
         )
 
         # --- Step 2: Replace <br> with newlines ---
         # Consume inline whitespace after <br> plus at most one \n,
         # so <br>\n becomes \n (not \n\n) but <br>\n\n keeps \n\n.
-        sanitized = re.sub(r"<\s*br\s*/?\s*>[^\S\n]*\n?", "\n", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(
+            r"<\s*br\s*/?\s*>[^\S\n]*\n?", "\n", sanitized, flags=re.IGNORECASE
+        )
 
         # --- Step 3: Strip unsupported HTML tags ---
         sanitized = re.sub(r"<\s*/?\s*small\s*>", "", sanitized, flags=re.IGNORECASE)
@@ -157,10 +235,10 @@ class TgNotify:
     def send(
         self,
         msg: str,
-        btn_text: Optional[str] = None,
-        btn_url: Optional[str] = None,
+        btn_text: str | None = None,
+        btn_url: str | None = None,
         truncate_desc: bool = True,
-        device_title: Optional[str] = None,
+        device_title: str | None = None,
     ) -> bool:
         Log.i("Sending Telegram notification...")
 
@@ -180,12 +258,20 @@ class TgNotify:
 
                 if excess_chars > 0 and len(description) > self.DESC_MAX_LEN:
                     title_match = re.search(r"<b>Title:</b> (.*?)\n", before_desc)
-                    page_title = title_match.group(1) if title_match else (device_title or "Update")
+                    page_title = (
+                        title_match.group(1)
+                        if title_match
+                        else (device_title or "Update")
+                    )
                     telegraph_url = self._create_telegraph_page(page_title, description)
 
-                    truncated_desc = self._truncate_desc(description, telegraph_url=telegraph_url)
+                    truncated_desc = self._truncate_desc(
+                        description, telegraph_url=telegraph_url
+                    )
 
-                    msg = msg.replace(match.group(0), before_desc + truncated_desc + after_desc)
+                    msg = msg.replace(
+                        match.group(0), before_desc + truncated_desc + after_desc
+                    )
 
         try:
             payload = {
@@ -196,9 +282,13 @@ class TgNotify:
             }
 
             if btn_text and btn_url:
-                payload["reply_markup"] = {"inline_keyboard": [[{"text": btn_text, "url": btn_url}]]}
+                payload["reply_markup"] = {
+                    "inline_keyboard": [[{"text": btn_text, "url": btn_url}]]
+                }
 
-            response = self.session.post(f"{self.url}/sendMessage", json=payload, timeout=15)
+            response = self.session.post(
+                f"{self.url}/sendMessage", json=payload, timeout=15
+            )
             response.raise_for_status()
 
             Log.s("Notification sent successfully")
