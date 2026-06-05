@@ -9,3 +9,6 @@ debug_checkin_response.txt
 
 # Pi runtime config
 .pi/
+
+# Linter cache
+.ruff_cache/

@@ -96,7 +96,7 @@ class UpdateChecker:
                 resp.ParseFromString(response.content)
 
                 if debug:
-                    Path(DEBUG_FILE).write_text(text_format.MessageToString(resp))
+                    Path(DEBUG_FILE).write_text(text_format.MessageToString(resp), encoding="utf-8")
                     Log.i(f"Debug response saved to {DEBUG_FILE}")
 
                 info = self._parse(resp)

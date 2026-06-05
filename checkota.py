@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+# ruff: noqa: E402
+
 
 import argparse
 import html
@@ -743,10 +745,14 @@ def main() -> int:
                     return index, 130, ""
                 local_args = argparse.Namespace(**vars(args))
                 buffer = io.StringIO()
-                with Log.capture(buffer):
-                    header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
-                    Log.i(header)
-                    result = process_config(path, local_args)
+                try:
+                    with Log.capture(buffer):
+                        header = f"Processing config {index}/{total}: {path}" if total > 1 else f"Processing config: {path}"
+                        Log.i(header)
+                        result = process_config(path, local_args)
+                except Exception as exc:
+                    buffer.write(f"\033[91m✗\033[0m Config {path} failed with unhandled exception: {exc}\n")
+                    result = 1
                 return index, result, buffer.getvalue()
 
             executor = ThreadPoolExecutor(max_workers=min(args.jobs, total))

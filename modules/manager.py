@@ -46,7 +46,7 @@ class Config:
         if not file.is_file():
             raise FileNotFoundError(f"Config file not found: {file}")
 
-        with open(file, "r") as handle:
+        with open(file, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
 
         if not isinstance(data, dict):
@@ -124,7 +124,7 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
     }
 
     try:
-        raw_text = config_path.read_text()
+        raw_text = config_path.read_text(encoding="utf-8")
     except Exception as exc:
         Log.w(f"Failed to read config file {config_path}: {exc}")
         return False
@@ -282,7 +282,7 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
         return True
 
     try:
-        config_path.write_text(new_text)
+        config_path.write_text(new_text, encoding="utf-8")
     except Exception as exc:
         Log.w(f"Failed to write updated config {config_path}: {exc}")
         return False
