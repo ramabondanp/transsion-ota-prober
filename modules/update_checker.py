@@ -13,13 +13,10 @@ from utils import functions
 
 from modules.manager import Config
 from modules.constants import (
-    BR_TAG_RE,
     CHECKIN_URL,
     DEBUG_FILE,
-    HTML_TAG_RE,
     OTA_URL_PREFIX,
     PROTO_TYPE,
-    URL_PAREN_RE,
     USER_AGENT_TPL,
 )
 from modules.logging import Log
@@ -174,10 +171,3 @@ class UpdateChecker:
 
         return info
 
-    @staticmethod
-    def _clean_desc(text: str) -> str:
-        text = text.replace("\n", "")
-        text = BR_TAG_RE.sub("\n", text)
-        text = HTML_TAG_RE.sub("", text)
-        text = URL_PAREN_RE.sub("", text)
-        return text.strip()

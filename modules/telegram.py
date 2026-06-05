@@ -1,7 +1,7 @@
 import re
 import requests
 
-from modules.constants import DESC_SECTION_RE, SENTENCE_BOUNDARY_RE, TELEGRAPH_API_URL
+from modules.constants import DESC_SECTION_RE, SECTION_HEADER_RE, SENTENCE_BOUNDARY_RE, TELEGRAPH_API_URL
 from modules.logging import Log
 
 
@@ -174,8 +174,7 @@ class TgNotify:
         #   <small><font>content</font></small><br>
         #   HEADER<br>
         # Wrap only the un-wrapped header lines in <b>.
-        sanitized = re.sub(
-            r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>",
+        sanitized = SECTION_HEADER_RE.sub(
             lambda m: (
                 ("\n" if m.group(0).startswith("\n") else "")
                 + "<b>"

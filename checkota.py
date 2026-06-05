@@ -24,6 +24,7 @@ if SUBMODULE_DIR.is_dir():
     if subs_path not in sys.path:
         sys.path.insert(0, subs_path)
 
+from modules.constants import SECTION_HEADER_RE
 from modules.manager import Config, parse_fingerprint, region_code_from_product, region_from_product, update_config_from_fingerprint
 from modules.logging import Log
 from modules.telegram import TgNotify
@@ -226,8 +227,7 @@ def format_update_description(description: str) -> str:
         return ""
     # Bold section headers before parsing (same pattern as Telegram sanitization).
     # Lines like "Android Version<br>" that are NOT inside <small>/<font> are headers.
-    bolded = re.sub(
-        r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>",
+    bolded = SECTION_HEADER_RE.sub(
         lambda m: ("\n" if m.group(0).startswith("\n") else "") + "<b>" + m.group(1) + "</b><br>",
         description,
     )
@@ -236,18 +236,13 @@ def format_update_description(description: str) -> str:
 
 
 def config_from_fingerprint(fingerprint: str) -> Config:
-    pattern = re.compile(
-        r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
-        r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
-    )
-    match = pattern.match(fingerprint.strip())
-    if not match:
+    parsed = parse_fingerprint(fingerprint)
+    if not parsed:
         raise ValueError(
             "Invalid fingerprint format. Expected: "
             "oem/product/device:android_version/build_tag/incremental:user/release-keys"
         )
 
-    parsed = match.groupdict()
     return Config(
         build_tag=parsed["build_tag"],
         incremental=parsed["incremental"],
