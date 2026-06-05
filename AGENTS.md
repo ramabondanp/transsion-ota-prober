@@ -137,9 +137,9 @@ ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
 - If the message exceeds `MAX_LEN`, the description section is identified via
   `DESC_SECTION_RE` regex, truncated at a sentence/paragraph boundary, and a "Read full
   changelogs" link to a Telegraph page is appended.
-- `DESC_SECTION_RE` pattern: captures from `<b:Title:>` through the description to
-  `\n\n<b:Size:>`. **The blank line before `<b:Size:>` must be preserved** for the
-  regex to match.
+- `DESC_SECTION_RE` pattern: captures from `<b>Title:</b>` through the description to
+  `\n\n?<b>Size:</b>`. The second newline before `<b>Size:</b>` is optional (`\n\n?`)
+  to tolerate cases where HTML/whitespace sanitization collapses the blank line.
 
 ## Known Bug Fixes (historical context — do not regress)
 
@@ -155,6 +155,10 @@ ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
 | Description formatting: flat text, no section hierarchy | `telegram.py` | Bold headers via pre-strip regex pass |
 | Terminal output: extra blank lines between every line | `checkota.py` | `_empty_br_count` tracks consecutive `<br>`; blank line only on first empty `<br>` |
 | Terminal output: `<b>` headers not bolded | `checkota.py` | `flush()` on `</b>` before clearing bold flag |
+| Unhandled worker exceptions crash parallel execution | `checkota.py` | Wrapped worker tasks in try-except in `run_config_buffered` to capture exceptions and prevent main thread crash. |
+| E402 import warnings in checkota.py | `checkota.py` | Added `# ruff: noqa: E402` to ignore false-positive warnings from dynamic path insertion. |
+| `DESC_SECTION_RE` mismatch when blank line before Size collapsed | `constants.py` | Made the second newline before Size optional: `\n\n?` instead of `\n\n`. |
+| Locale-dependent Unicode errors on file I/O | `manager.py`, `fingerprints.py`, `update_checker.py` | Enforced explicit `encoding="utf-8"` in all file open, read, and write operations. |
 
 ## Running
 
