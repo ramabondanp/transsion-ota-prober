@@ -13,7 +13,7 @@ variants:
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "CM5-TR"
-    incremental: "201200024"
+    incremental: "201350009"
 
   - variant: "Russia"
     android_version: "16"
