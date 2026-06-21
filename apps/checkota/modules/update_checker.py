@@ -81,7 +81,7 @@ class UpdateChecker:
         if self.imei:
             Log.i(f"Using custom IMEI: {self.imei}")
         retries = 3
-        delay = 5
+        delay = 1
 
         for attempt in range(retries):
             if self._stopped():
@@ -89,14 +89,18 @@ class UpdateChecker:
                 return False, None
             try:
                 data = self._build_request()
-                response = self.session.post(CHECKIN_URL, data=data, headers=self.headers, timeout=10)
+                response = self.session.post(
+                    CHECKIN_URL, data=data, headers=self.headers, timeout=10
+                )
                 response.raise_for_status()
 
                 resp = checkin_generator_pb2.AndroidCheckinResponse()
                 resp.ParseFromString(response.content)
 
                 if debug:
-                    Path(DEBUG_FILE).write_text(text_format.MessageToString(resp), encoding="utf-8")
+                    Path(DEBUG_FILE).write_text(
+                        text_format.MessageToString(resp), encoding="utf-8"
+                    )
                     Log.i(f"Debug response saved to {DEBUG_FILE}")
 
                 info = self._parse(resp)
@@ -107,13 +111,16 @@ class UpdateChecker:
                 if self._stopped():
                     Log.w("Update check interrupted.")
                     return False, None
-                Log.w(f"Update check timed out. Retrying in {delay} seconds... ({attempt + 1}/{retries})")
+                Log.w(
+                    f"Update check timed out. Retrying in {delay} seconds... ({attempt + 1}/{retries})"
+                )
                 if attempt < retries - 1:
                     if self.stop_event is not None and self.stop_event.wait(delay):
                         Log.w("Update check interrupted during retry delay.")
                         return False, None
                     if self.stop_event is None:
                         time.sleep(delay)
+                    delay *= 2
                 else:
                     Log.e("Update check failed after multiple retries due to timeout.")
                     return False, None
@@ -123,13 +130,17 @@ class UpdateChecker:
                     return False, None
                 Log.e(f"Update check failed: {exc}")
                 if debug and "response" in locals():
-                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(response.content)
+                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
+                        response.content
+                    )
                     Log.i("Raw error response saved")
                 return False, None
             except Exception as exc:
                 Log.e(f"Update check failed: {exc}")
                 if debug and "response" in locals():
-                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(response.content)
+                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
+                        response.content
+                    )
                     Log.i("Raw error response saved")
                 return False, None
         return False, None
@@ -151,7 +162,9 @@ class UpdateChecker:
 
             value = value_bytes.decode("utf-8", errors="ignore")
 
-            if not info["found"] and (name_bytes == b"update_url" or OTA_URL_PREFIX in value_bytes):
+            if not info["found"] and (
+                name_bytes == b"update_url" or OTA_URL_PREFIX in value_bytes
+            ):
                 url = value.strip()
                 if url:
                     info["url"] = url
@@ -170,4 +183,3 @@ class UpdateChecker:
                 info["size"] = value
 
         return info
-
