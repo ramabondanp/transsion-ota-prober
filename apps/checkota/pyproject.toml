@@ -3,12 +3,7 @@ name = "checkota"
 version = "0.1.0"
 description = "OTA firmware update checker for Transsion Holdings devices (TECNO, Infinix, itel)"
 requires-python = ">=3.9"
-dependencies = [
-    "requests>=2.31",
-    "PyYAML>=6.0",
-    "protobuf>=4.0",
-    "remotezip>=0.12",
-]
+dependencies = ["requests>=2.31", "PyYAML>=6.0", "protobuf>=4.0"]
 
 [project.scripts]
 checkota = "checkota:main"
