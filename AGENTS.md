@@ -10,23 +10,31 @@ optionally sends Telegram notifications.
 ## Architecture
 
 ```
-checkota.py           ← Entry point: CLI, orchestration, parallel execution
-                         TerminalParser (HTML→ANSI) + format_update_description
-                         Config dataclasses (RunContext, VariantUpdate)
-modules/
-  constants.py        ← URLs, region codes, SDK versions, regex patterns
-  manager.py          ← Config data model (dataclass), YAML parsing, fingerprint handling
-  update_checker.py   ← Builds protobuf check-in request, sends to Google, parses response
-  metadata.py         ← Fetches OTA ZIP metadata (fingerprint, SDK, patch level) via RemoteZip
-  fingerprints.py     ← Persistence: saves/loads processed update titles (dedup)
-  logging.py          ← Thread-safe logging with ANSI colors
-  telegram.py         ← Telegram notification + Telegraph page fallback + HTML sanitization
-google-ota-prober/    ← Git submodule (fork of tangalbert919/google-ota-prober): proto definitions
-  checkin/            ← Compiled protobuf Python modules
-  utils/functions.py  ← IMEI/digest/serial/MAC generators
-  probe.py            ← Original probe script (not used by checkota.py)
-configs/              ← YAML device configs (one per device codename, ~100 files)
-processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000 entries)
+apps/checkota/         ← Python application (monorepo app layout)
+  checkota.py          ← Entry point: CLI, orchestration, parallel execution
+                          TerminalParser (HTML→ANSI) + format_update_description
+                          Config dataclasses (RunContext, VariantUpdate)
+                          sys.path injection for vendor (VENDOR_DIR)
+  modules/
+    constants.py       ← URLs, region codes, SDK versions, regex patterns
+    manager.py         ← Config data model (dataclass), YAML parsing, fingerprint handling
+    update_checker.py  ← Builds protobuf check-in request, sends to Google, parses response
+    metadata.py        ← Fetches OTA ZIP metadata (fingerprint, SDK, patch level) via RemoteZip
+                         processed_updates_path() anchored to app dir
+    fingerprints.py    ← Persistence: saves/loads processed update titles (dedup)
+    logging.py         ← Thread-safe logging with ANSI colors
+    telegram.py        ← Telegram notification + Telegraph page fallback + HTML sanitization
+  configs/             ← YAML device configs (one per device codename, 108 files)
+  processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000 entries)
+  pyproject.toml       ← Package metadata + deps (requests, PyYAML, protobuf, remotezip)
+
+vendor/
+  google-ota-prober/   ← Vendored (was git submodule; pinned commit in VERSION)
+    VERSION            ← Upstream commit hash (provenance)
+    ATTRIBUTION        ← Upstream URL + scope note
+    checkin/           ← Compiled protobuf Python modules (checkin_generator_pb2 used)
+    proto/             ← .proto sources (rebuild traceability)
+    utils/functions.py ← IMEI/digest/serial/MAC generators
 ```
 
 ## Data Flow
@@ -57,6 +65,7 @@ processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000
 ## Key Design Decisions & Conventions
 
 ### Product → Region Code Mapping
+
 Products follow the convention `{device_code}-{REGION}`. Region codes can be multi-part
 (e.g., `CN7c-OP-M1` → region `OP-M1`). The `region_code_from_product()` function in
 `manager.py` extracts everything after the first `-`:
@@ -71,8 +80,11 @@ Products follow the convention `{device_code}-{REGION}`. Region codes can be mul
 `split("-")[-1]` (which breaks for multi-part codes like `OP-M1`).
 
 ### Config file format
+
 Two styles exist:
+
 - **Single variant** — all fields at top level:
+
   ```yaml
   oem: "TECNO"
   product: "KL8-OP"
@@ -82,7 +94,9 @@ Two styles exist:
   incremental: "260412V1712"
   model: "TECNO SPARK 30 5G"
   ```
+
 - **Multiple variants** — shared fields at top level, variants override in a list:
+
   ```yaml
   oem: "Infinix"
   device: "Infinix-X6873"
@@ -99,11 +113,13 @@ Two styles exist:
   ```
 
 ### Fingerprint format
+
 ```
 {oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys
 ```
 
 ### Telegram HTML sanitization (`_sanitize_html`)
+
 The sanitization pipeline in `telegram.py` runs in 5 ordered steps:
 
 1. **Bold headers** — Detect lines like `Android Version<br>` that are NOT wrapped in
@@ -119,6 +135,7 @@ The sanitization pipeline in `telegram.py` runs in 5 ordered steps:
 headers from `<small>`-wrapped content) is still intact.
 
 ### Terminal output formatting (`TerminalParser`)
+
 The `TerminalParser` class in `checkota.py` converts raw OTA description HTML to
 ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
 
@@ -133,6 +150,7 @@ ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
    (important because `<br>` would otherwise trigger the flush after bold is already off).
 
 ### Notifications & Truncation
+
 - Telegram message limit: 4096 chars. Code uses `MAX_LEN = 4090` as safety margin.
 - If the message exceeds `MAX_LEN`, the description section is identified via
   `DESC_SECTION_RE` regex, truncated at a sentence/paragraph boundary, and a "Read full
@@ -159,33 +177,41 @@ ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
 | E402 import warnings in checkota.py | `checkota.py` | Added `# ruff: noqa: E402` to ignore false-positive warnings from dynamic path insertion. |
 | `DESC_SECTION_RE` mismatch when blank line before Size collapsed | `constants.py` | Made the second newline before Size optional: `\n\n?` instead of `\n\n`. |
 | Locale-dependent Unicode errors on file I/O | `manager.py`, `fingerprints.py`, `update_checker.py` | Enforced explicit `encoding="utf-8"` in all file open, read, and write operations. |
+| `processed_updates.txt` path was CWD-relative | `modules/metadata.py` | Anchored to `Path(__file__).resolve().parent.parent` (app dir) so file is co-located with the script regardless of CWD. |
 
 ## Running
 
+All commands run from the repo root unless noted.
+
 ```bash
 # Single config
-python3 checkota.py -c configs/config-X6873.yml
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml
 
 # Directory of configs (parallel, 4 jobs)
-python3 checkota.py -d configs/ --jobs 4
+python3 apps/checkota/checkota.py -d apps/checkota/configs/ --jobs 4
 
 # Direct fingerprint (no config file)
-python3 checkota.py --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
+python3 apps/checkota/checkota.py --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
 
 # Dry run
-python3 checkota.py -c configs/config-X6873.yml --dry-run
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --dry-run
+
+# Shorthand: bare codename resolves to apps/checkota/configs/config-<codename>.yml
+python3 apps/checkota/checkota.py -c X6873 --dry-run
+python3 apps/checkota/checkota.py -c X6873.yml --dry-run
 
 # Update config incremental without notification
-python3 checkota.py -c configs/config-X6873.yml --update-incremental
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --update-incremental
 
 # Filter by region
-python3 checkota.py -d configs/ --reg OP-M1
+python3 apps/checkota/checkota.py -d apps/checkota/configs/ --reg OP-M1
 
 # Debug (saves check-in response)
-python3 checkota.py -c configs/config-X6873.yml --debug
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --debug
 ```
 
 Environment variables for Telegram:
+
 - `bot_token` — Telegram bot token
 - `chat_id` — Target chat ID
 - `telegraph_token` — Telegraph API token (for long descriptions)

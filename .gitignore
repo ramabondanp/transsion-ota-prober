@@ -1,5 +1,8 @@
 __pycache__/
+**/__pycache__/
 *.pyc
+*.egg-info/
+**/*.egg-info/
 processed_updates.txt
 # Local Pi runtime state
 .atl/

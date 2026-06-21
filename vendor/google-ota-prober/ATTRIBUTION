@@ -1,0 +1,12 @@
+Vendored from https://github.com/tangalbert919/google-ota-prober
+Pinned commit: 91d990f14d0bca69954fff97c188b1d00cca0d44
+Branch: remotes/origin/gui-6-g91d990f
+License: see upstream repository
+
+Only checkin/*_pb2.py, proto/*.proto, and utils/functions.py are vendored.
+checkota uses these imports:
+    from checkin import checkin_generator_pb2
+    from utils import functions
+
+Dropped from upstream: probe.py, gui.py, config.yml, fp3_post_data.gz,
+output.txt, requirements.txt, requirements-gui.txt, README.md, .github/.

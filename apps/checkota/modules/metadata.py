@@ -77,7 +77,9 @@ def get_ota_metadata(
                 result["post_timestamp"] = meta["post-timestamp"]
                 try:
                     timestamp = int(meta["post-timestamp"])
-                    dt_utc = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc)
+                    dt_utc = datetime.datetime.fromtimestamp(
+                        timestamp, datetime.timezone.utc
+                    )
                     tz_cst = datetime.timezone(datetime.timedelta(hours=8))
                     dt_cst = dt_utc.astimezone(tz_cst)
                     result["build_date"] = dt_cst.strftime("%Y-%m-%d %H:%M:%S")
@@ -99,7 +101,11 @@ def get_ota_metadata(
         except KeyError:
             Log.w(f"{METADATA_PATH} not found in OTA package.")
             return None
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, RemoteIOError) as exc:
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            RemoteIOError,
+        ) as exc:
             if stop_event is not None and stop_event.is_set():
                 Log.w("OTA metadata fetch interrupted.")
                 return None
@@ -149,7 +155,9 @@ def extract_incremental_from_fingerprint(fingerprint: str) -> Optional[str]:
     return incremental_segment.split(":", 1)[0] if incremental_segment else None
 
 
-def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) -> Tuple[str, str, str]:
+def build_sdk_strings(
+    sdk_level: Optional[str], android_version: Optional[str]
+) -> Tuple[str, str, str]:
     if sdk_level is None:
         return "", "", ""
 
@@ -174,5 +182,21 @@ def build_sdk_strings(sdk_level: Optional[str], android_version: Optional[str]) 
     return message, log_line, release_line
 
 
+APP_DIR = Path(__file__).resolve().parent.parent
+PROCESSED_UPDATES_FILE_PATH = APP_DIR / PROCESSED_UPDATES_FILE
+
+
 def processed_updates_path() -> Path:
-    return Path(PROCESSED_UPDATES_FILE)
+    """Resolve the dedup file path with backwards-compatible fallback.
+
+    Prefers the anchored path (apps/checkota/processed_updates.txt). If absent,
+    falls back to the CWD-relative path used by the pre-restructure code so
+    existing dedup state survives the move.
+    """
+    anchored = PROCESSED_UPDATES_FILE_PATH
+    if anchored.exists():
+        return anchored
+    legacy = Path.cwd() / PROCESSED_UPDATES_FILE
+    if legacy.exists() and legacy != anchored:
+        return legacy
+    return anchored

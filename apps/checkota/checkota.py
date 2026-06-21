@@ -20,11 +20,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 
-SUBMODULE_DIR = Path(__file__).resolve().parent / "google-ota-prober"
-if SUBMODULE_DIR.is_dir():
-    subs_path = str(SUBMODULE_DIR)
-    if subs_path not in sys.path:
-        sys.path.insert(0, subs_path)
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent.parent
+VENDOR_DIR = PROJECT_ROOT / "vendor" / "google-ota-prober"
+APP_CONFIGS_DIR = APP_DIR / "configs"
+if VENDOR_DIR.is_dir():
+    vendor_path = str(VENDOR_DIR)
+    if vendor_path not in sys.path:
+        sys.path.insert(0, vendor_path)
 
 from modules.constants import SECTION_HEADER_RE
 from modules.manager import Config, parse_fingerprint, region_code_from_product, region_from_product, update_config_from_fingerprint
@@ -605,6 +608,32 @@ def create_run_context(args: argparse.Namespace) -> RunContext:
     )
 
 
+def resolve_config_path(value: Path) -> Path:
+    """Resolve a bare codename like 'X6850' to the matching config file.
+
+    Lookup order:
+      1. value as-is (covers absolute paths, ./relative, ~/... already expanded)
+      2. APP_CONFIGS_DIR / f"config-{value}.yml" (bare codename)
+      3. APP_CONFIGS_DIR / value (when value ends in .yml/.yaml)
+    Returns the original value unchanged if nothing matches so downstream
+    errors surface normally.
+    """
+    if value.is_file():
+        return value
+    val = str(value)
+    candidates = []
+    if val.endswith((".yml", ".yaml")):
+        candidates.append(APP_CONFIGS_DIR / val)
+        candidates.append(APP_CONFIGS_DIR / f"config-{val}")
+    else:
+        candidates.append(APP_CONFIGS_DIR / f"config-{val}.yml")
+        candidates.append(APP_CONFIGS_DIR / f"{val}.yml")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return value
+
+
 def main() -> int:
     if sys.version_info < (3, 7):
         Log.e("Requires Python 3.7+")
@@ -673,6 +702,9 @@ def main() -> int:
 
     if args.config and args.config.is_dir():
         parser.error("--config expects a file. Use --config-dir for directories.")
+
+    if args.config:
+        args.config = resolve_config_path(args.config)
 
     args.run_context = create_run_context(args)
     previous_sigint = install_interrupt_handler(args.run_context)

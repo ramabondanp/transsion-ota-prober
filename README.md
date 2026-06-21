@@ -1,12 +1,65 @@
-# List of Tracked Transsion Devices
+# checkota
+
+OTA firmware update checker for Transsion Holdings devices (TECNO, Infinix, itel).
+Queries Google's Android check-in servers using protobuf-based requests and optionally
+sends Telegram notifications.
+
+## Install
+
+```bash
+pip install requests PyYAML protobuf remotezip
+```
+
+Or via the bundled `pyproject.toml`:
+
+```bash
+pip install -e apps/checkota/
+```
+
+## Run
+
+```bash
+# Single config
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml
+
+# Shorthand: bare codename resolves to apps/checkota/configs/config-<codename>.yml
+python3 apps/checkota/checkota.py -c X6873
+python3 apps/checkota/checkota.py -c X6873.yml
+
+# All configs in parallel (4 jobs)
+python3 apps/checkota/checkota.py -d apps/checkota/configs/ --jobs 4
+
+# Dry run
+python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --dry-run
+
+# Direct fingerprint
+python3 apps/checkota/checkota.py --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
+```
+
+Telegram env vars: `bot_token`, `chat_id`, `telegraph_token` (for long descriptions).
+
+## Vendored dependencies
+
+The `vendor/google-ota-prober/` directory contains a trimmed, pinned copy of
+[tangalbert919/google-ota-prober](https://github.com/tangalbert919/google-ota-prober).
+Upstream commit hash is recorded in `vendor/google-ota-prober/VERSION`; scope and license
+info in `vendor/google-ota-prober/ATTRIBUTION`.
+
+Only the compiled protobuf modules (`checkin/`), the `.proto` sources, and
+`utils/functions.py` are vendored — `checkota` does not use `probe.py`, `gui.py`,
+or the original `config.yml` format.
+
+## List of Tracked Transsion Devices
 
 ## PHANTOM SERIES
+
 * TECNO PHANTOM V Fold 5G (AD10)
 * TECNO PHANTOM V Flip 5G (AD11)
 * TECNO PHANTOM V Fold2 5G (AE10)
 * TECNO PHANTOM V Flip2 5G (AE11)
 
 ## CAMON SERIES
+
 * TECNO CAMON 30 4G (CL6)
 * TECNO CAMON 30 5G (CL7)
 * TECNO CAMON 30 Pro 5G (CL8)
@@ -22,6 +75,7 @@
 * TECNO CAMON 50 Ultra 5G / Pro 5G (CN7c)
 
 ## SPARK SERIES
+
 * TECNO SPARK Go 1 (KL4)
 * TECNO SPARK 20 (KJ5)
 * TECNO SPARK 20 Pro (KJ6)
@@ -44,6 +98,7 @@
 * TECNO SPARK 50 5G (KN8)
 
 ## POVA SERIES
+
 * TECNO POVA 6 Neo (LI6)
 * TECNO POVA 6 (LI7)
 * TECNO POVA 6 Pro (LI9)
@@ -56,11 +111,13 @@
 * TECNO POVA Curve 2 5G (LK7k)
 
 ## MEGAPAD
+
 * TECNO MEGAPAD 11 (T1101)
 * TECNO MEGAPAD SE (T1102)
 * TECNO MegaPad Pro (T1201)
 
 ## ITEL
+
 * itel A80 (A671LC)
 * itel A95 5G / itel ZENO 5G+ (A671N)
 * itel P55 5G (P661N)
@@ -74,11 +131,13 @@
 * itel CITY 200 (C681L)
 
 ## XPAD
+
 * Infinix XPAD (X1101)
 * Infinix XPAD 20 Pro (X1201)
 * Infinix XPAD GT SD888 (X1301)
 
 ## HOT SERIES
+
 * Infinix HOT 40i (X6528) (X6528B)
 * Infinix HOT 40 (X6836)
 * Infinix HOT 40 Pro (X6837)
@@ -95,6 +154,7 @@
 * Infinix HOT 70 (X6895B)
 
 ## ZERO SERIES
+
 * Infinix ZERO 30 5G (X6731)
 * Infinix ZERO 30 4G (X6731B)
 * Infinix ZERO 40 4G (X6860)
@@ -102,12 +162,14 @@
 * Infinix ZERO Flip (X6962)
 
 ## GT SERIES
+
 * Infinix GT 20 Pro (X6871)
 * Infinix GT 30 Pro (X6873)
 * Infinix GT 30 (X6876)
 * Infinix GT 50 Pro (X6891)
 
 ## NOTE SERIES
+
 * Infinix NOTE 40X 5G (X6838)
 * Infinix NOTE 40 Pro (X6850)
 * Infinix NOTE 40S (X6850B)
@@ -126,6 +188,7 @@
 * Infinix NOTE 60 Ultra (X6877)
 
 ## SMART SERIES
+
 * Infinix SMART 10 (X6725)
 * Infinix SMART 10 PLUS (X6725C)
 * Infinix SMART 20 (X6840)
