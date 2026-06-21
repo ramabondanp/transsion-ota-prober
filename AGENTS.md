@@ -2,216 +2,191 @@
 
 ## Overview
 
-**checkota** is a Python tool that checks for OTA (over-the-air) firmware updates for
-Transsion Holdings devices (TECNO, Infinix, itel). It queries Google's Android check-in
-servers using protobuf-based requests, parses the response for available updates, and
-optionally sends Telegram notifications.
+**checkota** checks OTA firmware updates for Transsion devices (TECNO, Infinix, itel).
+Queries Google's Android check-in servers via protobuf requests, parses the response for
+available updates, and optionally sends Telegram notifications.
 
 ## Architecture
 
 ```
-apps/checkota/         ← Python application (monorepo app layout)
-  checkota.py          ← Entry point: CLI, orchestration, parallel execution
-                          TerminalParser (HTML→ANSI) + format_update_description
-                          Config dataclasses (RunContext, VariantUpdate)
-                          sys.path injection for vendor (VENDOR_DIR)
+apps/checkota/
+  checkota.py          ← Thin shim: bootstraps vendor path, calls modules.cli.main
   modules/
+    __init__.py        ← Bootstraps vendored google-ota-prober onto sys.path on import
+    paths.py           ← APP_DIR/PROJECT_ROOT/VENDOR_DIR anchors + ensure_vendor_on_path()
+                         (CHECKOTA_VENDOR_DIR override; fails loud if vendor missing)
+    cli.py             ← argparse, arg validation, config-path resolution; orchestration:
+                         _run_sequential (--jobs 1), _run_global_pool ((config,variant) pool)
+    runtime.py         ← RunContext (per-thread sessions w/ tuned HTTPAdapter pool, locks,
+                         stop_event), create_run_context, install_interrupt_handler,
+                         start_watchdog (--timeout)
+    processor.py       ← Pipeline: collect_update_info, apply_update_actions,
+                         process_config(_variant), load_config_variants,
+                         config_from_fingerprint, OTA metadata cache
+    models.py          ← VariantUpdate dataclass (processor + notifier)
+    description.py     ← TerminalParser (HTML→ANSI) + format_update_description
+    notifier.py        ← create_notifier + build_notification_message
     constants.py       ← URLs, region codes, SDK versions, regex patterns
-    manager.py         ← Config data model (dataclass), YAML parsing, fingerprint handling
-    update_checker.py  ← Builds protobuf check-in request, sends to Google, parses response
-    metadata.py        ← Fetches OTA ZIP metadata (fingerprint, SDK, patch level) via RemoteZip
-                         processed_updates_path() anchored to app dir
-    fingerprints.py    ← Persistence: saves/loads processed update titles (dedup)
+    manager.py         ← Config dataclass, YAML parsing, fingerprint handling
+    update_checker.py  ← Builds/sends protobuf check-in request, parses response
+    metadata.py        ← Parses OTA ZIP metadata; processed_updates_path() anchored to app dir
+    zip_metadata.py    ← Direct HTTP Range fetch of one ZIP member (replaces remotezip);
+                         ZIP64-aware, absolute ranges only (Google rejects suffix ranges)
+    fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
     logging.py         ← Thread-safe logging with ANSI colors
-    telegram.py        ← Telegram notification + Telegraph page fallback + HTML sanitization
-  configs/             ← YAML device configs (one per device codename, 108 files)
-  processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000 entries)
-  pyproject.toml       ← Package metadata + deps (requests, PyYAML, protobuf, remotezip)
+    telegram.py        ← Telegram notify + Telegraph fallback + HTML sanitization
+  configs/             ← YAML device configs (one per codename, 108 files)
+  processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000)
+  pyproject.toml       ← Package metadata + deps (requests, PyYAML, protobuf)
 
-vendor/
-  google-ota-prober/   ← Vendored (was git submodule; pinned commit in VERSION)
-    VERSION            ← Upstream commit hash (provenance)
-    ATTRIBUTION        ← Upstream URL + scope note
-    checkin/           ← Compiled protobuf Python modules (checkin_generator_pb2 used)
-    proto/             ← .proto sources (rebuild traceability)
-    utils/functions.py ← IMEI/digest/serial/MAC generators
+vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION = scope/license)
+  checkin/             ← Compiled protobuf modules (checkin_generator_pb2)
+  proto/               ← .proto sources
+  utils/functions.py   ← IMEI/digest/serial/MAC generators
 ```
 
 ## Data Flow
 
-1. **Read config** — YAML file defines device fingerprint fields (`oem`, `product`,
-   `device`, `android_version`, `build_tag`, `incremental`). Supports multiple variants
-   per file via `variants:` list.
-
-2. **Build check-in request** — `UpdateChecker` constructs a protobuf
-   `AndroidCheckinRequest` with the fingerprint, a generated IMEI, serial, MAC, and
-   digest. Gzip-compressed and POSTed to `https://android.googleapis.com/checkin`.
-
-3. **Parse response** — The response is an `AndroidCheckinResponse` protobuf. The
-   `setting` entries are scanned for `update_url`, `update_title`, `update_description`,
-   `update_size`.
-
-4. **Fetch OTA metadata** — If an update is found, `get_ota_metadata()` opens the OTA ZIP
-   via `RemoteZip` and reads `META-INF/com/android/metadata` to extract the target
-   `post-build` fingerprint, incremental version, security patch level, and SDK level.
-
-5. **Update config** — The config YAML file is rewritten in-place with the new
-   `android_version`, `build_tag`, and `incremental` from the target fingerprint.
-
-6. **Notify** — A Telegram message is built and sent. If the message exceeds 4090
-   characters, the description section is truncated and a Telegraph page is created as
-   a fallback.
+1. **Read config** — YAML defines fingerprint fields (`oem`, `product`, `device`,
+   `android_version`, `build_tag`, `incremental`). Multiple variants via `variants:` list.
+2. **Build request** — `UpdateChecker` builds protobuf `AndroidCheckinRequest` (fingerprint
+   + generated IMEI/serial/MAC/digest), gzips, POSTs to `https://android.googleapis.com/checkin`.
+3. **Parse response** — `AndroidCheckinResponse` protobuf; scan `setting` entries for
+   `update_url`, `update_title`, `update_description`, `update_size`.
+4. **Fetch OTA metadata** — `get_ota_metadata()` reads `META-INF/com/android/metadata`
+   from the remote ZIP via `zip_metadata.fetch_zip_member()` (HTTP Range, no full download)
+   for target `post-build` fingerprint, incremental, patch level, SDK level.
+5. **Update config** — YAML rewritten in-place with new `android_version`, `build_tag`,
+   `incremental` from the target fingerprint.
+6. **Notify** — Telegram message sent. If > 4090 chars, description truncated and a
+   Telegraph page created as fallback.
 
 ## Key Design Decisions & Conventions
 
-### Product → Region Code Mapping
+### Product → Region Code
 
-Products follow the convention `{device_code}-{REGION}`. Region codes can be multi-part
-(e.g., `CN7c-OP-M1` → region `OP-M1`). The `region_code_from_product()` function in
-`manager.py` extracts everything after the first `-`:
+Convention `{device_code}-{REGION}`; region can be multi-part (`CN7c-OP-M1` → `OP-M1`).
+`region_code_from_product()` in `manager.py` takes everything after the first `-`.
 
-| Product        | Region code | Region name                |
-|----------------|-------------|----------------------------|
-| `KL8-OP`       | `OP`        | Global - OP Market         |
-| `X6852-IN`     | `IN`        | India - IN Market          |
-| `CN7c-OP-M1`   | `OP-M1`     | Global - OP-M1 Market      |
+**Always use `product.split("-", 1)[1]`** — never `split("-")[-1]` (breaks `OP-M1`).
 
-**Always use `product.split("-", 1)[1]` to extract region code** — never
-`split("-")[-1]` (which breaks for multi-part codes like `OP-M1`).
+Examples: `KL8-OP`→`OP`, `X6852-IN`→`IN`, `CN7c-OP-M1`→`OP-M1`.
 
 ### Config file format
 
-Two styles exist:
+Single variant — all fields top level:
 
-- **Single variant** — all fields at top level:
-
-  ```yaml
-  oem: "TECNO"
-  product: "KL8-OP"
-  device: "TECNO-KL8"
-  android_version: "14"
-  build_tag: "UP1A.231005.007"
-  incremental: "260412V1712"
-  model: "TECNO SPARK 30 5G"
-  ```
-
-- **Multiple variants** — shared fields at top level, variants override in a list:
-
-  ```yaml
-  oem: "Infinix"
-  device: "Infinix-X6873"
-  model: "Infinix GT 30 Pro"
-  variants:
-    - variant: "Global"
-      android_version: "16"
-      build_tag: "BP2A.250605.031.A3"
-      product: "X6873-OP"
-      incremental: "201350016"
-    - variant: "India"
-      product: "X6873-IN"
-      incremental: "201350016"
-  ```
-
-### Fingerprint format
-
-```
-{oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys
+```yaml
+oem: "TECNO"
+product: "KL8-OP"
+device: "TECNO-KL8"
+android_version: "14"
+build_tag: "UP1A.231005.007"
+incremental: "260412V1712"
+model: "TECNO SPARK 30 5G"
 ```
 
-### Telegram HTML sanitization (`_sanitize_html`)
+Multiple variants — shared fields top level, list overrides:
 
-The sanitization pipeline in `telegram.py` runs in 5 ordered steps:
+```yaml
+oem: "Infinix"
+device: "Infinix-X6873"
+model: "Infinix GT 30 Pro"
+variants:
+  - variant: "Global"
+    android_version: "16"
+    build_tag: "BP2A.250605.031.A3"
+    product: "X6873-OP"
+    incremental: "201350016"
+  - variant: "India"
+    product: "X6873-IN"
+    incremental: "201350016"
+```
 
-1. **Bold headers** — Detect lines like `Android Version<br>` that are NOT wrapped in
-   `<small>/<font>` (i.e., section headers, not content), wrap in `<b>`.
-2. **`<br>` → `\n`** — Use regex `r"<\s*br\s*/?\s*>[^\S\n]*\n?"` to consume inline
-   whitespace plus at most ONE trailing `\n`, preserving intentional blank lines.
-3. **Strip unsupported tags** — Remove `<small>`, `<font>`, `<a>` (keep text content).
-4. **Bullet normalization** — Unicode bullets → `"- "`.
-5. **Whitespace normalization** — Collapse consecutive blank lines to one, clean up
-   URL-in-parens patterns, trim trailing spaces.
+Fingerprint: `{oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys`
 
-**Important:** Step 1 must run BEFORE Step 2–3 so the HTML structure (which distinguishes
-headers from `<small>`-wrapped content) is still intact.
+### Telegram HTML sanitization (`_sanitize_html`, 5 ordered steps)
 
-### Terminal output formatting (`TerminalParser`)
+1. **Bold headers** — lines like `Android Version<br>` NOT wrapped in `<small>/<font>`
+   (headers, not content) get wrapped in `<b>`. Must run first while structure intact.
+2. **`<br>` → `\n`** — regex `r"<\s*br\s*/?\s*>[^\S\n]*\n?"` consumes inline whitespace +
+   at most ONE trailing `\n` (preserves intentional blank lines).
+3. **Strip tags** — remove `<small>`, `<font>`, `<a>` (keep text).
+4. **Bullets** — Unicode bullets → `"- "`.
+5. **Whitespace** — collapse blank lines, clean URL-in-parens, trim trailing spaces.
 
-The `TerminalParser` class in `checkota.py` converts raw OTA description HTML to
-ANSI-colored terminal text. It uses the same two-stage approach as Telegram:
+### Terminal output (`TerminalParser` in `description.py`)
 
-1. **Bold headers** — same regex as `_sanitize_html` wraps section headers in `<b>`
-   before HTML parsing (runs first, while the `<small>/<font>` structure is intact).
-2. **`<br>` handling** — consecutive empty `<br>` tags create a blank line (section
-   break), but a single `<br>` after content is just a line break (no extra blank).
-   This is tracked via `_empty_br_count`: reset to 0 on content `<br>`, incremented
-   on empty `<br>`, and a blank line is pushed only when `_empty_br_count == 1`.
-3. **`<b>` flush** — `handle_endtag` for `</b>` calls `flush()` immediately **before**
-   clearing `self.bold`, so bold ANSI codes `\033[1m…\033[0m` wrap the text correctly
-   (important because `<br>` would otherwise trigger the flush after bold is already off).
+Same two-stage approach as Telegram:
+
+1. **Bold headers** — same pre-parse regex as `_sanitize_html`.
+2. **`<br>`** — `_empty_br_count` tracks consecutive `<br>`: reset on content `<br>`,
+   incremented on empty `<br>`; blank line pushed only when `== 1` (single break vs section).
+3. **`</b>` flush** — `handle_endtag` flushes BEFORE clearing `self.bold`, so `\033[1m…\033[0m`
+   wraps text correctly (else `<br>` flushes after bold is off).
 
 ### Notifications & Truncation
 
-- Telegram message limit: 4096 chars. Code uses `MAX_LEN = 4090` as safety margin.
-- If the message exceeds `MAX_LEN`, the description section is identified via
-  `DESC_SECTION_RE` regex, truncated at a sentence/paragraph boundary, and a "Read full
-  changelogs" link to a Telegraph page is appended.
-- `DESC_SECTION_RE` pattern: captures from `<b>Title:</b>` through the description to
-  `\n\n?<b>Size:</b>`. The second newline before `<b>Size:</b>` is optional (`\n\n?`)
-  to tolerate cases where HTML/whitespace sanitization collapses the blank line.
++ Telegram limit 4096; code uses `MAX_LEN = 4090`.
++ Over limit: description section found via `DESC_SECTION_RE`, truncated at sentence/para
+  boundary, "Read full changelogs" Telegraph link appended.
++ `DESC_SECTION_RE` captures `<b>Title:</b>` → description → `\n\n?<b>Size:</b>`. Second
+  newline optional (`\n\n?`) since sanitization may collapse the blank line.
 
-## Known Bug Fixes (historical context — do not regress)
+## Known Bug Fixes (do not regress)
 
-| Issue | File | What was fixed |
-|-------|------|----------------|
-| `DESC_SECTION_RE` mismatch when OS line present | `constants.py` | Trailing `\n` made optional: `\n?` |
-| `OP-M1` region code mis-parsed | `manager.py` | `split("-",1)[1]` instead of `split("-")[-1]` |
-| `cancel_futures` crashes on Python <3.9 | `checkota.py` | Guarded with `sys.version_info >= (3, 9)` |
-| `--update-incremental` skipped known titles | `checkota.py` | Removed early return for non-force case |
-| Shutdown race condition (sessions closed while threads running) | `checkota.py` | Set `stop_event` first, `shutdown(wait=True)`, then close sessions |
-| `processed_updates.txt` unbounded growth | `fingerprints.py` | Trim to 2000 newest entries after each write |
-| `<br>\n` created double newlines; greedy `\s*` ate template `\n\n` | `telegram.py` | `[^\S\n]*\n?` instead of `\s*` |
-| Description formatting: flat text, no section hierarchy | `telegram.py` | Bold headers via pre-strip regex pass |
-| Terminal output: extra blank lines between every line | `checkota.py` | `_empty_br_count` tracks consecutive `<br>`; blank line only on first empty `<br>` |
-| Terminal output: `<b>` headers not bolded | `checkota.py` | `flush()` on `</b>` before clearing bold flag |
-| Unhandled worker exceptions crash parallel execution | `checkota.py` | Wrapped worker tasks in try-except in `run_config_buffered` to capture exceptions and prevent main thread crash. |
-| E402 import warnings in checkota.py | `checkota.py` | Added `# ruff: noqa: E402` to ignore false-positive warnings from dynamic path insertion. |
-| `DESC_SECTION_RE` mismatch when blank line before Size collapsed | `constants.py` | Made the second newline before Size optional: `\n\n?` instead of `\n\n`. |
-| Locale-dependent Unicode errors on file I/O | `manager.py`, `fingerprints.py`, `update_checker.py` | Enforced explicit `encoding="utf-8"` in all file open, read, and write operations. |
-| `processed_updates.txt` path was CWD-relative | `modules/metadata.py` | Anchored to `Path(__file__).resolve().parent.parent` (app dir) so file is co-located with the script regardless of CWD. |
+> Refactor note: `checkota.py` was sliced into `modules/` (now a shim → `modules.cli.main`).
+> Historical `checkota.py` rows map to: CLI/orchestration/watchdog → `cli.py`+`runtime.py`;
+> pipeline → `processor.py`; `TerminalParser` → `description.py`; notify → `notifier.py`;
+> `RunContext` → `runtime.py`; `VariantUpdate` → `models.py`; vendor bootstrap →
+> `paths.py`+`modules/__init__.py`.
+
+| Issue | File | Fix |
+|-------|------|-----|
+| `DESC_SECTION_RE` mismatch with OS line | `constants.py` | Trailing `\n` → optional `\n?` |
+| `OP-M1` region mis-parsed | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
+| OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, closes sessions, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
+| Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.9`); `cancel_futures=True` unconditional |
+| Vendor dir missing on non-editable install | `checkota.py` | Fail loud if absent; `CHECKOTA_VENDOR_DIR` env override |
+| `--update-incremental` skipped known titles | `checkota.py` | Removed early return for non-force |
+| Shutdown race (sessions closed mid-run) | `checkota.py` | Set `stop_event` → `shutdown(wait=True)` → close sessions |
+| `processed_updates.txt` unbounded growth | `fingerprints.py` | Trim to 2000 newest |
+| `<br>\n` double newlines; greedy `\s*` ate template `\n\n` | `telegram.py` | `[^\S\n]*\n?` not `\s*` |
+| Flat description, no hierarchy | `telegram.py` | Bold headers via pre-strip regex |
+| Terminal: extra blank lines | `checkota.py` | `_empty_br_count`; blank only on first empty `<br>` |
+| Terminal: `<b>` headers not bolded | `checkota.py` | `flush()` on `</b>` before clearing bold |
+| Worker exceptions crashed parallel run | `checkota.py` | try-except in `run_config_buffered` |
+| E402 import warnings | `checkota.py` | `# ruff: noqa: E402` (no longer needed post-refactor) |
+| `DESC_SECTION_RE` mismatch when blank line collapsed | `constants.py` | `\n\n?` not `\n\n` |
+| Locale-dependent Unicode I/O errors | `manager.py`, `fingerprints.py`, `update_checker.py` | Explicit `encoding="utf-8"` everywhere |
+| `processed_updates.txt` path CWD-relative | `modules/metadata.py` | Anchored to app dir via `Path(__file__).resolve().parent.parent` |
+| 989-line monolith | `modules/*` | Sliced into focused modules; `checkota.py` → shim. Behavior-preserving |
+| `remotezip` dep for OTA metadata | `zip_metadata.py`, `metadata.py`, `pyproject.toml` | Vendored ZIP64-aware `fetch_zip_member()` w/ absolute Range requests (Google rejects suffix `bytes=-N`); probes size via `bytes=0-0`, reads EOCD→central-dir→entry. Byte-identical, one less dep |
+| Multi-variant configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,variant) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per variant, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
+| Per-thread session pool too small | `runtime.py` | `HTTPAdapter` `pool_maxsize = max(10, --jobs)` |
+| Flat 5s retry backoff | `update_checker.py`, `metadata.py` | Exponential 1s→2s→4s instead of flat 5s×3 |
 
 ## Running
 
-All commands run from the repo root unless noted.
+After `pip install -e apps/checkota/`, use `checkota` directly. Run from repo root
+(`-d` paths are relative to it).
 
 ```bash
-# Single config
-python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml
-
-# Directory of configs (parallel, 4 jobs)
-python3 apps/checkota/checkota.py -d apps/checkota/configs/ --jobs 4
-
-# Direct fingerprint (no config file)
-python3 apps/checkota/checkota.py --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
-
-# Dry run
-python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --dry-run
-
-# Shorthand: bare codename resolves to apps/checkota/configs/config-<codename>.yml
-python3 apps/checkota/checkota.py -c X6873 --dry-run
-python3 apps/checkota/checkota.py -c X6873.yml --dry-run
-
-# Update config incremental without notification
-python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --update-incremental
-
-# Filter by region
-python3 apps/checkota/checkota.py -d apps/checkota/configs/ --reg OP-M1
-
-# Debug (saves check-in response)
-python3 apps/checkota/checkota.py -c apps/checkota/configs/config-X6873.yml --debug
+checkota -c X6873                                  # single config (codename → configs/config-X6873.yml)
+checkota -d apps/checkota/configs/ --jobs 4        # directory, parallel
+checkota -d apps/checkota/configs/ --jobs 4 --timeout 600   # cap runtime (exits 124)
+checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."   # direct fingerprint
+checkota -c X6873 --dry-run                        # dry run
+checkota -c X6873 --update-incremental             # update config, no notify
+checkota -d apps/checkota/configs/ --reg OP-M1     # filter by region
+checkota -c X6873 --debug                          # save check-in response
 ```
 
-Environment variables for Telegram:
+> Equivalent without install: `python3 apps/checkota/checkota.py <args>`.
 
-- `bot_token` — Telegram bot token
-- `chat_id` — Target chat ID
-- `telegraph_token` — Telegraph API token (for long descriptions)
+Env vars:
+
++ `bot_token`, `chat_id` — Telegram bot token + target chat
++ `telegraph_token` — Telegraph API token (long descriptions)
++ `CHECKOTA_VENDOR_DIR` — override vendored `google-ota-prober` path
+  (default `<repo>/vendor/google-ota-prober`; needed for relocated/wheel installs)
