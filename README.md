@@ -64,12 +64,14 @@ sends Telegram notifications.
 - TECNO POVA 7 Ultra 5G (LJ9)
 - TECNO POVA Slim 5G (KM9)
 - TECNO POVA Curve 2 5G (LK7k)
+- TECNO POVA 8 Pro 5G (LK7)
 
 ## MEGAPAD
 
 - TECNO MEGAPAD 11 (T1101)
 - TECNO MEGAPAD SE (T1102)
 - TECNO MegaPad Pro (T1201)
+- TECNO MEGAPAD 2 (T1103)
 
 ## ITEL
 
@@ -90,6 +92,7 @@ sends Telegram notifications.
 - Infinix XPAD (X1101)
 - Infinix XPAD 20 Pro (X1201)
 - Infinix XPAD GT SD888 (X1301)
+- Infinix XPAD 30 Pro (X1103)
 
 ## HOT SERIES
 
@@ -107,6 +110,7 @@ sends Telegram notifications.
 - Infinix HOT 60 Pro (X6885)
 - Infinix HOT 60 Pro+ (X6886)
 - Infinix HOT 70 (X6895B)
+- Infinix HOT 70 Pro 5G (X6896)
 
 ## ZERO SERIES
 
