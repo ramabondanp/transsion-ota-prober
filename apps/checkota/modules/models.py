@@ -22,3 +22,11 @@ class VariantUpdate:
     target_incremental: Optional[str]
     sdk_message: str
     data: Dict[str, str]
+
+
+@dataclass
+class PendingNotification:
+    msg: str
+    device_title: str
+    title: str
+    is_new_update: bool

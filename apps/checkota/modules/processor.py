@@ -20,11 +20,20 @@ from modules.metadata import (
     extract_incremental_from_fingerprint,
     get_ota_metadata,
 )
-from modules.models import VariantUpdate
-from modules.notifier import build_notification_message, create_notifier
+from modules.models import PendingNotification, VariantUpdate
+from modules.notifier import (
+    build_notification_message,
+    create_notifier,
+    is_sweep_mode,
+    telegram_available,
+)
 from modules.runtime import RunContext
 from modules.fingerprints import save_processed_title
 from modules.update_checker import UpdateChecker
+
+
+#: Delay between consecutive Telegram notifications when draining a sweep buffer.
+SWEEP_TELEGRAM_DELAY = 10
 
 
 def config_from_fingerprint(fingerprint: str) -> Config:
@@ -282,7 +291,31 @@ def apply_update_actions(
     notifier = create_notifier(ctx, args)
     if notifier:
         msg = build_notification_message(update)
-        if args.dry_run:
+        device_title = f"{update.cfg.model} - {update.title}"
+
+        if is_sweep_mode(args):
+            # Sweep mode: buffer the notification; drain at end of run with a
+            # SWEEP_TELEGRAM_DELAY-second gap between sends.
+            with ctx.pending_lock:
+                ctx.pending_notifications.append(
+                    PendingNotification(
+                        msg=msg,
+                        device_title=device_title,
+                        title=update.title,
+                        is_new_update=update.is_new_update,
+                    )
+                )
+            if args.dry_run:
+                Log.i(
+                    "Dry-run: would buffer Telegram notification "
+                    f"(drained with {SWEEP_TELEGRAM_DELAY}s gap)."
+                )
+            else:
+                Log.i(
+                    f"Telegram notification buffered "
+                    f"({len(ctx.pending_notifications)} pending)."
+                )
+        elif args.dry_run:
             Log.i("Dry-run: would send Telegram notification with OTA details.")
             if update.is_new_update:
                 Log.i(
@@ -293,7 +326,7 @@ def apply_update_actions(
                 sent = notifier.send(
                     msg,
                     truncate_desc=True,
-                    device_title=f"{update.cfg.model} - {update.title}",
+                    device_title=device_title,
                 )
             if not sent:
                 Log.e("Failed to send notification. Update title will not be saved.")
@@ -302,6 +335,68 @@ def apply_update_actions(
                 save_processed_update(ctx, update.title)
 
     Log.s("Update check completed successfully")
+    return 0
+
+
+def drain_pending_notifications(ctx: RunContext, args: argparse.Namespace) -> int:
+    """Drain buffered Telegram notifications with SWEEP_TELEGRAM_DELAY-second gaps.
+
+    Called once at the end of a sweep run after all configs have been processed.
+    In dry-run mode, just lists what would have been sent (no actual delay or send).
+    """
+    with ctx.pending_lock:
+        pending = list(ctx.pending_notifications)
+        ctx.pending_notifications.clear()
+
+    if not pending:
+        return 0
+
+    if args.dry_run:
+        Log.i(
+            f"Dry-run: would drain {len(pending)} buffered notification(s) "
+            f"with {SWEEP_TELEGRAM_DELAY}s gap between sends."
+        )
+        for idx, note in enumerate(pending, start=1):
+            Log.i(f"  [{idx}/{len(pending)}] {note.device_title}")
+        return 0
+
+    notifier = create_notifier(ctx, args)
+    if not notifier:
+        Log.e(
+            f"Telegram not available; {len(pending)} buffered notification(s) dropped. "
+            "Update titles will not be saved."
+        )
+        return 1
+
+    total = len(pending)
+    Log.i(
+        f"Draining {total} buffered Telegram notification(s) with "
+        f"{SWEEP_TELEGRAM_DELAY}s gap between sends..."
+    )
+
+    for idx, note in enumerate(pending, start=1):
+        if ctx.stop_event.is_set():
+            Log.w(f"Stop requested; aborting drain at {idx - 1}/{total}.")
+            return 130
+        if idx > 1:
+            Log.i(f"Waiting {SWEEP_TELEGRAM_DELAY}s before next notification...")
+            if ctx.stop_event.wait(SWEEP_TELEGRAM_DELAY):
+                Log.w(f"Stop requested during wait; aborting drain at {idx - 1}/{total}.")
+                return 130
+        Log.i(f"Sending notification {idx}/{total}: {note.device_title}")
+        with ctx.telegram_lock:
+            sent = notifier.send(
+                note.msg, truncate_desc=True, device_title=note.device_title
+            )
+        if not sent:
+            Log.e(
+                f"Failed to send notification {idx}/{total} ({note.device_title}); "
+                "title will not be saved."
+            )
+            continue
+        if note.is_new_update:
+            save_processed_update(ctx, note.title)
+
     return 0
 
 

@@ -36,6 +36,25 @@ def create_notifier(ctx: RunContext, args: argparse.Namespace) -> Optional[TgNot
         return None
 
 
+def is_sweep_mode(args: argparse.Namespace) -> bool:
+    """Sweep mode = processing multiple configs in a single run (--config-dir).
+
+    In sweep mode, Telegram notifications are buffered and drained at the end
+    with SWEEP_TELEGRAM_DELAY-second gaps to avoid bursting the Telegram API.
+    """
+    return getattr(args, "config_dir", None) is not None
+
+
+def telegram_available(ctx: RunContext, args: argparse.Namespace) -> bool:
+    """True if a TgNotify would be created (env vars set, not skipped/disabled)."""
+    if getattr(args, "skip_telegram", False) or getattr(args, "register_update", False):
+        return False
+    env = ctx.env
+    return bool(
+        env.get("bot_token") and env.get("chat_id") and env.get("telegraph_token")
+    )
+
+
 def build_notification_message(update: VariantUpdate) -> str:
     region_line = f" ({update.region_name})" if update.region_name else ""
     os_line = f"<b>OS:</b> {update.sdk_message}\n" if update.sdk_message else ""

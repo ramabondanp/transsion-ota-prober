@@ -15,6 +15,7 @@ from modules.manager import Config
 from modules.paths import APP_CONFIGS_DIR
 from modules.processor import (
     config_from_fingerprint,
+    drain_pending_notifications,
     load_config_variants,
     process_config,
     process_config_variant,
@@ -371,9 +372,13 @@ def main() -> int:
             return 1
 
         if args.jobs == 1:
-            return _run_sequential(ctx, args, config_paths)
+            exit_code = _run_sequential(ctx, args, config_paths)
+        else:
+            exit_code, executor = _run_global_pool(ctx, args, config_paths)
 
-        exit_code, executor = _run_global_pool(ctx, args, config_paths)
+        # Sweep mode: drain buffered notifications with a 5s gap.
+        drain_result = drain_pending_notifications(ctx, args)
+        exit_code = max(exit_code, drain_result)
         return exit_code
     except KeyboardInterrupt:
         Log.w("Interrupted. Stopping in-flight requests and exiting.")

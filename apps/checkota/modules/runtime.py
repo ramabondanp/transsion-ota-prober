@@ -30,7 +30,9 @@ class RunContext:
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     notice_lock: threading.Lock = field(default_factory=threading.Lock)
     session_lock: threading.Lock = field(default_factory=threading.Lock)
+    pending_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
+    pending_notifications: List["PendingNotification"] = field(default_factory=list)
     telegram_notice_printed: bool = False
     pool_size: int = 10
     _local: threading.local = field(default_factory=threading.local, repr=False)
