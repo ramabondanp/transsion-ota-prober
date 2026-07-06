@@ -1,7 +1,16 @@
 oem: "TECNO"
-product: "LJ8-OP"
 device: "TECNO-LJ8"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "145007"
 model: "TECNO POVA 7 Pro 5G"
+
+variants:
+  - variant: "Global"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
+    product: "LJ8-OP"
+    incremental: "145007"
+
+  - variant: "Russia"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
+    product: "LJ8-RU"
+    incremental: "165003"
