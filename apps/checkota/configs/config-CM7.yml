@@ -7,7 +7,7 @@ variants:
     android_version: "16"
     build_tag: "BP2A.250605.031.A3"
     product: "CM7-OP"
-    incremental: "201350013"
+    incremental: "201450011"
 
   - variant: "Turkey"
     android_version: "15"

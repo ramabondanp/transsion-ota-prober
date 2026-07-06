@@ -9,7 +9,7 @@ variants:
     android_version: "15"
     build_tag: "AP3A.240905.015.A2"
     product: "AE10-OP"
-    incremental: "122020"
+    incremental: "135001"
 
   - variant: "Turkey"
     android_version: "15"
