@@ -13,8 +13,8 @@ ZIP64 is handled because full OTA packages routinely exceed 4 GiB.
 """
 
 import struct
+import time
 import zlib
-from typing import Optional
 
 import requests
 
@@ -70,35 +70,57 @@ def _range_get(
     end: int,
     timeout: float,
     headers: dict,
+    attempts: int = 1,
 ) -> bytes:
-    """Fetch an inclusive byte range [start, end] via HTTP Range. Returns the body."""
+    """Fetch an inclusive byte range [start, end] via HTTP Range. Returns the body.
+
+    Args:
+        attempts: Number of tries (1 = no retry, 2 = 1 retry on transient errors)
+    """
     hdrs = dict(headers)
     hdrs["Range"] = f"bytes={start}-{end}"
-    try:
-        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
-        resp.raise_for_status()
-    except requests.exceptions.HTTPError as exc:
-        status = getattr(exc.response, "status_code", None)
-        if status in _RETRYABLE_HTTP_STATUSES:
-            raise RemoteZipTransientError(
-                f"Retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
+
+    for attempt in range(attempts):
+        try:
+            resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status in _RETRYABLE_HTTP_STATUSES:
+                transient_err = RemoteZipTransientError(
+                    f"Retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
+                )
+                if attempt < attempts - 1:
+                    # Close the response to release the connection before retry
+                    if exc.response is not None:
+                        exc.response.close()
+                    time.sleep(1)
+                    continue
+                raise transient_err from exc
+            # Non-retryable HTTP error (e.g. 416 Range Not Satisfiable).
+            raise RemoteZipFetchError(
+                f"Non-retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
             ) from exc
-        # Non-retryable HTTP error (e.g. 416 Range Not Satisfiable).
-        raise RemoteZipFetchError(
-            f"Non-retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
-        ) from exc
-    except requests.exceptions.RequestException as exc:
-        # ConnectionError / Timeout / SSLError / ChunkedEncodingError / ProtocolError.
-        raise RemoteZipTransientError(
-            f"Transport failure for {url} (bytes={start}-{end}): {exc}"
-        ) from exc
-    if resp.status_code != 206:
-        # Range ignored AND a 2xx slipped through (rare; CDN quirks).
-        raise RemoteZipFetchError(
-            f"Server ignored Range request (status {resp.status_code}); "
-            "ranged reads are required."
-        )
-    return resp.content
+        except requests.exceptions.RequestException as exc:
+            # ConnectionError / Timeout / SSLError / ChunkedEncodingError / ProtocolError.
+            transient_err = RemoteZipTransientError(
+                f"Transport failure for {url} (bytes={start}-{end}): {exc}"
+            )
+            if attempt < attempts - 1:
+                time.sleep(1)
+                continue
+            raise transient_err from exc
+
+        if resp.status_code != 206:
+            # Range ignored AND a 2xx slipped through (rare; CDN quirks).
+            raise RemoteZipFetchError(
+                f"Server ignored Range request (status {resp.status_code}); "
+                "ranged reads are required."
+            )
+        return resp.content
+
+    # Should never reach here, but satisfy type checker
+    raise RemoteZipTransientError("Unexpected end of retry loop")
 
 
 def _probe_size(
@@ -109,7 +131,9 @@ def _probe_size(
     hdrs["Range"] = "bytes=0-0"
     resp = None
     try:
-        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout), stream=True)
+        resp = session.get(
+            url, headers=hdrs, timeout=_timeout_pair(timeout), stream=True
+        )
         resp.raise_for_status()
         content_range = resp.headers.get("Content-Range", "")
         if "/" in content_range:
@@ -121,7 +145,9 @@ def _probe_size(
             length = resp.headers.get("Content-Length")
             if length and length.isdigit():
                 return int(length)
-        raise RemoteZipFetchError("Could not determine remote ZIP size from Content-Range.")
+        raise RemoteZipFetchError(
+            "Could not determine remote ZIP size from Content-Range."
+        )
     except requests.exceptions.HTTPError as exc:
         status = getattr(exc.response, "status_code", None)
         if status in _RETRYABLE_HTTP_STATUSES:
@@ -246,9 +272,9 @@ def _zip64_fixup(
 def fetch_zip_member(
     url: str,
     member: str,
-    session: Optional[requests.Session] = None,
+    session: requests.Session | None = None,
     timeout: float = 15.0,
-    headers: Optional[dict] = None,
+    headers: dict | None = None,
 ) -> bytes:
     """Fetch and return the decompressed bytes of a single ZIP member over HTTP.
 
@@ -291,7 +317,9 @@ def fetch_zip_member(
     extra_len = struct.unpack("<H", local_hdr[28:30])[0]
     data_start = local_offset + 30 + name_len + extra_len
 
-    raw = _range_get(sess, url, data_start, data_start + comp_size - 1, timeout, hdrs)
+    raw = _range_get(
+        sess, url, data_start, data_start + comp_size - 1, timeout, hdrs, attempts=2
+    )
 
     if method == 0:  # stored
         return raw
