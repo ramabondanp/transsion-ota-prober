@@ -107,9 +107,21 @@ def _probe_size(
     """Return the total resource size using a 1-byte ranged probe."""
     hdrs = dict(headers)
     hdrs["Range"] = "bytes=0-0"
+    resp = None
     try:
-        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout), stream=True)
         resp.raise_for_status()
+        content_range = resp.headers.get("Content-Range", "")
+        if "/" in content_range:
+            total = content_range.rsplit("/", 1)[-1].strip()
+            if total.isdigit():
+                return int(total)
+
+        if resp.status_code == 200:
+            length = resp.headers.get("Content-Length")
+            if length and length.isdigit():
+                return int(length)
+        raise RemoteZipFetchError("Could not determine remote ZIP size from Content-Range.")
     except requests.exceptions.HTTPError as exc:
         status = getattr(exc.response, "status_code", None)
         if status in _RETRYABLE_HTTP_STATUSES:
@@ -123,17 +135,9 @@ def _probe_size(
         raise RemoteZipTransientError(
             f"Transport failure while probing size of {url}: {exc}"
         ) from exc
-    content_range = resp.headers.get("Content-Range", "")
-    if "/" in content_range:
-        total = content_range.rsplit("/", 1)[-1].strip()
-        if total.isdigit():
-            return int(total)
-    # Fallback: a non-ranged Content-Length (only valid if server ignored Range).
-    if resp.status_code == 200:
-        length = resp.headers.get("Content-Length")
-        if length and length.isdigit():
-            return int(length)
-    raise RemoteZipFetchError("Could not determine remote ZIP size from Content-Range.")
+    finally:
+        if resp is not None:
+            resp.close()
 
 
 def _locate_cd(tail: bytes, tail_start: int) -> tuple:
