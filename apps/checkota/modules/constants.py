@@ -33,9 +33,11 @@ SDK_TO_ANDROID = {
 # Regex to detect section headers in OTA description HTML.
 # Matches lines like "Android Version<br>" that are NOT inside <small>/<font> tags.
 # The replacement wraps the header text in <b> tags before HTML tag stripping.
-SECTION_HEADER_RE = re.compile(r"(?:^|\n)([A-Z][A-Za-z0-9\s&:/(),.\-]{1,80})<br>")
+SECTION_HEADER_RE = re.compile(r"(?:^|\n)([A-Z][A-Za-z0-9 \t&:/(),.\-]{1,80})<br>")
 
-DESC_SECTION_RE = re.compile(r"(<b>Title:</b> .*?\n(?:<b>OS:</b> .*?\n)?\n?)(.*?)(\n\n?<b>Size:</b>)", re.DOTALL)
+DESC_SECTION_RE = re.compile(
+    r"(<b>Title:</b> .*?\n(?:<b>OS:</b> .*?\n)?\n?)(.*?)(\n\n?<b>Size:</b>)", re.DOTALL
+)
 SENTENCE_BOUNDARY_RE = re.compile(r"\.\s+")
 BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 HTML_TAG_RE = re.compile(r"<[^>]*>")

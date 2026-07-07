@@ -7,8 +7,8 @@ processing pipeline.
 
 import html
 import re
-import textwrap
 from html.parser import HTMLParser
+
 
 from modules.constants import SECTION_HEADER_RE
 
@@ -62,6 +62,9 @@ class TerminalParser(HTMLParser):
         if tag == "b":
             self.flush()
             self.bold = False
+            # After flushing bold content, reset counter to -1 so the next
+            # <br> increments to 0 (no blank), and only a second <br> pushes blank
+            self._empty_br_count = -1
         elif tag in ("h3", "h4"):
             self.flush(style=tag)
         elif tag in ("ol", "ul"):
@@ -81,8 +84,9 @@ class TerminalParser(HTMLParser):
         if not text:
             return
 
+        self._empty_br_count = 0
+
         prefix = " " * self.indent
-        width = max(20, 100 - self.indent)
 
         if style == "h3":
             self._push("\033[1;36m" + "=" * 60 + "\033[0m")
@@ -101,23 +105,18 @@ class TerminalParser(HTMLParser):
             else:
                 bullet = "•"
 
-            lines = textwrap.wrap(text, width - len(bullet) - 1) or [text]
-            for idx, line in enumerate(lines):
-                if idx == 0:
-                    if self.bold or text.endswith(":"):
-                        self._push(prefix + f"\033[1;32m{bullet} {line}\033[0m")
-                    else:
-                        self._push(prefix + f"{bullet} {line}")
-                else:
-                    self._push(prefix + "  " + line)
+            line = f"{bullet} {text}"
+            if self.bold or text.endswith(":"):
+                self._push(prefix + f"\033[1;32m{line}\033[0m")
+            else:
+                self._push(prefix + line)
             return
 
         if self.bold:
             self._push("\033[1m" + prefix + text + "\033[0m")
             return
 
-        for line in textwrap.wrap(text, width) or [text]:
-            self._push(prefix + line)
+        self._push(prefix + text)
 
     def render(self, markup: str) -> str:
         self.feed(markup)
@@ -131,6 +130,16 @@ class TerminalParser(HTMLParser):
 def format_update_description(description: str) -> str:
     if not description:
         return ""
+
+    # Transsion descriptions put Update Version directly after safety prose;
+    # terminal output treats it as its own section without adding gaps before
+    # every header-like line.
+    description = re.sub(
+        r"<br>\n(?=Update Version[^<]{0,80}<br>)",
+        "<br><br>\n",
+        description,
+    )
+
     # Bold section headers before parsing (same pattern as Telegram sanitization).
     # Lines like "Android Version<br>" that are NOT inside <small>/<font> are headers.
     bolded = SECTION_HEADER_RE.sub(
@@ -142,5 +151,11 @@ def format_update_description(description: str) -> str:
         ),
         description,
     )
+
+    # Normalize explicit section breaks only; do not invent gaps before headers.
+    normalized = re.sub(
+        r"<br>([ \t]*\n){2,}", "<br><br>\n", bolded, flags=re.IGNORECASE
+    )
+
     parser = TerminalParser()
-    return parser.render(bolded or "")
+    return parser.render(normalized or "")
