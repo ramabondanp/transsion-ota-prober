@@ -25,6 +25,11 @@ class RunContext:
     processed_titles: Set[str]
     dry_run: bool
     metadata_cache: Dict[str, Optional[Dict[str, str]]] = field(default_factory=dict)
+    # URL -> Event for an in-flight metadata fetch, so concurrent workers sharing
+    # a URL fetch exactly once (see processor.get_cached_ota_metadata).
+    _metadata_inflight: Dict[str, threading.Event] = field(
+        default_factory=dict, repr=False
+    )
     file_lock: threading.Lock = field(default_factory=threading.Lock)
     telegram_lock: threading.Lock = field(default_factory=threading.Lock)
     cache_lock: threading.Lock = field(default_factory=threading.Lock)

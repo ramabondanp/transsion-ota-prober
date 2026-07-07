@@ -205,7 +205,10 @@ def _locate_cd(tail: bytes, tail_start: int) -> tuple:
 def _find_entry(cd: bytes, target_name: bytes) -> tuple:
     """Scan the central directory for target_name.
 
-    Returns (compression_method, compressed_size, local_header_offset).
+    Returns (compression_method, compressed_size, local_header_offset,
+    name_length, extra_length). The lengths bound the initial combined read in
+    fetch_zip_member; the local file header is re-parsed after the fetch because
+    its extra-field length may differ from the central directory's.
     """
     pos = 0
     n = len(cd)
@@ -234,7 +237,7 @@ def _find_entry(cd: bytes, target_name: bytes) -> tuple:
                     comp_size=comp_size,
                     local_offset=local_offset,
                 )
-            return method, comp_size, local_offset
+            return method, comp_size, local_offset, name_len, extra_len
 
         pos += 46 + name_len + extra_len + comment_len
 
@@ -306,23 +309,26 @@ def fetch_zip_member(
     else:
         cd = _range_get(sess, url, cd_offset, cd_offset + cd_size - 1, timeout, hdrs)
 
-    method, comp_size, local_offset = _find_entry(cd, target)
+    method, comp_size, local_offset, name_len, extra_len = _find_entry(cd, target)
 
-    # Local header has its own (possibly different) extra-field length, so read
-    # the fixed 30-byte header first to compute the true data start.
-    local_hdr = _range_get(sess, url, local_offset, local_offset + 29, timeout, hdrs)
-    if local_hdr[0:4] != _LOCAL_SIG:
+    # Fetch the fixed 30-byte local header together with the compressed payload
+    # in ONE Range request (saves a round-trip versus reading the header
+    # separately). The local header's extra-field length may exceed the central
+    # directory's, so over-fetch an extra 65535 bytes (the max 16-bit extra
+    # length) and clamp to EOF; we re-parse the real local header below.
+    end = local_offset + 30 + name_len + 65535 + comp_size - 1
+    if end > size - 1:
+        end = size - 1
+    raw = _range_get(sess, url, local_offset, end, timeout, hdrs, attempts=2)
+    if raw[0:4] != _LOCAL_SIG:
         raise RemoteZipFetchError("Local file header signature mismatch.")
-    name_len = struct.unpack("<H", local_hdr[26:28])[0]
-    extra_len = struct.unpack("<H", local_hdr[28:30])[0]
-    data_start = local_offset + 30 + name_len + extra_len
-
-    raw = _range_get(
-        sess, url, data_start, data_start + comp_size - 1, timeout, hdrs, attempts=2
-    )
+    loc_name_len = struct.unpack("<H", raw[26:28])[0]
+    loc_extra_len = struct.unpack("<H", raw[28:30])[0]
+    data_start = 30 + loc_name_len + loc_extra_len
+    payload = raw[data_start : data_start + comp_size]
 
     if method == 0:  # stored
-        return raw
+        return payload
     if method == 8:  # deflate
-        return zlib.decompress(raw, -zlib.MAX_WBITS)
+        return zlib.decompress(payload, -zlib.MAX_WBITS)
     raise RemoteZipFetchError(f"Unsupported ZIP compression method {method}.")

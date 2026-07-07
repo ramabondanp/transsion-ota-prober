@@ -107,12 +107,14 @@ def region_from_product(product: str) -> Optional[str]:
     return REGION_CODE_MAP.get(code) if code else None
 
 
+_FINGERPRINT_RE = re.compile(
+    r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
+    r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
+)
+
+
 def parse_fingerprint(fingerprint: str) -> Optional[Dict[str, str]]:
-    pattern = re.compile(
-        r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
-        r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
-    )
-    match = pattern.match((fingerprint or "").strip())
+    match = _FINGERPRINT_RE.match((fingerprint or "").strip())
     return match.groupdict() if match else None
 
 

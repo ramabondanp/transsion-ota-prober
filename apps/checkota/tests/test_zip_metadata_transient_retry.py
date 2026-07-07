@@ -1,16 +1,48 @@
 """H2 fix — transient transport / HTTP statuses are retried; structural failures are not."""
 
+import io
+import zipfile
 from unittest.mock import MagicMock
 
 import pytest
 import requests
 
 from modules.zip_metadata import (
+    _LOCAL_SIG,
     _range_get,
     RemoteZipFetchError,
     RemoteZipTransientError,
+    fetch_zip_member,
 )
 from modules.metadata import get_ota_metadata
+
+
+class _RangeSession:
+    """Fake requests.Session serving byte ranges from in-memory `data`."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.ranges = []  # (start, end) requested, in order
+
+    def get(self, url, headers=None, timeout=None, **kwargs):
+        rng = (headers or {}).get("Range", "")
+        start_s, end_s = rng.split("=", 1)[1].split("-")
+        start, end = int(start_s), int(end_s)
+        self.ranges.append((start, end))
+        chunk = self.data[start : end + 1]
+        resp = MagicMock()
+        resp.status_code = 206
+        resp.content = chunk
+        resp.headers = {"Content-Range": f"bytes {start}-{end}/{len(self.data)}"}
+        resp.raise_for_status = MagicMock()
+        return resp
+
+
+def _build_zip(member_name: str, content: bytes, compress_type: int) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=compress_type) as zf:
+        zf.writestr(member_name, content)
+    return buf.getvalue()
 
 
 def _session_with_error(exc):
@@ -138,3 +170,30 @@ def test_range_get_attempts_2_non_retryable_stays_single_call():
         _range_get(sess, "https://x/y.zip", 0, 10, 5.0, {}, attempts=2)
     assert not isinstance(info.value, RemoteZipTransientError)
     assert calls["n"] == 1, "Non-retryable 416 must not trigger a retry"
+
+
+def test_fetch_zip_member_merges_local_header_and_payload():
+    """The 30-byte local file header and the compressed payload must be fetched
+    in ONE Range request (no separate 30-byte header request), and that single
+    request keeps attempts=2 retry behaviour. Verified for both stored and
+    deflated members."""
+    content = b"post-build: X/Y/Z:14/A/B:123:user/release-keys\n"
+    member = "META-INF/com/android/metadata"
+    for compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+        data = _build_zip(member, content, compress_type)
+        sess = _RangeSession(data)
+        result = fetch_zip_member("https://x/y.zip", member, session=sess)
+        assert result == content
+
+        # The combined request starts exactly at the local header offset.
+        local_off = data.find(_LOCAL_SIG)
+        combined = [r for r in sess.ranges if r[0] == local_off]
+        assert combined, f"no combined header+payload request: {sess.ranges}"
+
+        # Regression guard: there must be no standalone 30-byte header request.
+        standalone = [r for r in sess.ranges if r[1] - r[0] + 1 == 30]
+        assert not standalone, f"unexpected standalone header request: {standalone}"
+
+        # probe (0-0) + tail + combined header+payload (CD sits in the tiny
+        # tail, so no separate central-directory request).
+        assert len(sess.ranges) == 3, f"unexpected request count: {sess.ranges}"

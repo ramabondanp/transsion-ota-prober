@@ -3,6 +3,7 @@ actions, and orchestrate per-config / per-variant processing.
 """
 
 import argparse
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
@@ -89,14 +90,44 @@ _CACHE_MISS = object()
 def get_cached_ota_metadata(ctx: RunContext, url: str) -> Optional[Dict[str, str]]:
     if ctx.stop_event.is_set():
         return None
+    fetcher_event: Optional[threading.Event] = None
     with ctx.cache_lock:
         cached = ctx.metadata_cache.get(url, _CACHE_MISS)
         if cached is not _CACHE_MISS:
             return cast(Optional[Dict[str, str]], cached)
+        # Another worker is already fetching this URL; capture its event, then
+        # release the lock before waiting so the fetcher can re-acquire it.
+        inflight = ctx._metadata_inflight.get(url)
+        if inflight is not None:
+            wait_event = inflight
+        else:
+            # We are the fetcher: register an in-flight event under the lock so
+            # no other worker decides to fetch the same URL concurrently.
+            wait_event = None
+            fetcher_event = threading.Event()
+            ctx._metadata_inflight[url] = fetcher_event
 
-    ota_meta = get_ota_metadata(url, session=ctx.session(), stop_event=ctx.stop_event)
-    with ctx.cache_lock:
-        ctx.metadata_cache[url] = ota_meta
+    if wait_event is not None:
+        wait_event.wait()
+        with ctx.cache_lock:
+            cached = ctx.metadata_cache.get(url, _CACHE_MISS)
+            return (
+                cast(Optional[Dict[str, str]], cached)
+                if cached is not _CACHE_MISS
+                else None
+            )
+
+    assert fetcher_event is not None
+    ota_meta: Optional[Dict[str, str]] = None
+    try:
+        ota_meta = get_ota_metadata(
+            url, session=ctx.session(), stop_event=ctx.stop_event
+        )
+    finally:
+        with ctx.cache_lock:
+            ctx.metadata_cache[url] = ota_meta
+            ctx._metadata_inflight.pop(url, None)
+            fetcher_event.set()
     return ota_meta
 
 
