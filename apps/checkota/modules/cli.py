@@ -162,12 +162,11 @@ def _collect_config_paths(
     if not args.config_dir.exists() or not args.config_dir.is_dir():
         parser.error("--config-dir must be an existing directory.")
     config_paths = sorted(
-        {
+        (
             path
-            for pattern in ("*.yml", "*.yaml")
-            for path in args.config_dir.glob(pattern)
-            if path.is_file()
-        },
+            for path in args.config_dir.iterdir()
+            if path.is_file() and path.suffix in (".yml", ".yaml")
+        ),
         key=lambda p: p.name.lower(),
     )
     if not config_paths:

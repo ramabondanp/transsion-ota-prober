@@ -90,13 +90,13 @@ class UpdateChecker:
             Log.i(f"Using custom IMEI: {self.imei}")
         retries = 3
         delay = 1
+        data = self._build_request()
 
         for attempt in range(retries):
             if self._stopped():
                 Log.w("Update check interrupted.")
                 return False, None
             try:
-                data = self._build_request()
                 response = self.session.post(
                     CHECKIN_URL,
                     data=data,

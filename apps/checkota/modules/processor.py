@@ -4,7 +4,7 @@ actions, and orchestrate per-config / per-variant processing.
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, cast
 
 from modules.description import format_update_description
 from modules.logging import Log
@@ -83,13 +83,16 @@ def log_variant_header(
     return region_name, region_code
 
 
+_CACHE_MISS = object()
+
+
 def get_cached_ota_metadata(ctx: RunContext, url: str) -> Optional[Dict[str, str]]:
     if ctx.stop_event.is_set():
         return None
     with ctx.cache_lock:
-        cached = ctx.metadata_cache.get(url, None)
-        if url in ctx.metadata_cache:
-            return cached
+        cached = ctx.metadata_cache.get(url, _CACHE_MISS)
+        if cached is not _CACHE_MISS:
+            return cast(Optional[Dict[str, str]], cached)
 
     ota_meta = get_ota_metadata(url, session=ctx.session(), stop_event=ctx.stop_event)
     with ctx.cache_lock:
