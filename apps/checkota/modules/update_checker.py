@@ -34,6 +34,14 @@ class UpdateChecker:
         self.session = session or requests.Session()
         self.imei = imei
         self.stop_event = stop_event
+        # Pin identity generators so retries don't re-randomise -- reproducibility
+        # and Google-edge fairness. The four functions in vendor/utils/functions.py
+        # use unseeded random.*, so calling them per retry would change the
+        # identity on each attempt.
+        self._imei = imei or functions.generateImei()
+        self._digest = functions.generateDigest()
+        self._serial = functions.generateSerial()
+        self._mac = functions.generateMac()
         self.ua = USER_AGENT_TPL.format(cfg.android_version, cfg.model, cfg.build_tag)
         self.headers = {
             "accept-encoding": "gzip, deflate",
@@ -60,15 +68,15 @@ class UpdateChecker:
         checkin.deviceType = 2
         checkin.voiceCapable = False
 
-        payload.imei = self.imei or functions.generateImei()
+        payload.imei = self._imei
         payload.id = 0
-        payload.digest = functions.generateDigest()
+        payload.digest = self._digest
         payload.checkin.CopyFrom(checkin)
         payload.locale = "en-US"
         payload.timeZone = "America/New_York"
         payload.version = 3
-        payload.serialNumber = functions.generateSerial()
-        payload.macAddr.append(functions.generateMac())
+        payload.serialNumber = self._serial
+        payload.macAddr.append(self._mac)
         payload.macAddrType.extend(["wifi"])
         payload.fragment = 0
         payload.userSerialNumber = 0
@@ -90,7 +98,10 @@ class UpdateChecker:
             try:
                 data = self._build_request()
                 response = self.session.post(
-                    CHECKIN_URL, data=data, headers=self.headers, timeout=10
+                    CHECKIN_URL,
+                    data=data,
+                    headers=self.headers,
+                    timeout=(5.0, 10.0),
                 )
                 response.raise_for_status()
 
@@ -172,7 +183,11 @@ class UpdateChecker:
 
             try:
                 name = name_bytes.decode("utf-8")
-            except Exception:
+            except Exception as exc:
+                Log.w(
+                    f"Skipping setting with non-UTF-8 name "
+                    f"({len(name_bytes)} bytes): {exc}"
+                )
                 continue
 
             if name == "update_title":

@@ -26,6 +26,26 @@ VENDOR_DIR = Path(
 _vendor_ready = False
 
 
+def bootstrap_vendor(vendor_dir: Path) -> None:
+    """Insert vendor_dir on sys.path if present; exit(1) if missing.
+
+    Shared between checkota.py (pre-import) and modules/__init__.py (via
+    ensure_vendor_on_path). Both call sites compute the same path the same
+    way; the only reason two implementations exist is ordering of imports.
+    """
+    if vendor_dir.is_dir():
+        vendor_path = str(vendor_dir)
+        if vendor_path not in sys.path:
+            sys.path.insert(0, vendor_path)
+        return
+    sys.stderr.write(
+        f"Vendored google-ota-prober not found at {vendor_dir}. "
+        "checkota requires an editable/source install (pip install -e .) or "
+        "set CHECKOTA_VENDOR_DIR to the vendored tree.\n"
+    )
+    sys.exit(1)
+
+
 def ensure_vendor_on_path() -> None:
     """Inject the vendored google-ota-prober tree onto sys.path (idempotent).
 
@@ -35,15 +55,5 @@ def ensure_vendor_on_path() -> None:
     global _vendor_ready
     if _vendor_ready:
         return
-    if VENDOR_DIR.is_dir():
-        vendor_path = str(VENDOR_DIR)
-        if vendor_path not in sys.path:
-            sys.path.insert(0, vendor_path)
-        _vendor_ready = True
-        return
-    sys.stderr.write(
-        f"Vendored google-ota-prober not found at {VENDOR_DIR}. "
-        "checkota requires an editable/source install (pip install -e .) or "
-        "set CHECKOTA_VENDOR_DIR to the vendored tree.\n"
-    )
-    sys.exit(1)
+    bootstrap_vendor(VENDOR_DIR)
+    _vendor_ready = True

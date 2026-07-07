@@ -81,6 +81,10 @@ def create_run_context(dry_run: bool, pool_size: int = 10) -> RunContext:
         processed_path=processed_path,
         processed_titles=load_processed_titles(processed_path),
         dry_run=dry_run,
+        # Per AGENTS.md "Per-thread session pool too small" — give each thread at
+        # least 10 socket slots so concurrent variant/config workers never block
+        # on a full pool when --jobs overshoots the default floor. This is the
+        # *capacity* of HTTPAdapter.pool_maxsize, not eagerly-opened sockets.
         pool_size=max(10, pool_size),
     )
 
@@ -89,7 +93,10 @@ def install_interrupt_handler(ctx: RunContext):
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def handle_interrupt(signum, frame):
-        ctx.stop()
+        # Signal interruption: only set stop_event. Sessions are closed by
+        # main()'s `finally` block AFTER drain_completes so that the drain's
+        # `create_notifier(ctx, args)` call still has a usable session.
+        ctx.stop_event.set()
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, handle_interrupt)

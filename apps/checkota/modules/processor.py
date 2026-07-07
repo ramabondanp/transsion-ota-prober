@@ -25,7 +25,6 @@ from modules.notifier import (
     build_notification_message,
     create_notifier,
     is_sweep_mode,
-    telegram_available,
 )
 from modules.runtime import RunContext
 from modules.fingerprints import save_processed_title
@@ -277,6 +276,12 @@ def apply_update_actions(
                     if update_config_from_fingerprint(
                         update.config_path, update.cfg, update.target_fp
                     ):
+                        # Even on the no-op path (YAML already matches), we
+                        # still mutate the in-memory cfg so subsequent code
+                        # paths see the post-OTA values regardless of whether
+                        # the file changed on disk. See the two early-return
+                        # paths in manager.update_config_from_fingerprint
+                        # (variants branch and single-config branch).
                         if parsed_target:
                             update.cfg.android_version = parsed_target[
                                 "android_version"
@@ -381,7 +386,9 @@ def drain_pending_notifications(ctx: RunContext, args: argparse.Namespace) -> in
         if idx > 1:
             Log.i(f"Waiting {SWEEP_TELEGRAM_DELAY}s before next notification...")
             if ctx.stop_event.wait(SWEEP_TELEGRAM_DELAY):
-                Log.w(f"Stop requested during wait; aborting drain at {idx - 1}/{total}.")
+                Log.w(
+                    f"Stop requested during wait; aborting drain at {idx - 1}/{total}."
+                )
                 return 130
         Log.i(f"Sending notification {idx}/{total}: {note.device_title}")
         with ctx.telegram_lock:

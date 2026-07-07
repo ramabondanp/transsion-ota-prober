@@ -162,12 +162,12 @@ def _collect_config_paths(
     if not args.config_dir.exists() or not args.config_dir.is_dir():
         parser.error("--config-dir must be an existing directory.")
     config_paths = sorted(
-        (
+        {
             path
             for pattern in ("*.yml", "*.yaml")
             for path in args.config_dir.glob(pattern)
             if path.is_file()
-        ),
+        },
         key=lambda p: p.name.lower(),
     )
     if not config_paths:
@@ -343,6 +343,13 @@ def main() -> int:
     previous_sigint = install_interrupt_handler(ctx)
     watchdog = start_watchdog(ctx, args.timeout)
     executor = None
+    exit_code = 0
+    drain_result = 0
+    # buffered_notifications_possible drives whether the outer drain runs.
+    # Sweep mode buffers notifications per apply_update_actions; direct --fp
+    # matches args.no_config=True and does NOT set args.config_dir, so this
+    # predicate is false and direct mode never has anything in the pending buffer.
+    buffered_notifications_possible = getattr(args, "config_dir", None) is not None
 
     try:
         if args.fp:
@@ -351,47 +358,60 @@ def main() -> int:
                 cfg = config_from_fingerprint(args.fp)
             except ValueError as exc:
                 Log.e(str(exc))
-                return 1
-            Log.i("Processing direct fingerprint input")
-            return process_config_variant(
-                ctx,
-                cfg=cfg,
-                config_path=Path("<fingerprint>"),
-                args=args,
-                variant_label=None,
-            )
-
-        args.no_config = False
-
-        config_paths = _collect_config_paths(parser, args)
-        if not config_paths:
-            return 1
-
-        if args.jobs < 1:
-            Log.e("--jobs must be >= 1")
-            return 1
-
-        if args.jobs == 1:
-            exit_code = _run_sequential(ctx, args, config_paths)
+                exit_code = 1
+            else:
+                Log.i("Processing direct fingerprint input")
+                # Direct mode does not buffer; no drain needed.
+                buffered_notifications_possible = False
+                exit_code = process_config_variant(
+                    ctx,
+                    cfg=cfg,
+                    config_path=Path("<fingerprint>"),
+                    args=args,
+                    variant_label=None,
+                )
         else:
-            exit_code, executor = _run_global_pool(ctx, args, config_paths)
+            args.no_config = False
 
-        # Sweep mode: drain buffered notifications with a 5s gap.
-        drain_result = drain_pending_notifications(ctx, args)
-        exit_code = max(exit_code, drain_result)
-        return exit_code
+            config_paths = _collect_config_paths(parser, args)
+            if not config_paths:
+                exit_code = 1
+            elif args.jobs < 1:
+                Log.e("--jobs must be >= 1")
+                exit_code = 1
+            elif args.jobs == 1:
+                exit_code = _run_sequential(ctx, args, config_paths)
+            else:
+                exit_code, executor = _run_global_pool(ctx, args, config_paths)
     except KeyboardInterrupt:
         Log.w("Interrupted. Stopping in-flight requests and exiting.")
         ctx.stop_event.set()
-        return 130
+        exit_code = 130
     finally:
-        # Signal all threads to stop
-        ctx.stop_event.set()
-        # If parallel mode, wait for running tasks to finish before closing sessions
+        # Parallel mode: wait for running tasks to finish before closing sessions.
         if executor is not None:
             executor.shutdown(wait=True)
-        # Now close sessions safely (no threads should be using them)
+        # Drain AFTER all workers have stopped -- a worker that was still
+        # mid-`apply_update_actions` could otherwise append to
+        # `ctx.pending_notifications` after the drain took its snapshot.
+        #
+        # Only run drain in sweep mode (where notifications were buffered).
+        # Direct `--fp` and config-error exits don't buffer anything, so
+        # the drain would just be a no-op.
+        #
+        # By this point the signal handler and the `except KeyboardInterrupt`
+        # arm have already set stop_event. Workers are already stopped
+        # (executor.shutdown(wait=True) above), so clearing stop_event here
+        # cannot resurrect them -- it only allows the drain to run. Sessions
+        # are still alive (closed below) so `create_notifier(ctx, args)` from
+        # inside drain still gets a usable session.
+        if buffered_notifications_possible and exit_code in (0, 130):
+            ctx.stop_event.clear()
+            drain_result = drain_pending_notifications(ctx, args)
+        # Close sessions safely (no worker threads should be using them).
         ctx.stop()
         signal.signal(signal.SIGINT, previous_sigint)
         if watchdog is not None:
             watchdog.cancel()
+
+    return max(exit_code, drain_result)

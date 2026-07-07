@@ -21,19 +21,11 @@ _VENDOR_DIR = Path(
         "CHECKOTA_VENDOR_DIR", _PROJECT_ROOT / "vendor" / "google-ota-prober"
     )
 )
-if _VENDOR_DIR.is_dir():
-    _vendor_path = str(_VENDOR_DIR)
-    if _vendor_path not in sys.path:
-        sys.path.insert(0, _vendor_path)
-else:
-    sys.stderr.write(
-        f"Vendored google-ota-prober not found at {_VENDOR_DIR}.\n"
-        "checkota requires an editable/source install (pip install -e .) or "
-        "set CHECKOTA_VENDOR_DIR to the vendored tree.\n"
-    )
-    sys.exit(1)
+from modules.paths import bootstrap_vendor  # noqa: E402
 
-from modules.cli import main
+bootstrap_vendor(_VENDOR_DIR)
+
+from modules.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     sys.exit(main())

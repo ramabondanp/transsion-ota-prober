@@ -56,25 +56,38 @@ def telegram_available(ctx: RunContext, args: argparse.Namespace) -> bool:
 
 
 def build_notification_message(update: VariantUpdate) -> str:
-    region_line = f" ({update.region_name})" if update.region_name else ""
-    os_line = f"<b>OS:</b> {update.sdk_message}\n" if update.sdk_message else ""
+    E = html.escape  # local alias; quote=False keeps URLs unquoted
+    region_line_raw = f" ({update.region_name})" if update.region_name else ""
+    # os_line is built HTML (literal <b>OS:</b>); escape only the sdk content.
+    sdk = E(str(update.sdk_message), quote=False) if update.sdk_message else None
+    os_line = f"<b>OS:</b> {sdk}\n" if sdk else ""
     inc = update.data.get("post_build_incremental")
     spl = update.data.get("post_security_patch_level")
     build_date = update.data.get("build_date")
     return (
         f"<blockquote><b>OTA Update Available</b></blockquote>\n\n"
-        f"<b>Device:</b> {update.cfg.model}{region_line}\n"
+        f"<b>Device:</b> {E(str(update.cfg.model), quote=False)}{E(region_line_raw, quote=False)}\n"
         f"\n"
-        f"<b>Title:</b> {update.title}\n"
+        f"<b>Title:</b> {E(str(update.title), quote=False)}\n"
         f"{os_line}\n"
-        f"{update.desc}\n\n"
-        f"<b>Size:</b> {update.size}\n"
-        + (f"<b>Incremental:</b> <code>{inc}</code>\n" if inc else "")
-        + (f"<b>Security patch:</b> {spl}\n" if spl else "")
-        + f"<b>Fingerprint:</b> <code>{update.target_fp}</code>"
-        + (f"\n<b>Build date:</b> {build_date} (CST)" if build_date else "")
+        # OTA descriptions are HTML-ish (<small>/<font>/<br>) and must stay
+        # raw here so TgNotify._sanitize_html can normalize them before send.
+        f"{str(update.desc)}\n\n"
+        f"<b>Size:</b> {E(str(update.size), quote=False)}\n"
         + (
-            f"\n<b>Google OTA link:</b> <code>{html.escape(update.url, quote=False)}</code>"
+            f"<b>Incremental:</b> <code>{E(str(inc), quote=False)}</code>\n"
+            if inc
+            else ""
+        )
+        + (f"<b>Security patch:</b> {E(str(spl), quote=False)}\n" if spl else "")
+        + f"<b>Fingerprint:</b> <code>{E(str(update.target_fp), quote=False)}</code>"
+        + (
+            f"\n<b>Build date:</b> {E(str(build_date), quote=False)} (CST)"
+            if build_date
+            else ""
+        )
+        + (
+            f"\n<b>Google OTA link:</b> <code>{E(update.url, quote=False)}</code>"
             if update.url
             else ""
         )

@@ -1,7 +1,12 @@
 import re
 import requests
 
-from modules.constants import DESC_SECTION_RE, SECTION_HEADER_RE, SENTENCE_BOUNDARY_RE, TELEGRAPH_API_URL
+from modules.constants import (
+    DESC_SECTION_RE,
+    SECTION_HEADER_RE,
+    SENTENCE_BOUNDARY_RE,
+    TELEGRAPH_API_URL,
+)
 from modules.logging import Log
 
 
@@ -164,6 +169,36 @@ class TgNotify:
         return result
 
     @staticmethod
+    def _escape_text_preserving_telegram_tags(html: str) -> str:
+        """Escape text nodes while preserving trusted Telegram HTML tags."""
+        tag_re = re.compile(
+            r"</?(?:b|code|blockquote)>|<a\s+href=\"[^\"]+\">|</a>",
+            flags=re.IGNORECASE,
+        )
+        pieces: list[str] = []
+        last_end = 0
+        for match in tag_re.finditer(html):
+            if match.start() > last_end:
+                text = html[last_end : match.start()]
+                text = re.sub(
+                    r"&(?!#\d+;|#x[0-9A-Fa-f]+;|[A-Za-z][A-Za-z0-9]+;)",
+                    "&amp;",
+                    text,
+                )
+                pieces.append(text.replace("<", "&lt;").replace(">", "&gt;"))
+            pieces.append(match.group(0))
+            last_end = match.end()
+        if last_end < len(html):
+            text = html[last_end:]
+            text = re.sub(
+                r"&(?!#\d+;|#x[0-9A-Fa-f]+;|[A-Za-z][A-Za-z0-9]+;)",
+                "&amp;",
+                text,
+            )
+            pieces.append(text.replace("<", "&lt;").replace(">", "&gt;"))
+        return "".join(pieces)
+
+    @staticmethod
     def _sanitize_html(html: str) -> str:
         if not html:
             return html
@@ -229,7 +264,7 @@ class TgNotify:
         sanitized = re.sub(r"\n[ \t]+", "\n", sanitized)
         sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
         sanitized = sanitized.replace(" \n", "\n").strip()
-        return sanitized
+        return TgNotify._escape_text_preserving_telegram_tags(sanitized)
 
     def send(
         self,

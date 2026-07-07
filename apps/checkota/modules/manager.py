@@ -23,7 +23,10 @@ class Config:
 
     @classmethod
     def _from_dict(
-        cls, data: Dict[str, str], variant_name: Optional[str] = None, variant_index: Optional[int] = None
+        cls,
+        data: Dict[str, str],
+        variant_name: Optional[str] = None,
+        variant_index: Optional[int] = None,
     ) -> "Config":
         field_names = {field.name for field in fields(cls)}
         required_fields = field_names - {"variant", "variant_index"}
@@ -37,7 +40,9 @@ class Config:
 
         missing = [key for key in required_fields if key not in filtered]
         if missing:
-            raise ValueError(f"Config missing required fields: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"Config missing required fields: {', '.join(sorted(missing))}"
+            )
 
         return cls(**filtered)
 
@@ -111,7 +116,9 @@ def parse_fingerprint(fingerprint: str) -> Optional[Dict[str, str]]:
     return match.groupdict() if match else None
 
 
-def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: str) -> bool:
+def update_config_from_fingerprint(
+    config_path: Path, cfg: Config, fingerprint: str
+) -> bool:
     parsed = parse_fingerprint(fingerprint)
     if not parsed:
         Log.w("No valid target fingerprint available to update configuration.")
@@ -177,7 +184,12 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
             if indent <= end_indent and not stripped:
                 idx += 1
                 continue
-            if indent <= end_indent and stripped and not stripped.startswith("- ") and not stripped.startswith("#"):
+            if (
+                indent <= end_indent
+                and stripped
+                and not stripped.startswith("- ")
+                and not stripped.startswith("#")
+            ):
                 break
             if stripped.startswith(f"{key}:"):
                 return idx
@@ -209,7 +221,9 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
                         match_idx = i
                         break
         if match_idx is None:
-            Log.w(f"Could not locate matching variant in {config_path} when updating incremental.")
+            Log.w(
+                f"Could not locate matching variant in {config_path} when updating incremental."
+            )
             return False
 
         try:
@@ -217,18 +231,30 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
                 key: variants[match_idx].get(key, data.get(key))
                 for key in ("android_version", "build_tag", "incremental")
             }
-            if all(str(current_value.get(key, "")) == str(value) for key, value in updates.items()):
+            if all(
+                str(current_value.get(key, "")) == str(value)
+                for key, value in updates.items()
+            ):
                 Log.i(f"{config_path} already matches target fingerprint values.")
                 return True
         except Exception:
             pass
 
-        variants_line_idx = next((i for i, line in enumerate(lines) if line.lstrip().startswith("variants:")), None)
+        variants_line_idx = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if line.lstrip().startswith("variants:")
+            ),
+            None,
+        )
         if variants_line_idx is None:
             Log.w(f"Could not find variants section in {config_path}.")
             return False
 
-        variants_indent = len(lines[variants_line_idx]) - len(lines[variants_line_idx].lstrip(" "))
+        variants_indent = len(lines[variants_line_idx]) - len(
+            lines[variants_line_idx].lstrip(" ")
+        )
 
         variant_counter = -1
         target_variant_indent = None
@@ -253,7 +279,9 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
         for key in ("android_version", "build_tag", "incremental"):
             line_idx = find_key_line(key, variant_start_idx, target_variant_indent)
             if line_idx is None:
-                insert_key_line(insert_idx, target_variant_indent + 2, key, updates[key])
+                insert_key_line(
+                    insert_idx, target_variant_indent + 2, key, updates[key]
+                )
                 insert_idx += 1
             else:
                 lines[line_idx] = rewrite_line(lines[line_idx], updates[key])
@@ -285,6 +313,17 @@ def update_config_from_fingerprint(config_path: Path, cfg: Config, fingerprint: 
         config_path.write_text(new_text, encoding="utf-8")
     except Exception as exc:
         Log.w(f"Failed to write updated config {config_path}: {exc}")
+        return False
+
+    # Post-write round-trip smoke test: ensure the rewritten file still parses
+    # as a valid config. Catches corrupted writes (e.g. comment-collision
+    # rewrites) before the next run attempts to load the file.
+    try:
+        reparse = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(reparse, dict):
+            raise ValueError(f"Round-trip parse yielded {type(reparse).__name__}")
+    except Exception as exc:
+        Log.w(f"Round-trip parse of {config_path} failed: {exc}")
         return False
 
     Log.s(

@@ -35,6 +35,34 @@ class RemoteZipFetchError(Exception):
     """Raised when the remote ZIP cannot be read or the entry is missing."""
 
 
+class RemoteZipTransientError(RemoteZipFetchError):
+    """Raised on a transient failure (network/transport or retryable HTTP status).
+
+    Transient failure modes:
+      - ConnectionError / Timeout / SSL / ChunkedEncodingError / ProtocolError
+      - HTTP 408 (request timeout), 425 (too early), 429 (rate-limit),
+        500/502/503/504 (server).
+
+    Subclass of RemoteZipFetchError so legacy `except RemoteZipFetchError` arms
+    still see these exceptions; place any `except RemoteZipTransientError` arm
+    BEFORE plain `except RemoteZipFetchError`.
+    """
+
+
+# HTTP status codes that justify a 1s->2s->4s retry. Other 4xx (notably 416
+# Range Not Satisfiable, 403, 404) are treated as structural and surfaced
+# immediately via plain RemoteZipFetchError.
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+_CONNECT_TIMEOUT = 5.0  # TLS-handshake budget for cold GCP connections.
+
+
+def _timeout_pair(read_budget: float) -> tuple[float, float]:
+    """Convert a single numeric timeout into `requests`' (connect, read) tuple."""
+    return (_CONNECT_TIMEOUT, max(read_budget, _CONNECT_TIMEOUT))
+
+
 def _range_get(
     session: requests.Session,
     url: str,
@@ -46,9 +74,26 @@ def _range_get(
     """Fetch an inclusive byte range [start, end] via HTTP Range. Returns the body."""
     hdrs = dict(headers)
     hdrs["Range"] = f"bytes={start}-{end}"
-    resp = session.get(url, headers=hdrs, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(exc.response, "status_code", None)
+        if status in _RETRYABLE_HTTP_STATUSES:
+            raise RemoteZipTransientError(
+                f"Retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
+            ) from exc
+        # Non-retryable HTTP error (e.g. 416 Range Not Satisfiable).
+        raise RemoteZipFetchError(
+            f"Non-retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        # ConnectionError / Timeout / SSLError / ChunkedEncodingError / ProtocolError.
+        raise RemoteZipTransientError(
+            f"Transport failure for {url} (bytes={start}-{end}): {exc}"
+        ) from exc
     if resp.status_code != 206:
+        # Range ignored AND a 2xx slipped through (rare; CDN quirks).
         raise RemoteZipFetchError(
             f"Server ignored Range request (status {resp.status_code}); "
             "ranged reads are required."
@@ -62,8 +107,22 @@ def _probe_size(
     """Return the total resource size using a 1-byte ranged probe."""
     hdrs = dict(headers)
     hdrs["Range"] = "bytes=0-0"
-    resp = session.get(url, headers=hdrs, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(exc.response, "status_code", None)
+        if status in _RETRYABLE_HTTP_STATUSES:
+            raise RemoteZipTransientError(
+                f"Retryable HTTP {status} while probing size of {url}: {exc}"
+            ) from exc
+        raise RemoteZipFetchError(
+            f"Non-retryable HTTP {status} while probing size of {url}: {exc}"
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        raise RemoteZipTransientError(
+            f"Transport failure while probing size of {url}: {exc}"
+        ) from exc
     content_range = resp.headers.get("Content-Range", "")
     if "/" in content_range:
         total = content_range.rsplit("/", 1)[-1].strip()
@@ -189,9 +248,11 @@ def fetch_zip_member(
 ) -> bytes:
     """Fetch and return the decompressed bytes of a single ZIP member over HTTP.
 
-    Uses only absolute byte ranges (no suffix ranges). Raises
-    RemoteZipFetchError on any structural problem; network errors propagate as
-    requests exceptions.
+    Uses only absolute byte ranges (no suffix ranges). Structural problems
+    (bad EOCD, missing entry, unsupported compression, non-retryable HTTP
+    status) raise RemoteZipFetchError. Transient failures (network errors and
+    retryable HTTP statuses) raise RemoteZipTransientError so callers can
+    distinguish structural from transient failures.
     """
     sess = session or requests.Session()
     hdrs = headers or {}
