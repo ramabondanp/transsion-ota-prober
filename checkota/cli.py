@@ -67,12 +67,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Send notification even if the update has been seen before",
     )
     parser.add_argument(
-        "--force",
-        dest="force_update_incremental",
-        action="store_true",
-        help="(Deprecated) Previously needed with --update-incremental; --update-incremental now always proceeds.",
-    )
-    parser.add_argument(
         "-i",
         "--incremental",
         help="Override incremental version for all selected configs",

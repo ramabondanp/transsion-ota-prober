@@ -95,10 +95,7 @@ def region_code_from_product(product: str) -> Optional[str]:
     """Extract region code from product name (everything after the first '-')."""
     if not product or "-" not in product:
         return None
-    try:
-        return product.split("-", 1)[1].strip().upper()
-    except Exception:
-        return None
+    return product.split("-", 1)[1].strip().upper()
 
 
 def region_from_product(product: str) -> Optional[str]:
