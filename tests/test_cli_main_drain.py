@@ -10,10 +10,10 @@ B) Direct `--fp` mode (no sweep, no buffering). The fix's
 import argparse
 import signal
 
-from modules.runtime import RunContext
-from modules.models import PendingNotification
-from modules import processor
-from modules import cli
+from checkota.runtime import RunContext
+from checkota.models import PendingNotification
+from checkota import processor
+from checkota import cli
 
 
 def _make_args(tmp_path, *, config_dir_present):
@@ -135,7 +135,7 @@ def test_cli_main_no_drain_in_direct_fp(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "start_watchdog", lambda ctx, t: None)
     monkeypatch.setattr(cli, "process_config_variant", lambda *a, **kw: 0)
     monkeypatch.setattr(cli, "drain_pending_notifications", tracker)
-    from modules.manager import Config
+    from checkota.manager import Config
 
     monkeypatch.setattr(
         cli,

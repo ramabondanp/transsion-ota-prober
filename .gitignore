@@ -15,3 +15,6 @@ debug_checkin_response.txt
 
 # Linter cache
 .ruff_cache/
+
+# Serena tooling
+.serena/

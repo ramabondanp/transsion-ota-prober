@@ -19,7 +19,7 @@ import argparse
 import threading
 
 
-from modules.runtime import RunContext
+from checkota.runtime import RunContext
 
 
 def _ctx(tmp_path):
@@ -46,8 +46,8 @@ def test_m4_drain_completes_after_stop_event_set(tmp_path, monkeypatch, capsys):
     We exercise step 6 in isolation but assert that drain sees the cleared
     event and sends both buffered notifications.
     """
-    from modules.models import PendingNotification
-    from modules import processor
+    from checkota.models import PendingNotification
+    from checkota import processor
 
     ctx = _ctx(tmp_path)
     # Step 2+3 effect: stop_event is set.
@@ -83,8 +83,8 @@ def test_m4_drain_completes_after_stop_event_set(tmp_path, monkeypatch, capsys):
 
 def test_m4_drain_aborts_on_second_interrupt(tmp_path, monkeypatch, capsys):
     """A second Ctrl-C during the inter-send wait must still abort cleanly."""
-    from modules.models import PendingNotification
-    from modules import processor
+    from checkota.models import PendingNotification
+    from checkota import processor
 
     ctx = _ctx(tmp_path)
     ctx.pending_notifications.extend(
@@ -145,7 +145,7 @@ def test_signal_handler_only_sets_stop_event(monkeypatch):
         stop_event = _FakeEvent()
         stop = _FakeStop()
 
-    from modules.runtime import install_interrupt_handler
+    from checkota.runtime import install_interrupt_handler
     monkeypatch.setattr("signal.signal", lambda sig, handler: None)
     install_interrupt_handler(_CtxStub())  # type: ignore[arg-type]
 
@@ -156,7 +156,7 @@ def test_signal_handler_only_sets_stop_event(monkeypatch):
     # source: it should ONLY call stop_event.set(); not ctx.stop().
     # Re-check by inspecting the runtime source.
     import inspect
-    from modules import runtime as _rt
+    from checkota import runtime as _rt
 
     src = inspect.getsource(_rt.install_interrupt_handler)
     assert "ctx.stop_event.set()" in src, "Signal handler must set stop_event"

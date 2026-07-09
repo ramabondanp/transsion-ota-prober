@@ -7,29 +7,29 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
-from modules.description import format_update_description
-from modules.logging import Log
-from modules.manager import (
+from checkota.description import format_update_description
+from checkota.logging import Log
+from checkota.manager import (
     Config,
     parse_fingerprint,
     region_code_from_product,
     region_from_product,
     update_config_from_fingerprint,
 )
-from modules.metadata import (
+from checkota.metadata import (
     build_sdk_strings,
     extract_incremental_from_fingerprint,
     get_ota_metadata,
 )
-from modules.models import PendingNotification, VariantUpdate
-from modules.notifier import (
+from checkota.models import PendingNotification, VariantUpdate
+from checkota.notifier import (
     build_notification_message,
     create_notifier,
     is_sweep_mode,
 )
-from modules.runtime import RunContext
-from modules.fingerprints import save_processed_title
-from modules.update_checker import UpdateChecker
+from checkota.runtime import RunContext
+from checkota.fingerprints import save_processed_title
+from checkota.update_checker import UpdateChecker
 
 
 #: Delay between consecutive Telegram notifications when draining a sweep buffer.

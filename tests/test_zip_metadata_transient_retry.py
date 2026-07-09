@@ -7,14 +7,14 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from modules.zip_metadata import (
+from checkota.zip_metadata import (
     _LOCAL_SIG,
     _range_get,
     RemoteZipFetchError,
     RemoteZipTransientError,
     fetch_zip_member,
 )
-from modules.metadata import get_ota_metadata
+from checkota.metadata import get_ota_metadata
 
 
 class _RangeSession:
@@ -107,7 +107,7 @@ def test_get_ota_metadata_retries_on_transient(monkeypatch):
         # 2nd call: return empty bytes; metadata path returns None.
         return b""
 
-    monkeypatch.setattr("modules.metadata.fetch_zip_member", fake_fetch)
+    monkeypatch.setattr("checkota.metadata.fetch_zip_member", fake_fetch)
     result = get_ota_metadata("https://x/y.zip", session=MagicMock(), stop_event=None)
     assert calls["n"] >= 2, (
         "Expected at least 2 fetch_zip_member calls on transient error"
@@ -123,7 +123,7 @@ def test_get_ota_metadata_does_not_retry_on_structural(monkeypatch):
         calls["n"] += 1
         raise RemoteZipFetchError("bad EOCD signature")
 
-    monkeypatch.setattr("modules.metadata.fetch_zip_member", fake_fetch)
+    monkeypatch.setattr("checkota.metadata.fetch_zip_member", fake_fetch)
     result = get_ota_metadata("https://x/y.zip", session=MagicMock(), stop_event=None)
     assert calls["n"] == 1, "Structural failure must be raised on first attempt only"
     assert result is None
@@ -131,7 +131,7 @@ def test_get_ota_metadata_does_not_retry_on_structural(monkeypatch):
 
 def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
     """attempts=2 must retry once on transient and succeed when 2nd try works."""
-    monkeypatch.setattr("modules.zip_metadata.time.sleep", lambda _s: None)
+    monkeypatch.setattr("checkota.zip_metadata.time.sleep", lambda _s: None)
     calls = {"n": 0}
 
     def fake_get(url, headers, timeout):

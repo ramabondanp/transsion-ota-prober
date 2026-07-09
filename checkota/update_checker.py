@@ -11,15 +11,15 @@ from google.protobuf import text_format
 from checkin import checkin_generator_pb2
 from utils import functions
 
-from modules.manager import Config
-from modules.constants import (
+from checkota.manager import Config
+from checkota.constants import (
     CHECKIN_URL,
     DEBUG_FILE,
     OTA_URL_PREFIX,
     PROTO_TYPE,
     USER_AGENT_TPL,
 )
-from modules.logging import Log
+from checkota.logging import Log
 
 
 class UpdateChecker:

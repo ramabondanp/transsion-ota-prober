@@ -3,7 +3,7 @@ source section breaks and never invent blank lines before header-like content.
 Regression coverage for terminal spacing and pre-wrapping regressions.
 """
 
-from modules.description import format_update_description
+from checkota.description import format_update_description
 
 # Mirrors raw OTA description shape: Update Version follows safety prose
 # directly; later sections use preserved blank source lines. Items are separated

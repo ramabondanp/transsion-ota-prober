@@ -6,9 +6,9 @@ from typing import Dict, Optional, Tuple
 
 import requests
 
-from modules.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
-from modules.logging import Log
-from modules.zip_metadata import (
+from checkota.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
+from checkota.logging import Log
+from checkota.zip_metadata import (
     RemoteZipFetchError,
     RemoteZipTransientError,
     fetch_zip_member,
@@ -202,14 +202,14 @@ def build_sdk_strings(
     return message, log_line, release_line
 
 
-APP_DIR = Path(__file__).resolve().parent.parent
-PROCESSED_UPDATES_FILE_PATH = APP_DIR / PROCESSED_UPDATES_FILE
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROCESSED_UPDATES_FILE_PATH = PROJECT_ROOT / PROCESSED_UPDATES_FILE
 
 
 def processed_updates_path() -> Path:
     """Resolve the dedup file path with backwards-compatible fallback.
 
-    Prefers the anchored path (apps/checkota/processed_updates.txt). If absent,
+    Prefers the anchored path (<repo root>/processed_updates.txt). If absent,
     falls back to the CWD-relative path used by the pre-restructure code so
     existing dedup state survives the move.
     """

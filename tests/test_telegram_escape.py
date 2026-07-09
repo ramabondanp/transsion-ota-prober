@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from modules.manager import Config
-from modules.models import VariantUpdate
-from modules.notifier import build_notification_message
+from checkota.manager import Config
+from checkota.models import VariantUpdate
+from checkota.notifier import build_notification_message
 
 
 def _fake_update(

@@ -10,17 +10,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from modules.logging import Log
-from modules.manager import Config
-from modules.paths import APP_CONFIGS_DIR
-from modules.processor import (
+from checkota.logging import Log
+from checkota.manager import Config
+from checkota.paths import APP_CONFIGS_DIR
+from checkota.processor import (
     config_from_fingerprint,
     drain_pending_notifications,
     load_config_variants,
     process_config,
     process_config_variant,
 )
-from modules.runtime import (
+from checkota.runtime import (
     RunContext,
     create_run_context,
     install_interrupt_handler,

@@ -4,8 +4,8 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.processor import get_cached_ota_metadata
-from modules.runtime import RunContext
+from checkota.processor import get_cached_ota_metadata
+from checkota.runtime import RunContext
 
 
 def _make_ctx() -> RunContext:
@@ -33,7 +33,7 @@ def test_concurrent_fetch_runs_once_per_url():
         gate.wait()  # hold the single fetcher until the test releases it
         return {"fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"}
 
-    with patch("modules.processor.get_ota_metadata", fake_fetch):
+    with patch("checkota.processor.get_ota_metadata", fake_fetch):
         results: dict = {}
         threads = []
 

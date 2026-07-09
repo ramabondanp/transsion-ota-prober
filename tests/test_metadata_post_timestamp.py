@@ -1,13 +1,13 @@
 """M1 fix — bad post-timestamp is logged at warning level; valid path still works."""
 
-from modules.metadata import get_ota_metadata
+from checkota.metadata import get_ota_metadata
 
 
 def _fake_fetch_returning_content(monkeypatch, content: str) -> None:
     def fake_fetch(url, member, **kwargs):
         return content.encode("utf-8")
 
-    monkeypatch.setattr("modules.metadata.fetch_zip_member", fake_fetch)
+    monkeypatch.setattr("checkota.metadata.fetch_zip_member", fake_fetch)
 
 
 def test_invalid_timestamp_logs_warning(monkeypatch, capsys):

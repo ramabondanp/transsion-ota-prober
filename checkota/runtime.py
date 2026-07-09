@@ -13,9 +13,9 @@ from typing import Dict, List, Optional, Set
 import requests
 from requests.adapters import HTTPAdapter
 
-from modules.fingerprints import load_processed_titles
-from modules.logging import Log
-from modules.metadata import processed_updates_path
+from checkota.fingerprints import load_processed_titles
+from checkota.logging import Log
+from checkota.metadata import processed_updates_path
 
 
 @dataclass

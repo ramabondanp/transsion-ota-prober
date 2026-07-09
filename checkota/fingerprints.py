@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Set
 
-from modules.logging import Log
+from checkota.logging import Log
 
 # Maximum number of entries to keep in the processed updates file.
 # Older entries are trimmed to prevent unbounded growth.

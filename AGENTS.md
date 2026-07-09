@@ -9,11 +9,10 @@ available updates, and optionally sends Telegram notifications.
 ## Architecture
 
 ```
-apps/checkota/
-  checkota.py          ← Thin shim: bootstraps vendor path, calls modules.cli.main
-  modules/
+checkota/              ← Package (import: from checkota.cli import main)
     __init__.py        ← Bootstraps vendored google-ota-prober onto sys.path on import
-    paths.py           ← APP_DIR/PROJECT_ROOT/VENDOR_DIR anchors + ensure_vendor_on_path()
+    __main__.py        ← `python -m checkota` entry → checkota.cli.main
+    paths.py           ← PROJECT_ROOT/APP_CONFIGS_DIR/VENDOR_DIR anchors + ensure_vendor_on_path()
                          (CHECKOTA_VENDOR_DIR override; fails loud if vendor missing)
     cli.py             ← argparse, arg validation, config-path resolution; orchestration:
                          _run_sequential (--jobs 1), _run_global_pool ((config,variant) pool)
@@ -29,15 +28,16 @@ apps/checkota/
     constants.py       ← URLs, region codes, SDK versions, regex patterns
     manager.py         ← Config dataclass, YAML parsing, fingerprint handling
     update_checker.py  ← Builds/sends protobuf check-in request, parses response
-    metadata.py        ← Parses OTA ZIP metadata; processed_updates_path() anchored to app dir
+    metadata.py        ← Parses OTA ZIP metadata; processed_updates_path() anchored to repo root
     zip_metadata.py    ← Direct HTTP Range fetch of one ZIP member (replaces remotezip);
                          ZIP64-aware, absolute ranges only (Google rejects suffix ranges)
     fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
     logging.py         ← Thread-safe logging with ANSI colors
     telegram.py        ← Telegram notify + Telegraph fallback + HTML sanitization
-  configs/             ← YAML device configs (one per codename, 108 files)
-  processed_updates.txt ← Append-only log of seen update titles (trimmed at 2000)
-  pyproject.toml       ← Package metadata + deps (requests, PyYAML, protobuf)
+configs/               ← YAML device configs (one per codename, 108 files)
+tests/                 ← pytest suite
+processed_updates.txt  ← Append-only log of seen update titles (trimmed at 2000)
+pyproject.toml         ← Package metadata + deps (requests, PyYAML, protobuf)
 
 vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION = scope/license)
   checkin/             ← Compiled protobuf modules (checkin_generator_pb2)
@@ -135,11 +135,12 @@ Same two-stage approach as Telegram:
 
 ## Known Bug Fixes (do not regress)
 
-> Refactor note: `checkota.py` was sliced into `modules/` (now a shim → `modules.cli.main`).
+> Refactor note: `checkota.py` was sliced into the `checkota/` package (entry →
+> `checkota.cli.main`, `python -m checkota` via `__main__.py`).
 > Historical `checkota.py` rows map to: CLI/orchestration/watchdog → `cli.py`+`runtime.py`;
 > pipeline → `processor.py`; `TerminalParser` → `description.py`; notify → `notifier.py`;
 > `RunContext` → `runtime.py`; `VariantUpdate` → `models.py`; vendor bootstrap →
-> `paths.py`+`modules/__init__.py`.
+> `paths.py`+`checkota/__init__.py`.
 
 | Issue | File | Fix |
 |-------|------|-----|
@@ -159,8 +160,8 @@ Same two-stage approach as Telegram:
 | E402 import warnings | `checkota.py` | `# ruff: noqa: E402` (no longer needed post-refactor) |
 | `DESC_SECTION_RE` mismatch when blank line collapsed | `constants.py` | `\n\n?` not `\n\n` |
 | Locale-dependent Unicode I/O errors | `manager.py`, `fingerprints.py`, `update_checker.py` | Explicit `encoding="utf-8"` everywhere |
-| `processed_updates.txt` path CWD-relative | `modules/metadata.py` | Anchored to app dir via `Path(__file__).resolve().parent.parent` |
-| 989-line monolith | `modules/*` | Sliced into focused modules; `checkota.py` → shim. Behavior-preserving |
+| `processed_updates.txt` path CWD-relative | `checkota/metadata.py` | Anchored to repo root via `Path(__file__).resolve().parent.parent` |
+| 989-line monolith | `checkota/*` | Sliced into focused modules; entry → `checkota.cli.main`. Behavior-preserving |
 | `remotezip` dep for OTA metadata | `zip_metadata.py`, `metadata.py`, `pyproject.toml` | Vendored ZIP64-aware `fetch_zip_member()` w/ absolute Range requests (Google rejects suffix `bytes=-N`); probes size via `bytes=0-0`, reads EOCD→central-dir→entry. Byte-identical, one less dep |
 | Multi-variant configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,variant) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per variant, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
 | Per-thread session pool too small | `runtime.py` | `HTTPAdapter` `pool_maxsize = max(10, --jobs)` |
@@ -168,21 +169,21 @@ Same two-stage approach as Telegram:
 
 ## Running
 
-After `pip install -e apps/checkota/`, use `checkota` directly. Run from repo root
+After `pip install -e .`, use `checkota` directly. Run from repo root
 (`-d` paths are relative to it).
 
 ```bash
 checkota -c X6873                                  # single config (codename → configs/config-X6873.yml)
-checkota -d apps/checkota/configs/ --jobs 4        # directory, parallel
-checkota -d apps/checkota/configs/ --jobs 4 --timeout 600   # cap runtime (exits 124)
+checkota -d configs/ --jobs 4                      # directory, parallel
+checkota -d configs/ --jobs 4 --timeout 600        # cap runtime (exits 124)
 checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."   # direct fingerprint
 checkota -c X6873 --dry-run                        # dry run
 checkota -c X6873 --update-incremental             # update config, no notify
-checkota -d apps/checkota/configs/ --reg OP-M1     # filter by region
+checkota -d configs/ --reg OP-M1                   # filter by region
 checkota -c X6873 --debug                          # save check-in response
 ```
 
-> Equivalent without install: `python3 apps/checkota/checkota.py <args>`.
+> Equivalent without install: `python3 -m checkota <args>`.
 
 Env vars:
 

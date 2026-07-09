@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-from modules.manager import Config
+from checkota.manager import Config
 
 
 @dataclass

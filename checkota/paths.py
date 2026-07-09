@@ -2,7 +2,7 @@
 
 Importing this module is side-effect free; call ``ensure_vendor_on_path()`` to
 inject the vendored ``google-ota-prober`` tree onto ``sys.path``. That bootstrap
-runs automatically from ``modules/__init__.py`` so any module that imports the
+runs automatically from ``checkota/__init__.py`` so any module that imports the
 vendored ``checkin``/``utils`` packages (e.g. ``update_checker``) resolves them
 regardless of how the app is launched.
 """
@@ -11,10 +11,9 @@ import os
 import sys
 from pathlib import Path
 
-# modules/ -> apps/checkota/ -> <repo root>
-APP_DIR = Path(__file__).resolve().parent.parent
-PROJECT_ROOT = APP_DIR.parent.parent
-APP_CONFIGS_DIR = APP_DIR / "configs"
+# checkota/paths.py -> checkota/ -> <repo root>
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+APP_CONFIGS_DIR = PROJECT_ROOT / "configs"
 
 # Vendor dir lives at the repo root (outside the package tree), so only an
 # editable/source install can reach it. Allow an env override for relocated
@@ -29,9 +28,8 @@ _vendor_ready = False
 def bootstrap_vendor(vendor_dir: Path) -> None:
     """Insert vendor_dir on sys.path if present; exit(1) if missing.
 
-    Shared between checkota.py (pre-import) and modules/__init__.py (via
-    ensure_vendor_on_path). Both call sites compute the same path the same
-    way; the only reason two implementations exist is ordering of imports.
+    Called from ensure_vendor_on_path (via checkota/__init__.py) and from
+    __main__.py before package imports resolve the vendored tree.
     """
     if vendor_dir.is_dir():
         vendor_path = str(vendor_dir)

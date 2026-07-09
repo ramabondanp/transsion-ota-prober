@@ -1,13 +1,13 @@
 import re
 import requests
 
-from modules.constants import (
+from checkota.constants import (
     DESC_SECTION_RE,
     SECTION_HEADER_RE,
     SENTENCE_BOUNDARY_RE,
     TELEGRAPH_API_URL,
 )
-from modules.logging import Log
+from checkota.logging import Log
 
 
 class TgNotify:

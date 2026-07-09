@@ -5,8 +5,8 @@ import re
 
 import yaml
 
-from modules.constants import REGION_CODE_MAP
-from modules.logging import Log
+from checkota.constants import REGION_CODE_MAP
+from checkota.logging import Log
 
 
 @dataclass

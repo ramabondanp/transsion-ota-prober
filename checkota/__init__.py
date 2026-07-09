@@ -1,4 +1,4 @@
-"""Modules package for the checkota OTA update checking tool.
+"""checkota — OTA firmware update checker for Transsion devices.
 
 Importing the package injects the vendored ``google-ota-prober`` tree onto
 ``sys.path`` so submodules can import the vendored ``checkin``/``utils``

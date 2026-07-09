@@ -10,7 +10,7 @@ import re
 from html.parser import HTMLParser
 
 
-from modules.constants import SECTION_HEADER_RE
+from checkota.constants import SECTION_HEADER_RE
 
 
 class TerminalParser(HTMLParser):

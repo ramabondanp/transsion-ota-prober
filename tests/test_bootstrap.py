@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from modules.paths import bootstrap_vendor
+from checkota.paths import bootstrap_vendor
 
 
 def test_bootstrap_inserts_path_once(tmp_path, monkeypatch):

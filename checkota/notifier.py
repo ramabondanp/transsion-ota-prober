@@ -4,10 +4,10 @@ import argparse
 import html
 from typing import Optional
 
-from modules.logging import Log
-from modules.models import VariantUpdate
-from modules.runtime import RunContext
-from modules.telegram import TgNotify
+from checkota.logging import Log
+from checkota.models import VariantUpdate
+from checkota.runtime import RunContext
+from checkota.telegram import TgNotify
 
 
 def create_notifier(ctx: RunContext, args: argparse.Namespace) -> Optional[TgNotify]:

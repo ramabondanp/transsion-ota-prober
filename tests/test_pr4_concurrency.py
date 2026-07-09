@@ -2,12 +2,12 @@
 
 from unittest.mock import MagicMock
 
-from modules.paths import ensure_vendor_on_path
+from checkota.paths import ensure_vendor_on_path
 
 ensure_vendor_on_path()  # ensure the vendored `checkin` package is on sys.path
 
-from modules.manager import Config
-from modules.update_checker import UpdateChecker
+from checkota.manager import Config
+from checkota.update_checker import UpdateChecker
 
 
 def _cfg():

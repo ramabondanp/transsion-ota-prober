@@ -155,7 +155,7 @@ sends Telegram notifications.
 ## Install
 
 ```bash
-pip install -e apps/checkota/
+pip install -e .
 ```
 
 This installs the `checkota` command and its dependencies.
@@ -174,7 +174,7 @@ After install, use the `checkota` command directly:
 checkota -c X6873
 
 # All configs in parallel (4 jobs)
-checkota -d apps/checkota/configs/ --jobs 4
+checkota -d configs/ --jobs 4
 
 # Dry run
 checkota -c X6873 --dry-run
@@ -183,7 +183,7 @@ checkota -c X6873 --dry-run
 checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
 
 # Cap overall runtime (signals in-flight requests to stop, then exits)
-checkota -d apps/checkota/configs/ --jobs 4 --timeout 600
+checkota -d configs/ --jobs 4 --timeout 600
 ```
 
 Telegram env vars: `bot_token`, `chat_id`, `telegraph_token` (for long descriptions).
