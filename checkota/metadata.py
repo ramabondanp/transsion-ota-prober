@@ -95,8 +95,9 @@ def get_ota_metadata(
                 result["post_sdk_level"] = sdk_level
                 try:
                     sdk_int = int(sdk_level)
-                    if sdk_int >= 33:
-                        result["android_version"] = SDK_TO_ANDROID.get(sdk_int)
+                    android = SDK_TO_ANDROID.get(sdk_int) if sdk_int >= 33 else None
+                    if android:
+                        result["android_version"] = android
                 except Exception:
                     pass
 
@@ -109,28 +110,6 @@ def get_ota_metadata(
             if attempt < retries - 1:
                 Log.w(
                     f"Transient ZIP fetch error extracting OTA metadata: {exc}. "
-                    f"Retrying in {delay} seconds... ({attempt + 1}/{retries})"
-                )
-                if stop_event is not None:
-                    if stop_event.wait(delay):
-                        Log.w("OTA metadata fetch interrupted during retry delay.")
-                        return None
-                else:
-                    time.sleep(delay)
-                delay *= 2
-                continue
-            Log.e(f"Error extracting OTA metadata after multiple retries: {exc}")
-            return None
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-        ) as exc:
-            if stop_event is not None and stop_event.is_set():
-                Log.w("OTA metadata fetch interrupted.")
-                return None
-            if attempt < retries - 1:
-                Log.w(
-                    f"Connection error extracting OTA metadata: {exc}. "
                     f"Retrying in {delay} seconds... ({attempt + 1}/{retries})"
                 )
                 if stop_event is not None:

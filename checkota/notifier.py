@@ -45,16 +45,6 @@ def is_sweep_mode(args: argparse.Namespace) -> bool:
     return getattr(args, "config_dir", None) is not None
 
 
-def telegram_available(ctx: RunContext, args: argparse.Namespace) -> bool:
-    """True if a TgNotify would be created (env vars set, not skipped/disabled)."""
-    if getattr(args, "skip_telegram", False) or getattr(args, "register_update", False):
-        return False
-    env = ctx.env
-    return bool(
-        env.get("bot_token") and env.get("chat_id") and env.get("telegraph_token")
-    )
-
-
 def build_notification_message(update: VariantUpdate) -> str:
     E = html.escape  # local alias; quote=False keeps URLs unquoted
     region_line_raw = f" ({update.region_name})" if update.region_name else ""

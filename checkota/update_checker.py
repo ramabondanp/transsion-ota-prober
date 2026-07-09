@@ -91,6 +91,7 @@ class UpdateChecker:
         retries = 3
         delay = 1
         data = self._build_request()
+        response = None
 
         for attempt in range(retries):
             if self._stopped():
@@ -140,7 +141,7 @@ class UpdateChecker:
                     Log.w("Update check interrupted.")
                     return False, None
                 Log.e(f"Update check failed: {exc}")
-                if debug and "response" in locals():
+                if debug and response is not None:
                     Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
                         response.content
                     )
@@ -148,7 +149,7 @@ class UpdateChecker:
                 return False, None
             except Exception as exc:
                 Log.e(f"Update check failed: {exc}")
-                if debug and "response" in locals():
+                if debug and response is not None:
                     Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
                         response.content
                     )

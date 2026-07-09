@@ -39,6 +39,3 @@ DESC_SECTION_RE = re.compile(
     r"(<b>Title:</b> .*?\n(?:<b>OS:</b> .*?\n)?\n?)(.*?)(\n\n?<b>Size:</b>)", re.DOTALL
 )
 SENTENCE_BOUNDARY_RE = re.compile(r"\.\s+")
-BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
-HTML_TAG_RE = re.compile(r"<[^>]*>")
-URL_PAREN_RE = re.compile(r"\s*\(http[s]?://\S+\)?")
