@@ -3,7 +3,6 @@ import datetime
 import gzip
 from pathlib import Path
 import threading
-from typing import Dict, Optional, Tuple
 
 import requests
 from google.protobuf import text_format
@@ -26,9 +25,9 @@ class UpdateChecker:
     def __init__(
         self,
         cfg: Config,
-        session: Optional[requests.Session] = None,
-        imei: Optional[str] = None,
-        stop_event: Optional[threading.Event] = None,
+        session: requests.Session | None = None,
+        imei: str | None = None,
+        stop_event: threading.Event | None = None,
     ):
         self.cfg = cfg
         self.session = session or requests.Session()
@@ -84,7 +83,7 @@ class UpdateChecker:
 
         return gzip.compress(payload.SerializeToString())
 
-    def check(self, debug: bool = False) -> Tuple[bool, Optional[Dict]]:
+    def check(self, debug: bool = False) -> tuple[bool, dict | None]:
         Log.i("Checking for updates...")
         if self.imei:
             Log.i(f"Using custom IMEI: {self.imei}")
@@ -119,12 +118,15 @@ class UpdateChecker:
                 has_update = info.get("found", False) and "url" in info
                 return has_update, info
 
-            except requests.exceptions.Timeout:
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as exc:
                 if self._stopped():
                     Log.w("Update check interrupted.")
                     return False, None
                 Log.w(
-                    f"Update check timed out. Retrying in {delay} seconds... ({attempt + 1}/{retries})"
+                    f"Update check network error: {exc}. Retrying in {delay} seconds... ({attempt + 1}/{retries})"
                 )
                 if attempt < retries - 1:
                     if self.stop_event is not None and self.stop_event.wait(delay):
@@ -134,7 +136,9 @@ class UpdateChecker:
                         time.sleep(delay)
                     delay *= 2
                 else:
-                    Log.e("Update check failed after multiple retries due to timeout.")
+                    Log.e(
+                        f"Update check failed after multiple retries due to network error: {exc}"
+                    )
                     return False, None
             except requests.exceptions.RequestException as exc:
                 if self._stopped():
@@ -157,7 +161,7 @@ class UpdateChecker:
                 return False, None
         return False, None
 
-    def _parse(self, resp: checkin_generator_pb2.AndroidCheckinResponse) -> Dict:
+    def _parse(self, resp: checkin_generator_pb2.AndroidCheckinResponse) -> dict:
         info = {
             "device": self.cfg.model,
             "found": False,

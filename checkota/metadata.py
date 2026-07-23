@@ -2,7 +2,6 @@ import threading
 import datetime
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -27,9 +26,9 @@ METADATA_KEYS = {
 
 def get_ota_metadata(
     url: str,
-    session: Optional[requests.Session] = None,
-    stop_event: Optional[threading.Event] = None,
-) -> Optional[Dict[str, str]]:
+    session: requests.Session | None = None,
+    stop_event: threading.Event | None = None,
+) -> dict[str, str] | None:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
     if stop_event is not None and stop_event.is_set():
         Log.w("OTA metadata fetch interrupted before start.")
@@ -54,7 +53,7 @@ def get_ota_metadata(
                 Log.w("Could not extract OTA metadata (empty content).")
                 return None
 
-            meta: Dict[str, str] = {}
+            meta: dict[str, str] = {}
             for line in content.splitlines():
                 if "=" in line:
                     key, value = line.strip().split("=", 1)
@@ -62,7 +61,7 @@ def get_ota_metadata(
                     if key in METADATA_KEYS:
                         meta[key] = value.strip()
 
-            result: Dict[str, str] = {}
+            result: dict[str, str] = {}
             fingerprint = meta.get("post-build", "")
             if not fingerprint:
                 Log.w("post-build not found in metadata.")
@@ -138,7 +137,7 @@ def get_ota_metadata(
     return None
 
 
-def extract_incremental_from_fingerprint(fingerprint: str) -> Optional[str]:
+def extract_incremental_from_fingerprint(fingerprint: str) -> str | None:
     if not fingerprint:
         return None
     try:
@@ -155,8 +154,8 @@ def extract_incremental_from_fingerprint(fingerprint: str) -> Optional[str]:
 
 
 def build_sdk_strings(
-    sdk_level: Optional[str], android_version: Optional[str]
-) -> Tuple[str, str, str]:
+    sdk_level: str | None, android_version: str | None
+) -> tuple[str, str, str]:
     if sdk_level is None:
         return "", "", ""
 

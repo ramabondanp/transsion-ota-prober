@@ -8,7 +8,6 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 from checkota.logging import Log
 from checkota.manager import Config
@@ -150,7 +149,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
 def _collect_config_paths(
     parser: argparse.ArgumentParser, args: argparse.Namespace
-) -> List[Path]:
+) -> list[Path]:
     if args.config:
         return [args.config]
     if not args.config_dir.exists() or not args.config_dir.is_dir():
@@ -169,7 +168,7 @@ def _collect_config_paths(
 
 
 def _run_sequential(
-    ctx: RunContext, args: argparse.Namespace, config_paths: List[Path]
+    ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
 ) -> int:
     exit_code = 0
     total = len(config_paths)
@@ -191,8 +190,8 @@ def _run_sequential(
 
 
 def _run_global_pool(
-    ctx: RunContext, args: argparse.Namespace, config_paths: List[Path]
-) -> Tuple[int, ThreadPoolExecutor]:
+    ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
+) -> tuple[int, ThreadPoolExecutor]:
     """Run every (config, variant) pair through a single pool sized by --jobs.
 
     Total in-flight requests never exceed --jobs regardless of how many variants
@@ -207,12 +206,12 @@ def _run_global_pool(
         path: Path
         load_output: str
         status: int
-        variants: List[Config]
-        results: Dict[int, str] = field(default_factory=dict)
+        variants: list[Config]
+        results: dict[int, str] = field(default_factory=dict)
 
     # Load every config's variants upfront (YAML parse only, no network),
     # capturing any filter/error output into a per-config buffer.
-    config_jobs: Dict[int, _ConfigJob] = {}
+    config_jobs: dict[int, _ConfigJob] = {}
     for idx, config_path in enumerate(config_paths, start=1):
         buf = io.StringIO()
         with Log.capture(buf):
@@ -227,7 +226,7 @@ def _run_global_pool(
 
     def variant_worker(
         config_idx: int, variant_idx: int, variants_total: int, cfg: Config, path: Path
-    ) -> Tuple[int, int, int, str]:
+    ) -> tuple[int, int, int, str]:
         if ctx.stop_event.is_set():
             return config_idx, variant_idx, 130, ""
         local_args = argparse.Namespace(**vars(args))
@@ -251,7 +250,7 @@ def _run_global_pool(
     executor = ThreadPoolExecutor(max_workers=args.jobs)
     # Count of variant futures still pending per config; a config is ready to
     # flush (in order) once its count hits zero.
-    pending: Dict[int, int] = {}
+    pending: dict[int, int] = {}
     futures = []
     try:
         for cj in config_jobs.values():

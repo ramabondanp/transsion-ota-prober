@@ -6,8 +6,8 @@ from checkota.paths import ensure_vendor_on_path
 
 ensure_vendor_on_path()  # ensure the vendored `checkin` package is on sys.path
 
-from checkota.manager import Config
-from checkota.update_checker import UpdateChecker
+from checkota.manager import Config  # noqa: E402
+from checkota.update_checker import UpdateChecker  # noqa: E402
 
 
 def _cfg():

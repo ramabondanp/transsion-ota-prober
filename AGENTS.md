@@ -147,7 +147,7 @@ Same two-stage approach as Telegram:
 | `DESC_SECTION_RE` mismatch with OS line | `constants.py` | Trailing `\n` → optional `\n?` |
 | `OP-M1` region mis-parsed | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
 | OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, closes sessions, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
-| Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.9`); `cancel_futures=True` unconditional |
+| Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.10`); `cancel_futures=True` unconditional |
 | Vendor dir missing on non-editable install | `checkota.py` | Fail loud if absent; `CHECKOTA_VENDOR_DIR` env override |
 | `--update-incremental` skipped known titles | `checkota.py` | Removed early return for non-force |
 | Shutdown race (sessions closed mid-run) | `checkota.py` | Set `stop_event` → `shutdown(wait=True)` → close sessions |

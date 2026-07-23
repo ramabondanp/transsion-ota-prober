@@ -12,6 +12,8 @@ directory the easy way. Instead we:
 ZIP64 is handled because full OTA packages routinely exceed 4 GiB.
 """
 
+from __future__ import annotations
+
 import struct
 import time
 import zlib

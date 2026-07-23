@@ -2,7 +2,6 @@
 
 import argparse
 import html
-from typing import Optional
 
 from checkota.logging import Log
 from checkota.models import VariantUpdate
@@ -10,7 +9,7 @@ from checkota.runtime import RunContext
 from checkota.telegram import TgNotify
 
 
-def create_notifier(ctx: RunContext, args: argparse.Namespace) -> Optional[TgNotify]:
+def create_notifier(ctx: RunContext, args: argparse.Namespace) -> TgNotify | None:
     if args.skip_telegram or args.register_update:
         return None
 

@@ -5,7 +5,7 @@ actions, and orchestrate per-config / per-variant processing.
 import argparse
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, cast
+from typing import cast
 
 from checkota.description import format_update_description
 from checkota.logging import Log
@@ -58,8 +58,8 @@ def config_from_fingerprint(fingerprint: str) -> Config:
 
 
 def log_variant_header(
-    cfg: Config, variant_label: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
+    cfg: Config, variant_label: str | None
+) -> tuple[str | None, str | None]:
     fingerprint = cfg.fingerprint()
     region_name = region_from_product(cfg.product)
     region_code = region_code_from_product(cfg.product)
@@ -87,14 +87,14 @@ def log_variant_header(
 _CACHE_MISS = object()
 
 
-def get_cached_ota_metadata(ctx: RunContext, url: str) -> Optional[Dict[str, str]]:
+def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
     if ctx.stop_event.is_set():
         return None
-    fetcher_event: Optional[threading.Event] = None
+    fetcher_event: threading.Event | None = None
     with ctx.cache_lock:
         cached = ctx.metadata_cache.get(url, _CACHE_MISS)
         if cached is not _CACHE_MISS:
-            return cast(Optional[Dict[str, str]], cached)
+            return cast(dict[str, str] | None, cached)
         # Another worker is already fetching this URL; capture its event, then
         # release the lock before waiting so the fetcher can re-acquire it.
         inflight = ctx._metadata_inflight.get(url)
@@ -112,13 +112,13 @@ def get_cached_ota_metadata(ctx: RunContext, url: str) -> Optional[Dict[str, str
         with ctx.cache_lock:
             cached = ctx.metadata_cache.get(url, _CACHE_MISS)
             return (
-                cast(Optional[Dict[str, str]], cached)
+                cast(dict[str, str] | None, cached)
                 if cached is not _CACHE_MISS
                 else None
             )
 
     assert fetcher_event is not None
-    ota_meta: Optional[Dict[str, str]] = None
+    ota_meta: dict[str, str] | None = None
     try:
         ota_meta = get_ota_metadata(
             url, session=ctx.session(), stop_event=ctx.stop_event
@@ -143,8 +143,8 @@ def collect_update_info(
     cfg: Config,
     config_path: Path,
     args: argparse.Namespace,
-    variant_label: Optional[str] = None,
-) -> Tuple[int, Optional[VariantUpdate]]:
+    variant_label: str | None = None,
+) -> tuple[int, VariantUpdate | None]:
     update_incremental_only = bool(getattr(args, "update_incremental", False))
 
     region_name, _ = log_variant_header(cfg, variant_label)
@@ -190,7 +190,8 @@ def collect_update_info(
         formatted_desc = format_update_description(desc)
         Log.raw(formatted_desc if formatted_desc else desc)
 
-    is_new_update = title not in ctx.processed_titles
+    with ctx.file_lock:
+        is_new_update = title not in ctx.processed_titles
     if args.register_update:
         if not is_new_update:
             Log.i(
@@ -446,7 +447,7 @@ def process_config_variant(
     cfg: Config,
     config_path: Path,
     args: argparse.Namespace,
-    variant_label: Optional[str] = None,
+    variant_label: str | None = None,
 ) -> int:
     status, update = collect_update_info(ctx, cfg, config_path, args, variant_label)
     if status != 0 or update is None:
@@ -456,7 +457,7 @@ def process_config_variant(
 
 def load_config_variants(
     config_path: Path, args: argparse.Namespace
-) -> Tuple[int, List[Config]]:
+) -> tuple[int, list[Config]]:
     """Load a config file and return its (region-filtered) variant Config list.
 
     Returns (status, configs). status is non-zero on a load/filter error, in

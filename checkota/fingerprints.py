@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Set
 
 from checkota.logging import Log
 
@@ -8,7 +7,7 @@ from checkota.logging import Log
 MAX_PROCESSED_ENTRIES = 2000
 
 
-def load_processed_titles(path: Path) -> Set[str]:
+def load_processed_titles(path: Path) -> set[str]:
     if not path.exists():
         return set()
     try:

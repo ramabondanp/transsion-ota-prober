@@ -8,7 +8,6 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -16,18 +15,19 @@ from requests.adapters import HTTPAdapter
 from checkota.fingerprints import load_processed_titles
 from checkota.logging import Log
 from checkota.metadata import processed_updates_path
+from checkota.models import PendingNotification
 
 
 @dataclass
 class RunContext:
-    env: Dict[str, str]
+    env: dict[str, str]
     processed_path: Path
-    processed_titles: Set[str]
+    processed_titles: set[str]
     dry_run: bool
-    metadata_cache: Dict[str, Optional[Dict[str, str]]] = field(default_factory=dict)
+    metadata_cache: dict[str, dict[str, str] | None] = field(default_factory=dict)
     # URL -> Event for an in-flight metadata fetch, so concurrent workers sharing
     # a URL fetch exactly once (see processor.get_cached_ota_metadata).
-    _metadata_inflight: Dict[str, threading.Event] = field(
+    _metadata_inflight: dict[str, threading.Event] = field(
         default_factory=dict, repr=False
     )
     file_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -37,11 +37,11 @@ class RunContext:
     session_lock: threading.Lock = field(default_factory=threading.Lock)
     pending_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
-    pending_notifications: List["PendingNotification"] = field(default_factory=list)
+    pending_notifications: list["PendingNotification"] = field(default_factory=list)
     telegram_notice_printed: bool = False
     pool_size: int = 10
     _local: threading.local = field(default_factory=threading.local, repr=False)
-    _sessions: List[requests.Session] = field(default_factory=list, repr=False)
+    _sessions: list[requests.Session] = field(default_factory=list, repr=False)
 
     def session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
@@ -108,7 +108,7 @@ def install_interrupt_handler(ctx: RunContext):
     return previous_handler
 
 
-def start_watchdog(ctx: RunContext, timeout: float) -> Optional[threading.Timer]:
+def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
     """Start a daemon timer that hard-exits the process when the wall-clock
     budget is exceeded. Returns the timer (cancel it in a finally block), or
     None when no timeout is configured.

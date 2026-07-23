@@ -1,6 +1,6 @@
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 import re
 
 import yaml
@@ -18,15 +18,15 @@ class Config:
     device: str
     oem: str
     product: str
-    variant: Optional[str] = None
-    variant_index: Optional[int] = None
+    variant: str | None = None
+    variant_index: int | None = None
 
     @classmethod
     def _from_dict(
         cls,
-        data: Dict[str, str],
-        variant_name: Optional[str] = None,
-        variant_index: Optional[int] = None,
+        data: dict[str, str],
+        variant_name: str | None = None,
+        variant_index: int | None = None,
     ) -> "Config":
         field_names = {field.name for field in fields(cls)}
         required_fields = field_names - {"variant", "variant_index"}
@@ -47,11 +47,11 @@ class Config:
         return cls(**filtered)
 
     @classmethod
-    def from_yaml(cls, file: Path) -> List["Config"]:
+    def from_yaml(cls, file: Path) -> list["Config"]:
         if not file.is_file():
             raise FileNotFoundError(f"Config file not found: {file}")
 
-        with open(file, "r", encoding="utf-8") as handle:
+        with open(file, encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
 
         if not isinstance(data, dict):
@@ -91,14 +91,14 @@ class Config:
         )
 
 
-def region_code_from_product(product: str) -> Optional[str]:
+def region_code_from_product(product: str) -> str | None:
     """Extract region code from product name (everything after the first '-')."""
     if not product or "-" not in product:
         return None
     return product.split("-", 1)[1].strip().upper()
 
 
-def region_from_product(product: str) -> Optional[str]:
+def region_from_product(product: str) -> str | None:
     """Get human-readable region name from product name."""
     code = region_code_from_product(product)
     return REGION_CODE_MAP.get(code) if code else None
@@ -110,7 +110,7 @@ _FINGERPRINT_RE = re.compile(
 )
 
 
-def parse_fingerprint(fingerprint: str) -> Optional[Dict[str, str]]:
+def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
     match = _FINGERPRINT_RE.match((fingerprint or "").strip())
     return match.groupdict() if match else None
 
@@ -171,7 +171,7 @@ def update_config_from_fingerprint(
             return f"{new_before_comment}{sep}{comment}{newline}"
         return f"{new_before_comment}{newline}"
 
-    def find_key_line(key: str, start_idx: int, end_indent: int) -> Optional[int]:
+    def find_key_line(key: str, start_idx: int, end_indent: int) -> int | None:
         idx = start_idx
         while idx < len(lines):
             line = lines[idx]
@@ -204,8 +204,8 @@ def update_config_from_fingerprint(
         data = None
 
     if isinstance(data, dict) and isinstance(data.get("variants"), list):
-        variants: List[Dict[str, Any]] = data["variants"]
-        match_idx: Optional[int] = None
+        variants: list[dict[str, Any]] = data["variants"]
+        match_idx: int | None = None
         if cfg.variant_index is not None and 0 <= cfg.variant_index < len(variants):
             candidate = variants[cfg.variant_index]
             if isinstance(candidate, dict):
