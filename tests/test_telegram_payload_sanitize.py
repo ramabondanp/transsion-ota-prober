@@ -22,7 +22,7 @@ class _Session:
     def __init__(self):
         self.posts = []
 
-    def post(self, url, json=None, timeout=None):
+    def post(self, url, json=None, timeout=None, **kwargs):
         self.posts.append((url, json, timeout))
         return _Response()
 

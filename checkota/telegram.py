@@ -31,7 +31,12 @@ class TgNotify:
         self.chat_id = chat_id
         self.telegraph_token = telegraph_token
         self.url = f"https://api.telegram.org/bot{token}"
-        self.session = session or requests.Session()
+        if session is None:
+            sess = requests.Session()
+            sess.trust_env = False
+            self.session = sess
+        else:
+            self.session = session
 
     @staticmethod
     def _html_to_telegraph_nodes(html_content: str) -> list:
@@ -113,7 +118,12 @@ class TgNotify:
                 "return_content": False,
             }
 
-            response = self.session.post(TELEGRAPH_API_URL, json=payload, timeout=10)
+            response = self.session.post(
+                TELEGRAPH_API_URL,
+                json=payload,
+                proxies={"http": None, "https": None, "all": None},
+                timeout=10,
+            )
             response.raise_for_status()
 
             result = response.json()
@@ -320,7 +330,10 @@ class TgNotify:
                 }
 
             response = self.session.post(
-                f"{self.url}/sendMessage", json=payload, timeout=15
+                f"{self.url}/sendMessage",
+                json=payload,
+                proxies={"http": None, "https": None, "all": None},
+                timeout=15,
             )
             response.raise_for_status()
 

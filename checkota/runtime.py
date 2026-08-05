@@ -59,6 +59,25 @@ class RunContext:
                 self._sessions.append(session)
         return session
 
+    def direct_session(self) -> requests.Session:
+        """Returns a thread-local direct Session (trust_env=False) that bypasses all
+        proxy environment variables and proxy connection pools. Used for fetching
+        OTA metadata directly from Google CDN.
+        """
+        session = getattr(self._local, "direct_session", None)
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            adapter = HTTPAdapter(
+                pool_connections=self.pool_size, pool_maxsize=self.pool_size
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            self._local.direct_session = session
+            with self.session_lock:
+                self._sessions.append(session)
+        return session
+
     def stop(self) -> None:
         self.stop_event.set()
         with self.session_lock:

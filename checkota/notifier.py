@@ -29,7 +29,7 @@ def create_notifier(ctx: RunContext, args: argparse.Namespace) -> TgNotify | Non
         return None
 
     try:
-        return TgNotify(token, chat, telegraph_token, session=ctx.session())
+        return TgNotify(token, chat, telegraph_token, session=ctx.direct_session())
     except ValueError as exc:
         Log.e(f"Telegram setup failed: {exc}")
         return None

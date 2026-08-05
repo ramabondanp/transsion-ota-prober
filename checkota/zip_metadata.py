@@ -84,7 +84,12 @@ def _range_get(
 
     for attempt in range(attempts):
         try:
-            resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+            resp = session.get(
+                url,
+                headers=hdrs,
+                proxies={"http": None, "https": None, "all": None},
+                timeout=_timeout_pair(timeout),
+            )
             resp.raise_for_status()
         except requests.exceptions.HTTPError as exc:
             status = getattr(exc.response, "status_code", None)
@@ -134,7 +139,11 @@ def _probe_size(
     resp = None
     try:
         resp = session.get(
-            url, headers=hdrs, timeout=_timeout_pair(timeout), stream=True
+            url,
+            headers=hdrs,
+            proxies={"http": None, "https": None, "all": None},
+            timeout=_timeout_pair(timeout),
+            stream=True,
         )
         resp.raise_for_status()
         content_range = resp.headers.get("Content-Range", "")
@@ -296,7 +305,11 @@ def fetch_zip_member(
     retryable HTTP statuses) raise RemoteZipTransientError so callers can
     distinguish structural from transient failures.
     """
-    sess = session or requests.Session()
+    if session is None:
+        sess = requests.Session()
+        sess.trust_env = False
+    else:
+        sess = session
     hdrs = headers or {}
     target = member.encode("utf-8")
 

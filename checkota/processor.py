@@ -132,7 +132,7 @@ def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
         ota_meta: dict[str, str] | None = None
         try:
             ota_meta = get_ota_metadata(
-                url, session=ctx.session(), stop_event=ctx.stop_event
+                url, session=ctx.direct_session(), stop_event=ctx.stop_event
             )
         finally:
             with ctx.cache_lock:

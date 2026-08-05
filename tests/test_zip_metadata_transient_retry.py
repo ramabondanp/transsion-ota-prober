@@ -134,7 +134,7 @@ def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
     monkeypatch.setattr("checkota.zip_metadata.time.sleep", lambda _s: None)
     calls = {"n": 0}
 
-    def fake_get(url, headers, timeout):
+    def fake_get(url, headers, timeout, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise requests.exceptions.ConnectionError("transient")
@@ -155,7 +155,7 @@ def test_range_get_attempts_2_non_retryable_stays_single_call():
     """Non-retryable 416 must raise immediately even with attempts=2."""
     calls = {"n": 0}
 
-    def fake_get(url, headers, timeout):
+    def fake_get(url, headers, timeout, **kwargs):
         calls["n"] += 1
         resp = MagicMock()
         resp.status_code = 416
