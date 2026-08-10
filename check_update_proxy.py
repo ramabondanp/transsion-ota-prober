@@ -252,6 +252,68 @@ def _print_round_report(
         print(f"Failures: {failure_text}")
 
 
+def _print_target_verdict(
+    target: str,
+    results: list[tuple[str, CheckResult]],
+    baselines: list[CheckResult],
+) -> None:
+    """End with an explicit answer to the script's target-search question."""
+    matches = [(country, result) for country, result in results if result.hit]
+    update_count = sum(result.outcome == OUTCOME_UPDATE for _, result in results)
+    failure_count = sum(result.outcome == OUTCOME_FAILED for _, result in results)
+
+    print(f"\n{'=' * 70}")
+    print(f" TARGET SEARCH RESULT: {target!r}")
+    print(f"{'=' * 70}")
+    if matches:
+        print(
+            f"FOUND — {len(matches)} matching OTA response(s) across "
+            f"{len(results)} proxy attempt(s)."
+        )
+        countries = Counter(country for country, _ in matches)
+        print(
+            "Countries: "
+            + ", ".join(
+                f"{country}×{count}" for country, count in sorted(countries.items())
+            )
+        )
+        titles = Counter(result.title for _, result in matches)
+        print("Matching OTA titles:")
+        for title, count in titles.most_common():
+            print(f"  {count:3d}× {title}")
+        print("Matching proxies:")
+        seen_matches: set[tuple[str, str, str, str]] = set()
+        for country, result in sorted(
+            matches,
+            key=lambda item: (item[0], item[1].address, item[1].title),
+        ):
+            match_key = (country, result.address, result.proxy_type, result.title)
+            if match_key in seen_matches:
+                continue
+            seen_matches.add(match_key)
+            print(
+                f"  [{country}] [{result.proxy_type:7s}] {result.address:22s} "
+                f"{result.title}"
+            )
+    else:
+        print(
+            f"NOT FOUND — 0 matching OTA titles across {len(results)} proxy "
+            f"attempt(s) and {update_count} update response(s)."
+        )
+
+    baseline_hits = sum(baseline.hit for baseline in baselines)
+    baseline_titles = list(
+        dict.fromkeys(baseline.title for baseline in baselines if baseline.title)
+    )
+    baseline_state = "MATCH" if baseline_hits else "NO MATCH"
+    baseline_detail = f" — {', '.join(baseline_titles)}" if baseline_titles else ""
+    print(f"Direct baseline: {baseline_state}{baseline_detail}")
+    print(
+        f"Search totals: attempts {len(results)} | updates {update_count} | "
+        f"matches {len(matches)} | failed {failure_count}"
+    )
+
+
 def run_one(
     address: str,
     proxy_type: str,
@@ -478,6 +540,8 @@ def main() -> int:
         file=sys.stderr,
     )
 
+    all_results: list[tuple[str, CheckResult]] = []
+    baselines: list[CheckResult] = []
     for round_number in range(1, args.rounds + 1):
         print(
             f"\n{'=' * 70}\n ROUND {round_number}/{args.rounds} {country_label}  "
@@ -528,9 +592,11 @@ def main() -> int:
             time.monotonic() - started,
         )
 
+        all_results.extend(results)
         baseline, baseline_output = _run_baseline(
             cmd_base, args.target, args.process_timeout
         )
+        baselines.append(baseline)
         print(f"Baseline: {_result_label(baseline, args.target)}")
         if baseline.hit:
             print(baseline_output)
@@ -538,6 +604,7 @@ def main() -> int:
             # Event.wait is interruptible and avoids a fixed-sleep shutdown delay.
             _STOP_EVENT.wait(0.5)
 
+    _print_target_verdict(args.target, all_results, baselines)
     print(f"\n=== DONE {country_label} {args.rounds} rounds ===", file=sys.stderr)
     return 0
 
