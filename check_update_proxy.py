@@ -24,8 +24,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from pathlib import Path
+from statistics import median
 from subprocess import TimeoutExpired
 from typing import NamedTuple
 
@@ -35,6 +37,12 @@ from fetch_spys import fetch_spys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROCESS_TIMEOUT = 35.0
 DEFAULT_MAX_WORKERS = 32
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+OUTCOME_UPDATE = "update"
+OUTCOME_NO_UPDATE = "no_update"
+OUTCOME_FAILED = "failed"
+OUTCOME_CANCELLED = "cancelled"
 
 _ACTIVE_PROCESSES: set[subprocess.Popen[bytes]] = set()
 _ACTIVE_LOCK = threading.Lock()
@@ -45,10 +53,10 @@ class CheckResult(NamedTuple):
     address: str
     proxy_type: str
     duration: float
+    outcome: str
     hit: bool
     title: str
-    status: str
-    error: str
+    detail: str
 
 
 def _positive_int(value: str) -> int:
@@ -110,37 +118,138 @@ def unregister_process(process: subprocess.Popen[bytes]) -> None:
         _ACTIVE_PROCESSES.discard(process)
 
 
-def _proxy_error(output: str) -> str:
+def _clean_output_line(line: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", line).strip()
+
+
+def _network_error(output: str) -> str:
+    terminal_section = output.rpartition("Update check failed")[2] or output
     markers = (
+        ("Missing dependencies for SOCKS support", "SOCKS dependency missing"),
         ("ConnectTimeout", "ConnectTimeout"),
+        ("Read timed out", "ReadTimeout"),
         ("No route", "No route"),
         ("ProxyError", "ProxyError"),
-        ("Read timed out", "ReadTimeout"),
-        ("Tunnel", "TunnelErr"),
-        ("Missing dependencies for SOCKS support", "SOCKS dependency missing"),
+        ("Tunnel", "TunnelError"),
+        ("Connection refused", "Connection refused"),
+        ("NameResolutionError", "DNS error"),
     )
-    return next((label for marker, label in markers if marker in output), "")
+    return next(
+        (label for marker, label in markers if marker in terminal_section),
+        "Network error",
+    )
 
 
 def _summarize_output(
     output: str, returncode: int, target: str
-) -> tuple[bool, str, str]:
-    title = next(
-        (line.strip() for line in output.splitlines() if "New OTA" in line), ""
+) -> tuple[str, bool, str, str]:
+    """Classify final checkota state, ignoring transient errors after recovery."""
+    clean_lines = [_clean_output_line(line) for line in output.splitlines()]
+    update_line = next(
+        (line for line in clean_lines if "New OTA update found:" in line), ""
     )
-    hit = target in output
+    title = update_line.partition("New OTA update found:")[2].strip()
+    if title:
+        return OUTCOME_UPDATE, target in title, title, ""
 
-    if hit:
-        status = f"HIT {target} -> {(title or 'target found')[:80]}"
-    elif title:
-        status = title[:90]
-    elif "No updates" in output:
-        status = "No updates found"
-    elif returncode:
-        status = f"FAILED (exit {returncode})"
-    else:
-        status = "No update result"
-    return hit, title, status
+    terminal_network_failure = any(
+        marker in output
+        for marker in (
+            "Update check failed after multiple retries",
+            "Update check failed:",
+            "SOCKS support",
+        )
+    )
+    if terminal_network_failure:
+        return OUTCOME_FAILED, False, "", _network_error(output)
+    if returncode:
+        detail = next(
+            (line.lstrip("✗!=> ") for line in reversed(clean_lines) if line),
+            f"exit {returncode}",
+        )
+        return OUTCOME_FAILED, False, "", detail
+    if any("No updates found" in line for line in clean_lines):
+        return OUTCOME_NO_UPDATE, False, "", ""
+    return OUTCOME_FAILED, False, "", "No conclusive result"
+
+
+def _result_label(result: CheckResult, target: str) -> str:
+    if result.outcome == OUTCOME_UPDATE:
+        marker = f"HIT {target}" if result.hit else "UPDATE"
+        return f"{marker:<10} {result.title}"
+    if result.outcome == OUTCOME_NO_UPDATE:
+        return "NO UPDATE"
+    if result.outcome == OUTCOME_CANCELLED:
+        return f"CANCELLED  {result.detail}"
+    return f"FAILED     {result.detail}"
+
+
+def _print_round_report(
+    round_number: int,
+    results: list[tuple[str, CheckResult]],
+    proxy_count: int,
+    target: str,
+    wall_time: float,
+) -> None:
+    counts = Counter(result.outcome for _, result in results)
+    conclusive = counts[OUTCOME_UPDATE] + counts[OUTCOME_NO_UPDATE]
+    hits = sum(result.hit for _, result in results)
+    success_rate = 100 * conclusive / proxy_count if proxy_count else 0
+
+    print(f"\n--- ROUND {round_number} REPORT ---")
+    print(
+        f"Checked {len(results)}/{proxy_count} in {wall_time:.1f}s | "
+        f"conclusive {conclusive} ({success_rate:.1f}%) | "
+        f"updates {counts[OUTCOME_UPDATE]} | no update {counts[OUTCOME_NO_UPDATE]} | "
+        f"failed {counts[OUTCOME_FAILED]} | hits {target!r}: {hits}"
+    )
+
+    print("Country  Checked  Update  None  Failed  Hit  Success  Median")
+    by_country: dict[str, list[CheckResult]] = defaultdict(list)
+    for country, result in results:
+        by_country[country].append(result)
+    for country in sorted(by_country):
+        country_results = by_country[country]
+        country_counts = Counter(result.outcome for result in country_results)
+        country_conclusive = (
+            country_counts[OUTCOME_UPDATE] + country_counts[OUTCOME_NO_UPDATE]
+        )
+        country_hits = sum(result.hit for result in country_results)
+        country_rate = 100 * country_conclusive / len(country_results)
+        country_median = median(result.duration for result in country_results)
+        print(
+            f"{country:7s} {len(country_results):7d} {country_counts[OUTCOME_UPDATE]:7d} "
+            f"{country_counts[OUTCOME_NO_UPDATE]:5d} {country_counts[OUTCOME_FAILED]:7d} "
+            f"{country_hits:4d} {country_rate:7.1f}% {country_median:6.1f}s"
+        )
+
+    update_locations: dict[str, Counter[str]] = defaultdict(Counter)
+    for country, result in results:
+        if result.outcome == OUTCOME_UPDATE:
+            update_locations[result.title][country] += 1
+    if update_locations:
+        print("Updates observed:")
+        for title, locations in sorted(
+            update_locations.items(), key=lambda item: (-sum(item[1].values()), item[0])
+        ):
+            location_text = ", ".join(
+                f"{country}×{count}" for country, count in sorted(locations.items())
+            )
+            hit_marker = f" [HIT {target}]" if target in title else ""
+            print(
+                f"  {sum(locations.values()):3d}× {title}{hit_marker} ({location_text})"
+            )
+
+    failures = Counter(
+        result.detail
+        for _, result in results
+        if result.outcome == OUTCOME_FAILED and result.detail
+    )
+    if failures:
+        failure_text = ", ".join(
+            f"{name}={count}" for name, count in failures.most_common()
+        )
+        print(f"Failures: {failure_text}")
 
 
 def run_one(
@@ -155,7 +264,7 @@ def run_one(
     normalized_type = proxy_type or "?"
     if _STOP_EVENT.is_set():
         return CheckResult(
-            address, normalized_type, 0.0, False, "", "CANCELLED", "Interrupted"
+            address, normalized_type, 0.0, OUTCOME_CANCELLED, False, "", "Interrupted"
         )
 
     scheme = "socks5" if "SOCKS" in normalized_type.upper() else "http"
@@ -188,9 +297,9 @@ def run_one(
                 address,
                 normalized_type,
                 time.monotonic() - started,
+                OUTCOME_CANCELLED,
                 False,
                 "",
-                "CANCELLED",
                 "Interrupted",
             )
 
@@ -203,31 +312,33 @@ def run_one(
                 address,
                 normalized_type,
                 time.monotonic() - started,
+                OUTCOME_FAILED,
                 False,
                 "",
-                "TIMEOUT",
-                "Timeout",
+                "Process timeout",
             )
 
         duration = time.monotonic() - started
-        hit, title, status = _summarize_output(output, process.returncode or 0, target)
+        outcome, hit, title, detail = _summarize_output(
+            output, process.returncode or 0, target
+        )
         return CheckResult(
             address,
             normalized_type,
             duration,
+            outcome,
             hit,
             title,
-            status,
-            _proxy_error(output),
+            detail,
         )
     except (OSError, ValueError) as exc:
         return CheckResult(
             address,
             normalized_type,
             time.monotonic() - started,
+            OUTCOME_FAILED,
             False,
             "",
-            f"EXC {exc}",
             str(exc),
         )
     finally:
@@ -237,7 +348,7 @@ def run_one(
 
 def _run_baseline(
     cmd_base: Sequence[str], target: str, timeout: float
-) -> tuple[str, bool, str]:
+) -> tuple[CheckResult, str]:
     try:
         result = subprocess.run(
             cmd_base,
@@ -250,21 +361,17 @@ def _run_baseline(
             check=False,
         )
     except TimeoutExpired:
-        return "TIMEOUT", False, ""
+        return CheckResult(
+            "direct", "DIRECT", timeout, OUTCOME_FAILED, False, "", "Timeout"
+        ), ""
     except OSError as exc:
-        return f"FAILED: {exc}", False, ""
+        return CheckResult(
+            "direct", "DIRECT", 0.0, OUTCOME_FAILED, False, "", str(exc)
+        ), ""
 
     output = (result.stdout or "") + (result.stderr or "")
-    title = next(
-        (line.strip() for line in output.splitlines() if "New OTA" in line), ""
-    )
-    if not title:
-        title = (
-            "No updates found"
-            if "No updates" in output
-            else f"exit {result.returncode}"
-        )
-    return title, target in output, output
+    outcome, hit, title, detail = _summarize_output(output, result.returncode, target)
+    return CheckResult("direct", "DIRECT", 0.0, outcome, hit, title, detail), output
 
 
 def main() -> int:
@@ -398,11 +505,9 @@ def main() -> int:
                 result = future.result()
                 country = futures[future]
                 results.append((country, result))
-                flag = " *** HIT ***" if result.hit else ""
                 print(
-                    f"[{result.duration:4.1f}s] [{country}] [{result.proxy_type:7s}] "
-                    f"{result.address:22s} -> {result.status[:65]:65s} "
-                    f"{result.error}{flag}",
+                    f"[{result.duration:5.1f}s] [{country}] [{result.proxy_type:7s}] "
+                    f"{result.address:22s}  {_result_label(result, args.target)}",
                     flush=True,
                 )
         except KeyboardInterrupt:
@@ -415,21 +520,19 @@ def main() -> int:
         else:
             executor.shutdown(wait=True)
 
-        hits = sum(result.hit for _, result in results)
-        reachable = sum(bool(result.title) for _, result in results)
-        print(
-            f"-> R{round_number} wall {time.monotonic() - started:.1f}s "
-            f"reachable {reachable}/{len(proxies)} hits {args.target!r}: {hits}"
+        _print_round_report(
+            round_number,
+            results,
+            len(proxies),
+            args.target,
+            time.monotonic() - started,
         )
 
-        baseline, baseline_hit, baseline_output = _run_baseline(
+        baseline, baseline_output = _run_baseline(
             cmd_base, args.target, args.process_timeout
         )
-        print(
-            f"Baseline R{round_number}: {baseline}  {args.target}? "
-            f"{'yes' if baseline_hit else 'no'}"
-        )
-        if baseline_hit:
+        print(f"Baseline: {_result_label(baseline, args.target)}")
+        if baseline.hit:
             print(baseline_output)
         if round_number < args.rounds:
             # Event.wait is interruptible and avoids a fixed-sleep shutdown delay.
