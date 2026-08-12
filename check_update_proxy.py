@@ -226,6 +226,18 @@ def verify_proxy_country(
         session.close()
 
 
+def _verify_paid_proxies(
+    proxies: list[tuple[str, str, str]], max_workers: int
+) -> list[CountryCheck]:
+    """Verify paid proxies concurrently and return results in input order."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(verify_proxy_country, country, address, proxy_type)
+            for country, address, proxy_type in proxies
+        ]
+        return [future.result() for future in futures]
+
+
 def _network_error(output: str) -> str:
     terminal_section = output.rpartition("Update check failed")[2] or output
     markers = (
@@ -589,7 +601,10 @@ def main() -> int:
     parser.add_argument(
         "--workers",
         type=_positive_int,
-        help=f"Parallel checks (default: min(proxy count, {DEFAULT_MAX_WORKERS}))",
+        help=(
+            "Parallel country verifications and OTA checks "
+            f"(default: min(proxy count, {DEFAULT_MAX_WORKERS}))"
+        ),
     )
     parser.add_argument(
         "--process-timeout",
@@ -628,74 +643,86 @@ def main() -> int:
 
     proxies: list[tuple[str, str, str]] = []
     seen_addresses: set[str] = set()
-    for country in countries:
-        if not args.free:
+    if not args.free:
+        paid_proxies: list[tuple[str, str, str]] = []
+        for country in countries:
             try:
                 address = _proxmint_proxy(country, paid_proxy_template)
             except ValueError as exc:
                 parser.error(str(exc))
-            display_address = _redact_proxy_address(address)
+            paid_proxies.append((country, address, "PAID"))
             if not args.verify:
-                seen_addresses.add(address)
-                proxies.append((country, address, "PAID"))
                 print(
-                    f"#  [{country}] {display_address} PAID Proxmint",
+                    f"#  [{country}] {_redact_proxy_address(address)} PAID Proxmint",
                     file=sys.stderr,
                 )
-                continue
 
+        if args.verify:
+            verify_workers = min(args.workers or DEFAULT_MAX_WORKERS, len(paid_proxies))
+            country_checks = _verify_paid_proxies(paid_proxies, verify_workers)
+            for (country, address, proxy_type), country_check in zip(
+                paid_proxies, country_checks, strict=True
+            ):
+                print(
+                    f"#  [{country}] {_redact_proxy_address(address)} "
+                    "PAID Proxmint | verifying...",
+                    file=sys.stderr,
+                )
+                if country_check.matches:
+                    proxies.append((country, address, proxy_type))
+                    print(
+                        f"#  [{country}] VERIFY OK "
+                        f"country={country_check.actual_country} "
+                        f"ip={country_check.ip or '?'}",
+                        file=sys.stderr,
+                    )
+                elif country_check.actual_country:
+                    print(
+                        f"#  [{country}] VERIFY MISMATCH expected={country} "
+                        f"actual={country_check.actual_country} "
+                        f"ip={country_check.ip or '?'}; skipping",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"#  [{country}] VERIFY FAILED "
+                        f"{country_check.detail}; skipping",
+                        file=sys.stderr,
+                    )
+        else:
+            proxies = paid_proxies
+    else:
+        for country in countries:
             print(
-                f"#  [{country}] {display_address} PAID Proxmint | verifying...",
+                f"# Fetching {args.limit} free proxies for {country} -> "
+                f"https://spys.one/free-proxy-list/{country}/",
                 file=sys.stderr,
             )
-            country_check = verify_proxy_country(country, address, "PAID")
-            if country_check.matches:
-                seen_addresses.add(address)
-                proxies.append((country, address, "PAID"))
-                print(
-                    f"#  [{country}] VERIFY OK country={country_check.actual_country} "
-                    f"ip={country_check.ip or '?'}",
-                    file=sys.stderr,
-                )
-            elif country_check.actual_country:
-                print(
-                    f"#  [{country}] VERIFY MISMATCH expected={country} "
-                    f"actual={country_check.actual_country} "
-                    f"ip={country_check.ip or '?'}; skipping",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    f"#  [{country}] VERIFY FAILED {country_check.detail}; skipping",
-                    file=sys.stderr,
-                )
-            continue
-
-        print(
-            f"# Fetching {args.limit} free proxies for {country} -> "
-            f"https://spys.one/free-proxy-list/{country}/",
-            file=sys.stderr,
-        )
-        try:
-            country_proxies = fetch_spys(country, limit=args.limit)
-        except (OSError, requests.RequestException, RuntimeError, ValueError) as exc:
-            # One failed country must not discard successful countries.
-            print(f"Error fetching {country}: {exc}", file=sys.stderr)
-            continue
-
-        added = 0
-        for ip, port, proxy_type, anonymity in country_proxies:
-            address = f"{ip}:{port}"
-            if address in seen_addresses:
+            try:
+                country_proxies = fetch_spys(country, limit=args.limit)
+            except (
+                OSError,
+                requests.RequestException,
+                RuntimeError,
+                ValueError,
+            ) as exc:
+                # One failed country must not discard successful countries.
+                print(f"Error fetching {country}: {exc}", file=sys.stderr)
                 continue
-            seen_addresses.add(address)
-            proxies.append((country, address, proxy_type))
-            added += 1
-            print(
-                f"#  [{country}] {address:22s} {proxy_type:7s} {anonymity}",
-                file=sys.stderr,
-            )
-        print(f"# Got {added} unique free proxies for {country}", file=sys.stderr)
+
+            added = 0
+            for ip, port, proxy_type, anonymity in country_proxies:
+                address = f"{ip}:{port}"
+                if address in seen_addresses:
+                    continue
+                seen_addresses.add(address)
+                proxies.append((country, address, proxy_type))
+                added += 1
+                print(
+                    f"#  [{country}] {address:22s} {proxy_type:7s} {anonymity}",
+                    file=sys.stderr,
+                )
+            print(f"# Got {added} unique free proxies for {country}", file=sys.stderr)
 
     if not proxies:
         source = "free proxies" if args.free else "verified paid proxies"
