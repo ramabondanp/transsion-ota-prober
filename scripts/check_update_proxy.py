@@ -2,13 +2,14 @@
 """
 Check OTA updates through paid Proxmint or free spys.one geo proxies.
 
-By default, use one paid Proxmint proxy per country from the
-``PROXMINT_PROXY_TEMPLATE`` environment variable. Pass ``--verify`` to verify
-paid proxy exit countries before running checkota, or ``--free`` to use only
-proxies fetched from spys.one. Free proxies are not country-verified.
+By default, use one paid Proxmint proxy per country from
+``PROXMINT_PROXY_TEMPLATE`` in ``scripts/.env`` (an exported environment value
+takes precedence). Pass ``--verify`` to verify paid proxy exit countries before
+running checkota, or ``--free`` to use only proxies fetched from spys.one. Free
+proxies are not country-verified.
 
 Usage:
-  export PROXMINT_PROXY_TEMPLATE='user__cr.{country}:password@gw.proxmint.com:823'
+  # scripts/.env: PROXMINT_PROXY_TEMPLATE=user__cr.{country}:password@host:port
   C=KE,NG,KH,PH,CO,SA,CM,MW; python scripts/check_update_proxy.py $C -c CL8 --reg op
   python scripts/check_update_proxy.py PH -c LJ8 --reg op
   python scripts/check_update_proxy.py PH -c LJ8 --reg op --verify
@@ -38,7 +39,9 @@ from typing import Final, NamedTuple
 import requests
 from fetch_spys import fetch_spys
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+ENV_FILE = SCRIPT_DIR / ".env"
 DEFAULT_PROCESS_TIMEOUT = 35.0
 DEFAULT_MAX_WORKERS = 32
 COUNTRY_CHECK_URL: Final = "https://api.country.is/"
@@ -134,6 +137,27 @@ def unregister_process(process: subprocess.Popen[bytes]) -> None:
 
 def _clean_output_line(line: str) -> str:
     return ANSI_ESCAPE_RE.sub("", line).strip()
+
+
+def _load_proxy_template() -> str:
+    """Read the proxy template from the process environment or scripts/.env."""
+    value = os.environ.get(PROXMINT_PROXY_TEMPLATE_ENV, "").strip()
+    if value or not ENV_FILE.is_file():
+        return value
+
+    try:
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"could not read {ENV_FILE}: {exc}") from exc
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, raw_value = stripped.split("=", 1)
+        if name.strip() == PROXMINT_PROXY_TEMPLATE_ENV:
+            return raw_value.strip().strip("'\"")
+    return ""
 
 
 def _proxmint_proxy(country: str, template: str) -> str:
@@ -592,10 +616,14 @@ def main() -> int:
     if not args.target:
         parser.error("target must not be empty")
 
-    paid_proxy_template = os.environ.get(PROXMINT_PROXY_TEMPLATE_ENV, "").strip()
+    try:
+        paid_proxy_template = _load_proxy_template()
+    except ValueError as exc:
+        parser.error(str(exc))
     if not args.free and not paid_proxy_template:
         parser.error(
-            f"{PROXMINT_PROXY_TEMPLATE_ENV} is required unless --free is used"
+            f"{PROXMINT_PROXY_TEMPLATE_ENV} is required in {ENV_FILE} or the environment "
+            "unless --free is used"
         )
 
     proxies: list[tuple[str, str, str]] = []
