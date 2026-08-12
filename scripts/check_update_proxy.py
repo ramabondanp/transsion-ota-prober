@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Check OTA updates through spys.one geo proxies.
+Check OTA updates through paid Proxmint or free spys.one geo proxies.
 
-Workflow: fetch proxies by country -> run checkota through each proxy -> find target text.
+By default, use one paid Proxmint proxy per country from the
+``PROXMINT_PROXY_TEMPLATE`` environment variable. Pass ``--verify`` to verify
+paid proxy exit countries before running checkota, or ``--free`` to use only
+proxies fetched from spys.one. Free proxies are not country-verified.
 
 Usage:
+  export PROXMINT_PROXY_TEMPLATE='user__cr.{country}:password@gw.proxmint.com:823'
+  C=KE,NG,KH,PH,CO,SA,CM,MW; python scripts/check_update_proxy.py $C -c CL8 --reg op
   python scripts/check_update_proxy.py PH -c LJ8 --reg op
-  python scripts/check_update_proxy.py PH -c CL8 -i 185003 --reg op --rounds 3
-  python scripts/check_update_proxy.py PK -c X6871 --reg op --limit 50 --target 16.3
-  python scripts/check_update_proxy.py BD -c LJ8 --reg op --limit 30 --workers 30
+  python scripts/check_update_proxy.py PH -c LJ8 --reg op --verify
+  python scripts/check_update_proxy.py PH -c LJ8 --reg op --free
+  python scripts/check_update_proxy.py PK -c X6871 --reg op --free --limit 50
 
-Country is a spys.one code: PH, BD, PK, NG, KE, MA, GH, etc.
 Requires: requests (and requests[socks] when testing SOCKS proxies)
 """
 
@@ -29,7 +33,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from statistics import median
 from subprocess import TimeoutExpired
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 import requests
 from fetch_spys import fetch_spys
@@ -37,6 +41,9 @@ from fetch_spys import fetch_spys
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROCESS_TIMEOUT = 35.0
 DEFAULT_MAX_WORKERS = 32
+COUNTRY_CHECK_URL: Final = "https://api.country.is/"
+COUNTRY_CHECK_TIMEOUT = 12.0
+PROXMINT_PROXY_TEMPLATE_ENV: Final = "PROXMINT_PROXY_TEMPLATE"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 OUTCOME_UPDATE = "update"
@@ -56,6 +63,13 @@ class CheckResult(NamedTuple):
     outcome: str
     hit: bool
     title: str
+    detail: str
+
+
+class CountryCheck(NamedTuple):
+    matches: bool
+    actual_country: str
+    ip: str
     detail: str
 
 
@@ -120,6 +134,72 @@ def unregister_process(process: subprocess.Popen[bytes]) -> None:
 
 def _clean_output_line(line: str) -> str:
     return ANSI_ESCAPE_RE.sub("", line).strip()
+
+
+def _proxmint_proxy(country: str, template: str) -> str:
+    """Build the authenticated Proxmint endpoint for a country code."""
+    try:
+        address = template.format(country=country.lower())
+    except (IndexError, KeyError, ValueError) as exc:
+        raise ValueError(
+            f"{PROXMINT_PROXY_TEMPLATE_ENV} must contain only a {{country}} placeholder"
+        ) from exc
+    if "{country}" not in template or "@" not in address:
+        raise ValueError(
+            f"{PROXMINT_PROXY_TEMPLATE_ENV} must look like "
+            "user__cr.{country}:password@host:port"
+        )
+    return address
+
+
+def _redact_proxy_address(address: str) -> str:
+    """Hide credentials while retaining the Proxmint country identifier."""
+    if "@" not in address:
+        return address
+
+    credentials, host = address.rsplit("@", 1)
+    username, separator, _password = credentials.partition(":")
+    country_marker = username.rfind("__cr.")
+    if separator and country_marker >= 0:
+        return f"*{username[country_marker:]}:***@{host}"
+    return f"***:***@{host}"
+
+
+def _proxy_url(address: str, proxy_type: str) -> str:
+    scheme = "socks5" if "SOCKS" in proxy_type.upper() else "http"
+    return f"{scheme}://{address}"
+
+
+def verify_proxy_country(
+    expected_country: str,
+    address: str,
+    proxy_type: str,
+    timeout: float = COUNTRY_CHECK_TIMEOUT,
+) -> CountryCheck:
+    """Verify the proxy's apparent country through a public IP lookup."""
+    proxy_url = _proxy_url(address, proxy_type)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.get(
+            COUNTRY_CHECK_URL,
+            proxies={"http": proxy_url, "https": proxy_url},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise TypeError("invalid country lookup response")
+
+        actual = str(payload.get("country", "")).upper()
+        ip = str(payload.get("ip", ""))
+        if re.fullmatch(r"[A-Z]{2}", actual) is None:
+            raise ValueError("country lookup returned no country code")
+        return CountryCheck(actual == expected_country.upper(), actual, ip, "")
+    except (OSError, requests.RequestException, TypeError, ValueError) as exc:
+        return CountryCheck(False, "", "", str(exc))
+    finally:
+        session.close()
 
 
 def _network_error(output: str) -> str:
@@ -324,13 +404,19 @@ def run_one(
     """Run one isolated checkota process through a proxy."""
     started = time.monotonic()
     normalized_type = proxy_type or "?"
+    display_address = _redact_proxy_address(address)
     if _STOP_EVENT.is_set():
         return CheckResult(
-            address, normalized_type, 0.0, OUTCOME_CANCELLED, False, "", "Interrupted"
+            display_address,
+            normalized_type,
+            0.0,
+            OUTCOME_CANCELLED,
+            False,
+            "",
+            "Interrupted",
         )
 
-    scheme = "socks5" if "SOCKS" in normalized_type.upper() else "http"
-    proxy_url = f"{scheme}://{address}"
+    proxy_url = _proxy_url(address, normalized_type)
     env = os.environ.copy()
     env.update(
         {
@@ -356,7 +442,7 @@ def run_one(
         if not register_process(process):
             _terminate_process(process)
             return CheckResult(
-                address,
+                display_address,
                 normalized_type,
                 time.monotonic() - started,
                 OUTCOME_CANCELLED,
@@ -371,7 +457,7 @@ def run_one(
         except TimeoutExpired:
             _terminate_process(process)
             return CheckResult(
-                address,
+                display_address,
                 normalized_type,
                 time.monotonic() - started,
                 OUTCOME_FAILED,
@@ -385,7 +471,7 @@ def run_one(
             output, process.returncode or 0, target
         )
         return CheckResult(
-            address,
+            display_address,
             normalized_type,
             duration,
             outcome,
@@ -395,7 +481,7 @@ def run_one(
         )
     except (OSError, ValueError) as exc:
         return CheckResult(
-            address,
+            display_address,
             normalized_type,
             time.monotonic() - started,
             OUTCOME_FAILED,
@@ -438,7 +524,10 @@ def _run_baseline(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch spys.one proxies by country and batch-check OTA output."
+        description=(
+            "Use paid Proxmint proxies by country, or free spys.one proxies with "
+            "--free, and batch-check OTA output."
+        )
     )
     parser.add_argument(
         "country", help="Comma-separated two-letter country codes, e.g. PH or KE,NG"
@@ -451,11 +540,21 @@ def main() -> int:
     )
     parser.add_argument("-i", "--incremental", help="Incremental override passed to -i")
     parser.add_argument(
+        "--free",
+        action="store_true",
+        help="Use only free spys.one proxies instead of the paid Proxmint proxy",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify paid proxy exit countries before checking OTA updates",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=30,
         choices=[30, 50, 100, 200, 300, 500],
-        help="Number of proxies to fetch per country",
+        help="Number of free proxies to fetch per country (with --free)",
     )
     parser.add_argument(
         "--rounds", type=_positive_int, default=3, help="Number of rounds (default: 3)"
@@ -493,11 +592,59 @@ def main() -> int:
     if not args.target:
         parser.error("target must not be empty")
 
+    paid_proxy_template = os.environ.get(PROXMINT_PROXY_TEMPLATE_ENV, "").strip()
+    if not args.free and not paid_proxy_template:
+        parser.error(
+            f"{PROXMINT_PROXY_TEMPLATE_ENV} is required unless --free is used"
+        )
+
     proxies: list[tuple[str, str, str]] = []
     seen_addresses: set[str] = set()
     for country in countries:
+        if not args.free:
+            try:
+                address = _proxmint_proxy(country, paid_proxy_template)
+            except ValueError as exc:
+                parser.error(str(exc))
+            display_address = _redact_proxy_address(address)
+            if not args.verify:
+                seen_addresses.add(address)
+                proxies.append((country, address, "PAID"))
+                print(
+                    f"#  [{country}] {display_address} PAID Proxmint",
+                    file=sys.stderr,
+                )
+                continue
+
+            print(
+                f"#  [{country}] {display_address} PAID Proxmint | verifying...",
+                file=sys.stderr,
+            )
+            country_check = verify_proxy_country(country, address, "PAID")
+            if country_check.matches:
+                seen_addresses.add(address)
+                proxies.append((country, address, "PAID"))
+                print(
+                    f"#  [{country}] VERIFY OK country={country_check.actual_country} "
+                    f"ip={country_check.ip or '?'}",
+                    file=sys.stderr,
+                )
+            elif country_check.actual_country:
+                print(
+                    f"#  [{country}] VERIFY MISMATCH expected={country} "
+                    f"actual={country_check.actual_country} "
+                    f"ip={country_check.ip or '?'}; skipping",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"#  [{country}] VERIFY FAILED {country_check.detail}; skipping",
+                    file=sys.stderr,
+                )
+            continue
+
         print(
-            f"# Fetching {args.limit} proxies for {country} -> "
+            f"# Fetching {args.limit} free proxies for {country} -> "
             f"https://spys.one/free-proxy-list/{country}/",
             file=sys.stderr,
         )
@@ -520,10 +667,11 @@ def main() -> int:
                 f"#  [{country}] {address:22s} {proxy_type:7s} {anonymity}",
                 file=sys.stderr,
             )
-        print(f"# Got {added} unique proxies for {country}", file=sys.stderr)
+        print(f"# Got {added} unique free proxies for {country}", file=sys.stderr)
 
     if not proxies:
-        print(f"No proxies found for {','.join(countries)}", file=sys.stderr)
+        source = "free proxies" if args.free else "verified paid proxies"
+        print(f"No {source} found for {','.join(countries)}", file=sys.stderr)
         return 1
 
     cmd_base = [sys.executable, "-m", "checkota", "--dry-run", "-c", args.config]
@@ -534,9 +682,10 @@ def main() -> int:
 
     workers = min(args.workers or DEFAULT_MAX_WORKERS, len(proxies))
     country_label = ",".join(countries)
+    source = "spys.one free" if args.free else "Proxmint paid"
     print(
-        f"# Command: {' '.join(cmd_base)} | target: {args.target!r} | "
-        f"rounds: {args.rounds} | workers: {workers}",
+        f"# Source: {source} | command: {' '.join(cmd_base)} | "
+        f"target: {args.target!r} | rounds: {args.rounds} | workers: {workers}",
         file=sys.stderr,
     )
 
