@@ -77,8 +77,10 @@ def load_processed_titles(path: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        with _locked_file(path, "r") as handle:
             return {line.strip() for line in handle if line.strip()}
+    except FileNotFoundError:
+        return set()
     except (OSError, UnicodeError, ValueError) as exc:
         Log.e(f"Error reading processed updates file {path}: {exc}")
         return set()

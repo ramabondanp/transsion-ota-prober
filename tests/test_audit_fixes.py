@@ -185,6 +185,20 @@ def test_apply_update_actions_skips_duplicate_notification(tmp_path):
     assert sent == []
 
 
+def test_apply_update_actions_reports_claim_failure(tmp_path):
+    ctx = _ctx(tmp_path)
+
+    class _StubNotifier:
+        def send(self, msg, truncate_desc=True, device_title=None):
+            raise AssertionError("notification must not be sent")
+
+    with (
+        patch("checkota.processor._claim_new_update", return_value=None),
+        patch("checkota.processor.create_notifier", return_value=_StubNotifier()),
+    ):
+        assert apply_update_actions(ctx, _update(), _args(no_config=True)) == 1
+
+
 # --- H3: Telegram ok:false is a failure ----------------------------------------
 
 

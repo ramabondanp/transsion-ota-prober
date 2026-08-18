@@ -178,16 +178,16 @@ def save_processed_update(ctx: RunContext, title: str) -> bool:
         return saved
 
 
-def _claim_new_update(ctx: RunContext, title: str) -> bool:
+def _claim_new_update(ctx: RunContext, title: str) -> bool | None:
     """Claim a new update title across threads and processes."""
     with ctx.file_lock:
         if title in ctx.processed_titles or title in ctx.claimed_titles:
             return False
         try:
             claim = claim_processed_title(ctx.processed_path, title)
-        except OSError as exc:
+        except (OSError, UnicodeError, ValueError) as exc:
             Log.e(f"Failed to claim update title {title}: {exc}")
-            return False
+            return None
         if claim is None:
             ctx.processed_titles.add(title)
             return False
@@ -303,7 +303,9 @@ def collect_update_info(
             Log.i(
                 "--register-update flag is set. Saving new update title without notification."
             )
-            save_processed_update(ctx, title)
+            if not save_processed_update(ctx, title):
+                Log.e("Failed to register update title; the update was not recorded.")
+                return 1, None
             Log.s("Update check completed successfully (update title registered).")
         return 0, None
 
@@ -442,7 +444,11 @@ def apply_update_actions(
             and not args.dry_run
             and not getattr(args, "force_notify", False)
         ):
-            if not _claim_new_update(ctx, update.title):
+            claim_result = _claim_new_update(ctx, update.title)
+            if claim_result is None:
+                Log.e("Could not reserve update title; notification was not sent.")
+                return 1
+            if not claim_result:
                 Log.i(
                     "Update already claimed or processed by another worker; "
                     "skipping duplicate notification."
@@ -579,12 +585,20 @@ def drain_pending_notifications(ctx: RunContext, args: argparse.Namespace) -> in
                 _remove_pending_notification(ctx, note)
                 _release_pending_claim(ctx, note)
                 continue
-            if not has_claim and not _claim_new_update(ctx, note.title):
-                Log.i(
-                    f"Update claim unavailable; retaining buffered notification: "
-                    f"{note.device_title}"
-                )
-                continue
+            if not has_claim:
+                claim_result = _claim_new_update(ctx, note.title)
+                if claim_result is None:
+                    failed = True
+                    Log.e(
+                        f"Could not reserve buffered update title: {note.device_title}"
+                    )
+                    continue
+                if not claim_result:
+                    Log.i(
+                        f"Update claim unavailable; retaining buffered notification: "
+                        f"{note.device_title}"
+                    )
+                    continue
         Log.i(f"Sending notification {idx}/{total}: {note.device_title}")
         with ctx.telegram_lock:
             sent = notifier.send(

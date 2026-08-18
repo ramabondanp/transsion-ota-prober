@@ -1,5 +1,6 @@
 import os
 import re
+import stat
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
@@ -142,8 +143,12 @@ def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
 def update_config_from_fingerprint(
     config_path: Path, cfg: Config, fingerprint: str
 ) -> bool:
-    with _config_lock(config_path):
-        return _update_config_from_fingerprint(config_path, cfg, fingerprint)
+    try:
+        with _config_lock(config_path):
+            return _update_config_from_fingerprint(config_path, cfg, fingerprint)
+    except (OSError, ValueError) as exc:
+        Log.w(f"Failed to lock config file {config_path}: {exc}")
+        return False
 
 
 def _update_config_from_fingerprint(
@@ -344,6 +349,7 @@ def _update_config_from_fingerprint(
     # original config untouched.
     tmp_path: Path | None = None
     try:
+        original_mode = stat.S_IMODE(config_path.stat().st_mode)
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
         )
@@ -352,6 +358,7 @@ def _update_config_from_fingerprint(
             handle.write(new_text)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(tmp_path, original_mode)
         reparse = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
         if not isinstance(reparse, dict):
             raise ValueError(f"Round-trip parse yielded {type(reparse).__name__}")
