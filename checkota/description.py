@@ -9,7 +9,6 @@ import html
 import re
 from html.parser import HTMLParser
 
-
 from checkota.constants import SECTION_HEADER_RE
 
 

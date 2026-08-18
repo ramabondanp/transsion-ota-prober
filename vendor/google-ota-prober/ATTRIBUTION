@@ -1,7 +1,10 @@
 Vendored from https://github.com/tangalbert919/google-ota-prober
 Pinned commit: 91d990f14d0bca69954fff97c188b1d00cca0d44
 Branch: remotes/origin/gui-6-g91d990f
-License: see upstream repository
+
+NOTE: the pinned upstream commit ships no standalone LICENSE file, so the
+upstream license terms must be obtained from the repository itself before
+redistributing any of the vendored files.
 
 Only checkin/*_pb2.py, proto/*.proto, and utils/functions.py are vendored.
 checkota uses these imports:

@@ -7,13 +7,13 @@ B) Direct `--fp` mode (no sweep, no buffering). The fix's
    `buffered_notifications_possible` predicate must gate the drain, so direct
    mode never calls drain_pending_notifications.
 """
+
 import argparse
 import signal
 
-from checkota.runtime import RunContext
+from checkota import cli, processor
 from checkota.models import PendingNotification
-from checkota import processor
-from checkota import cli
+from checkota.runtime import RunContext
 
 
 def _make_args(tmp_path, *, config_dir_present):

@@ -34,7 +34,7 @@ checkota/              ← Package (import: from checkota.cli import main)
     fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
     logging.py         ← Thread-safe logging with ANSI colors
     telegram.py        ← Telegram notify + Telegraph fallback + HTML sanitization
-configs/               ← YAML device configs (one per codename, 108 files)
+configs/               ← YAML device configs (one per codename, 114 files)
 tests/                 ← pytest suite
 processed_updates.txt  ← Append-only log of seen update titles (trimmed at 2000)
 pyproject.toml         ← Package metadata + deps (requests, PyYAML, protobuf)

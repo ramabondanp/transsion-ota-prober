@@ -83,6 +83,7 @@ def _range_get(
     hdrs["Range"] = f"bytes={start}-{end}"
 
     for attempt in range(attempts):
+        resp = None
         try:
             resp = session.get(
                 url,
@@ -91,6 +92,12 @@ def _range_get(
                 timeout=_timeout_pair(timeout),
             )
             resp.raise_for_status()
+            if resp.status_code != 206:
+                raise RemoteZipFetchError(
+                    f"Server ignored Range request (status {resp.status_code}); "
+                    "ranged reads are required."
+                )
+            content = bytes(resp.content)
         except requests.exceptions.HTTPError as exc:
             status = getattr(exc.response, "status_code", None)
             if status in _RETRYABLE_HTTP_STATUSES:
@@ -98,18 +105,13 @@ def _range_get(
                     f"Retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
                 )
                 if attempt < attempts - 1:
-                    # Close the response to release the connection before retry
-                    if exc.response is not None:
-                        exc.response.close()
                     time.sleep(1)
                     continue
                 raise transient_err from exc
-            # Non-retryable HTTP error (e.g. 416 Range Not Satisfiable).
             raise RemoteZipFetchError(
                 f"Non-retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
             ) from exc
         except requests.exceptions.RequestException as exc:
-            # ConnectionError / Timeout / SSLError / ChunkedEncodingError / ProtocolError.
             transient_err = RemoteZipTransientError(
                 f"Transport failure for {url} (bytes={start}-{end}): {exc}"
             )
@@ -117,16 +119,11 @@ def _range_get(
                 time.sleep(1)
                 continue
             raise transient_err from exc
+        finally:
+            if resp is not None:
+                resp.close()
+        return content
 
-        if resp.status_code != 206:
-            # Range ignored AND a 2xx slipped through (rare; CDN quirks).
-            raise RemoteZipFetchError(
-                f"Server ignored Range request (status {resp.status_code}); "
-                "ranged reads are required."
-            )
-        return resp.content
-
-    # Should never reach here, but satisfy type checker
     raise RemoteZipTransientError("Unexpected end of retry loop")
 
 
@@ -331,7 +328,7 @@ def fetch_zip_member(
     else:
         cd = _range_get(sess, url, cd_offset, cd_offset + cd_size - 1, timeout, hdrs)
 
-    method, comp_size, local_offset, name_len, extra_len = _find_entry(cd, target)
+    method, comp_size, local_offset, name_len, _ = _find_entry(cd, target)
 
     # Fetch the fixed 30-byte local header together with the compressed payload
     # in ONE Range request (saves a round-trip versus reading the header
@@ -339,8 +336,7 @@ def fetch_zip_member(
     # directory's, so over-fetch an extra 65535 bytes (the max 16-bit extra
     # length) and clamp to EOF; we re-parse the real local header below.
     end = local_offset + 30 + name_len + 65535 + comp_size - 1
-    if end > size - 1:
-        end = size - 1
+    end = min(end, size - 1)
     # attempts=1: get_ota_metadata already wraps this whole call in its own
     # 3x transient-retry loop, so retrying here too would stack two backoff
     # schedules (up to 6 tries) and lengthen worst-case hang time.

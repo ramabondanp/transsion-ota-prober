@@ -60,3 +60,63 @@ def test_concurrent_fetch_runs_once_per_url():
     assert calls["n"] == 1, f"expected exactly 1 fetch, got {calls['n']}"
     expected = {"fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"}
     assert all(r == expected for r in results.values())
+
+
+def test_malformed_metadata_is_failure_cached(tmp_path):
+    ctx = _make_ctx()
+    url = "https://x/malformed.zip"
+    with patch(
+        "checkota.processor.get_ota_metadata",
+        return_value={"fingerprint": ""},
+    ) as fetch:
+        assert get_cached_ota_metadata(ctx, url) is None
+        assert get_cached_ota_metadata(ctx, url) is None
+    assert fetch.call_count == 1
+    assert url not in ctx.metadata_cache
+    assert url in ctx.metadata_failures
+
+
+def test_stopped_metadata_fetch_is_not_failure_cached(tmp_path):
+    ctx = _make_ctx()
+    url = "https://x/stopped.zip"
+    ctx.stop_event.set()
+    with patch(
+        "checkota.processor.get_ota_metadata",
+        return_value=None,
+    ) as fetch:
+        assert get_cached_ota_metadata(ctx, url) is None
+    assert fetch.call_count == 0
+    assert url not in ctx.metadata_failures
+
+
+def test_stopped_metadata_fetch_is_not_failure_cached_after_fetch(tmp_path):
+    ctx = _make_ctx()
+    url = "https://x/stopped-during-fetch.zip"
+    calls = {"n": 0}
+
+    def fake_fetch(url, session=None, stop_event=None):
+        calls["n"] += 1
+        stop_event.set()
+
+    with patch("checkota.processor.get_ota_metadata", fake_fetch):
+        assert get_cached_ota_metadata(ctx, url) is None
+    assert calls["n"] == 1
+    assert url not in ctx.metadata_failures
+
+    ctx.stop_event.clear()
+    with patch(
+        "checkota.processor.get_ota_metadata",
+        return_value={"fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"},
+    ) as retry:
+        assert get_cached_ota_metadata(ctx, url) is not None
+    assert retry.call_count == 1
+
+
+def test_metadata_waiter_times_out(monkeypatch):
+    ctx = _make_ctx()
+    url = "https://x/stuck.zip"
+    event = threading.Event()
+    with ctx.cache_lock:
+        ctx._metadata_inflight[url] = event
+    monkeypatch.setattr("checkota.processor._METADATA_WAIT_TIMEOUT", 0.01)
+    assert get_cached_ota_metadata(ctx, url) is None

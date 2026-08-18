@@ -8,6 +8,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -24,7 +25,10 @@ class RunContext:
     processed_path: Path
     processed_titles: set[str]
     dry_run: bool
+    claimed_titles: set[str] = field(default_factory=set)
+    claimed_handles: dict[str, TextIO] = field(default_factory=dict, repr=False)
     metadata_cache: dict[str, dict[str, str] | None] = field(default_factory=dict)
+    metadata_failures: dict[str, float] = field(default_factory=dict)
     # URL -> Event for an in-flight metadata fetch, so concurrent workers sharing
     # a URL fetch exactly once (see processor.get_cached_ota_metadata).
     _metadata_inflight: dict[str, threading.Event] = field(
@@ -80,6 +84,17 @@ class RunContext:
 
     def stop(self) -> None:
         self.stop_event.set()
+        from checkota.fingerprints import release_processed_claim
+
+        with self.file_lock:
+            claims = list(self.claimed_handles.values())
+            self.claimed_handles.clear()
+            self.claimed_titles.clear()
+        for claim in claims:
+            try:
+                release_processed_claim(claim)
+            except (OSError, ValueError):
+                pass
         with self.session_lock:
             sessions = list(self._sessions)
             self._sessions.clear()

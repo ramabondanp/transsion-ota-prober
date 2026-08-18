@@ -1,16 +1,14 @@
-import time
 import datetime
 import gzip
-from pathlib import Path
 import threading
+import time
+from pathlib import Path
 
 import requests
-from google.protobuf import text_format
-
 from checkin import checkin_generator_pb2
+from google.protobuf import text_format
 from utils import functions
 
-from checkota.manager import Config
 from checkota.constants import (
     CHECKIN_URL,
     DEBUG_FILE,
@@ -19,6 +17,15 @@ from checkota.constants import (
     USER_AGENT_TPL,
 )
 from checkota.logging import Log
+from checkota.manager import Config
+
+
+class UpdateCheckError(Exception):
+    """Raised when the check-in request failed (network/protocol/parse error).
+
+    This deliberately excludes "no update found", which is a successful
+    check-in with an empty result.
+    """
 
 
 class UpdateChecker:
@@ -28,11 +35,23 @@ class UpdateChecker:
         session: requests.Session | None = None,
         imei: str | None = None,
         stop_event: threading.Event | None = None,
+        debug_label: str | None = None,
     ):
         self.cfg = cfg
         self.session = session or requests.Session()
         self.imei = imei
         self.stop_event = stop_event
+        if debug_label:
+            safe_label = "".join(
+                c if c.isalnum() or c in "-_." else "_" for c in debug_label
+            )
+            self.debug_file = DEBUG_FILE.replace(".txt", f"_{safe_label}.txt")
+            self.debug_error_file = DEBUG_FILE.replace(
+                ".txt", f"_{safe_label}_error.bin"
+            )
+        else:
+            self.debug_file = DEBUG_FILE
+            self.debug_error_file = DEBUG_FILE.replace(".txt", "_error.bin")
         # Pin identity generators so retries don't re-randomise -- reproducibility
         # and Google-edge fairness. The four functions in vendor/utils/functions.py
         # use unseeded random.*, so calling them per retry would change the
@@ -109,10 +128,10 @@ class UpdateChecker:
                 resp.ParseFromString(response.content)
 
                 if debug:
-                    Path(DEBUG_FILE).write_text(
+                    Path(self.debug_file).write_text(
                         text_format.MessageToString(resp), encoding="utf-8"
                     )
-                    Log.i(f"Debug response saved to {DEBUG_FILE}")
+                    Log.i(f"Debug response saved to {self.debug_file}")
 
                 info = self._parse(resp)
                 has_update = info.get("found", False) and "url" in info
@@ -139,27 +158,25 @@ class UpdateChecker:
                     Log.e(
                         f"Update check failed after multiple retries due to network error: {exc}"
                     )
-                    return False, None
+                    raise UpdateCheckError(
+                        f"Update check failed after multiple retries due to network error: {exc}"
+                    ) from exc
             except requests.exceptions.RequestException as exc:
                 if self._stopped():
                     Log.w("Update check interrupted.")
                     return False, None
                 Log.e(f"Update check failed: {exc}")
                 if debug and response is not None:
-                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
-                        response.content
-                    )
+                    Path(self.debug_error_file).write_bytes(response.content)
                     Log.i("Raw error response saved")
-                return False, None
+                raise UpdateCheckError(f"Update check failed: {exc}") from exc
             except Exception as exc:
                 Log.e(f"Update check failed: {exc}")
                 if debug and response is not None:
-                    Path(DEBUG_FILE.replace(".txt", "_error.bin")).write_bytes(
-                        response.content
-                    )
+                    Path(self.debug_error_file).write_bytes(response.content)
                     Log.i("Raw error response saved")
-                return False, None
-        return False, None
+                raise UpdateCheckError(f"Update check failed: {exc}") from exc
+        raise UpdateCheckError("Update check failed: request loop exhausted")
 
     def _parse(self, resp: checkin_generator_pb2.AndroidCheckinResponse) -> dict:
         info = {

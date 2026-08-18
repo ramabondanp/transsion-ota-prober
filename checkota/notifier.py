@@ -16,7 +16,7 @@ def create_notifier(ctx: RunContext, args: argparse.Namespace) -> TgNotify | Non
     token = ctx.env.get("bot_token")
     chat = ctx.env.get("chat_id")
     telegraph_token = ctx.env.get("telegraph_token")
-    if not token or not chat or not telegraph_token:
+    if not token or not chat:
         with ctx.notice_lock:
             if not ctx.telegram_notice_printed:
                 if ctx.dry_run:
@@ -61,7 +61,7 @@ def build_notification_message(update: VariantUpdate) -> str:
         f"{os_line}\n"
         # OTA descriptions are HTML-ish (<small>/<font>/<br>) and must stay
         # raw here so TgNotify._sanitize_html can normalize them before send.
-        f"{str(update.desc)}\n\n"
+        f"{update.desc!s}\n\n"
         f"<b>Size:</b> {E(str(update.size), quote=False)}\n"
         + (
             f"<b>Incremental:</b> <code>{E(str(inc), quote=False)}</code>\n"

@@ -7,7 +7,6 @@ import yaml
 
 from checkota.manager import Config, update_config_from_fingerprint
 
-
 FP = "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/201350016:user/release-keys"
 
 

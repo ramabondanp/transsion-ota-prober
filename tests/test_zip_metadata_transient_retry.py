@@ -7,14 +7,14 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
+from checkota.metadata import get_ota_metadata
 from checkota.zip_metadata import (
     _LOCAL_SIG,
-    _range_get,
     RemoteZipFetchError,
     RemoteZipTransientError,
+    _range_get,
     fetch_zip_member,
 )
-from checkota.metadata import get_ota_metadata
 
 
 class _RangeSession:
@@ -133,6 +133,7 @@ def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
     """attempts=2 must retry once on transient and succeed when 2nd try works."""
     monkeypatch.setattr("checkota.zip_metadata.time.sleep", lambda _s: None)
     calls = {"n": 0}
+    responses = []
 
     def fake_get(url, headers, timeout, **kwargs):
         calls["n"] += 1
@@ -142,6 +143,7 @@ def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
         resp.status_code = 206
         resp.content = b"payload"
         resp.raise_for_status = MagicMock()
+        responses.append(resp)
         return resp
 
     sess = MagicMock()
@@ -149,6 +151,21 @@ def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
     result = _range_get(sess, "https://x/y.zip", 0, 10, 5.0, {}, attempts=2)
     assert result == b"payload"
     assert calls["n"] == 2, "Expected exactly 2 attempts"
+    responses[0].close.assert_called_once_with()
+
+
+def test_range_get_closes_final_retryable_response(monkeypatch):
+    monkeypatch.setattr("checkota.zip_metadata.time.sleep", lambda _s: None)
+    response = MagicMock()
+    response.status_code = 503
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        response=response
+    )
+    sess = MagicMock()
+    sess.get.return_value = response
+    with pytest.raises(RemoteZipTransientError):
+        _range_get(sess, "https://x/y.zip", 0, 10, 5.0, {}, attempts=1)
+    response.close.assert_called_once_with()
 
 
 def test_range_get_attempts_2_non_retryable_stays_single_call():

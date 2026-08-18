@@ -187,7 +187,19 @@ checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
 checkota -d configs/ --jobs 4 --timeout 600
 ```
 
-Telegram env vars: `bot_token`, `chat_id`, `telegraph_token` (for long descriptions).
+Telegram env vars:
+
+- `bot_token`, `chat_id` — required for Telegram notifications
+- `telegraph_token` — optional; only needed to create Telegra.ph pages for very long
+  changelogs (when the message exceeds 4090 characters)
+
+## Operational scripts
+
+The geo-proxy batch tools (`scripts/fetch_spys.py`, `scripts/check_update_proxy.py`) are
+developed in a separate git branch (`scripts`) against the same repository. They are not
+part of the `master` tree; check out that branch (or the nested repo) to use them.
+The scripts load a paid proxy template from `scripts/.env`, which is git-ignored and must
+not be committed.
 
 ## Credits
 
