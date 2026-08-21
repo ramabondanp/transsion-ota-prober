@@ -51,7 +51,7 @@ def _patch_parser_to_return(monkeypatch, args):
 
 def _patch_create_run_context(monkeypatch, args):
     monkeypatch.setattr(
-        cli, "create_run_context", lambda dry_run, pool_size: args.run_context
+        cli, "create_run_context", lambda dry_run, pool_size=10, **kw: args.run_context
     )
 
 

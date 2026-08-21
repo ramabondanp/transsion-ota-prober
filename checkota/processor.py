@@ -102,7 +102,11 @@ _CACHE_MISS = object()
 _METADATA_WAIT_TIMEOUT = 15.0
 
 
-def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
+def get_cached_ota_metadata(
+    ctx: RunContext,
+    url: str,
+    use_proxy_env: bool | None = None,
+) -> dict[str, str] | None:
     while True:
         if ctx.stop_event.is_set():
             return None
@@ -145,12 +149,19 @@ def get_cached_ota_metadata(ctx: RunContext, url: str) -> dict[str, str] | None:
             continue
 
         assert fetcher_event is not None
+        use_proxy = ctx.zip_proxy if use_proxy_env is None else use_proxy_env
+        zip_session = (
+            ctx.zip_session()
+            if hasattr(ctx, "zip_session")
+            else (ctx.session() if use_proxy else ctx.direct_session())
+        )
         ota_meta: dict[str, str] | None = None
         valid_metadata = False
         try:
-            ota_meta = get_ota_metadata(
-                url, session=ctx.direct_session(), stop_event=ctx.stop_event
-            )
+            fetch_kwargs = {"session": zip_session, "stop_event": ctx.stop_event}
+            if use_proxy:
+                fetch_kwargs["use_proxy_env"] = True
+            ota_meta = get_ota_metadata(url, **fetch_kwargs)
         finally:
             with ctx.cache_lock:
                 valid_metadata = bool(

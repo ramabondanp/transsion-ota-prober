@@ -120,3 +120,28 @@ def test_metadata_waiter_times_out(monkeypatch):
         ctx._metadata_inflight[url] = event
     monkeypatch.setattr("checkota.processor._METADATA_WAIT_TIMEOUT", 0.01)
     assert get_cached_ota_metadata(ctx, url) is None
+
+
+def test_get_cached_ota_metadata_uses_zip_proxy_flag():
+    ctx = RunContext(
+        env={},
+        processed_path=Path("/dev/null"),
+        processed_titles=set(),
+        dry_run=True,
+        pool_size=4,
+        zip_proxy=True,
+    )
+    url = "https://x/proxy_ota.zip"
+    received = {}
+
+    def fake_fetch(u, session=None, stop_event=None, use_proxy_env=False):
+        received["session"] = session
+        received["use_proxy_env"] = use_proxy_env
+        return {"fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"}
+
+    with patch("checkota.processor.get_ota_metadata", fake_fetch):
+        res = get_cached_ota_metadata(ctx, url)
+        assert res is not None
+        assert received["session"] is ctx.session()
+        assert received["use_proxy_env"] is True
+

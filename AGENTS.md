@@ -178,6 +178,7 @@ checkota -d configs/ --jobs 4                      # directory, parallel
 checkota -d configs/ --jobs 4 --timeout 600        # cap runtime (exits 124)
 checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."   # direct fingerprint
 checkota -c X6873 --dry-run                        # dry run
+checkota -c X6873 --fetch-zip-proxy                # use proxy env for OTA ZIP fetch
 checkota -c X6873 --update-incremental             # update config, no notify
 checkota -d configs/ --reg OP-M1                   # filter by region
 checkota -c X6873 --debug                          # save check-in response

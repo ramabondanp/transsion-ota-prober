@@ -25,6 +25,7 @@ class RunContext:
     processed_path: Path
     processed_titles: set[str]
     dry_run: bool
+    zip_proxy: bool = False
     claimed_titles: set[str] = field(default_factory=set)
     claimed_handles: dict[str, TextIO] = field(default_factory=dict, repr=False)
     metadata_cache: dict[str, dict[str, str] | None] = field(default_factory=dict)
@@ -82,6 +83,16 @@ class RunContext:
                 self._sessions.append(session)
         return session
 
+    def zip_session(self) -> requests.Session:
+        """Returns a thread-local Session for fetching ZIP metadata.
+        Uses session() (trust_env=True) when zip_proxy is True to respect
+        proxy environment variables, or direct_session() (trust_env=False)
+        when zip_proxy is False to bypass proxies.
+        """
+        if self.zip_proxy:
+            return self.session()
+        return self.direct_session()
+
     def stop(self) -> None:
         self.stop_event.set()
         from checkota.fingerprints import release_processed_claim
@@ -105,7 +116,9 @@ class RunContext:
                 pass
 
 
-def create_run_context(dry_run: bool, pool_size: int = 10) -> RunContext:
+def create_run_context(
+    dry_run: bool, pool_size: int = 10, zip_proxy: bool = False
+) -> RunContext:
     if dry_run:
         Log.i("Dry-run mode enabled: no external side effects will occur.")
 
@@ -125,6 +138,7 @@ def create_run_context(dry_run: bool, pool_size: int = 10) -> RunContext:
         # on a full pool when --jobs overshoots the default floor. This is the
         # *capacity* of HTTPAdapter.pool_maxsize, not eagerly-opened sockets.
         pool_size=max(10, pool_size),
+        zip_proxy=zip_proxy,
     )
 
 

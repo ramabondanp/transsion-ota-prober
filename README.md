@@ -180,6 +180,9 @@ checkota -d configs/ --jobs 4
 # Dry run
 checkota -c X6873 --dry-run
 
+# Use proxy environment variables when fetching OTA ZIP metadata
+checkota -c X6873 --fetch-zip-proxy
+
 # Direct fingerprint
 checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
 

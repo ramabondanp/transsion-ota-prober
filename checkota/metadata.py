@@ -28,6 +28,7 @@ def get_ota_metadata(
     url: str,
     session: requests.Session | None = None,
     stop_event: threading.Event | None = None,
+    use_proxy_env: bool = False,
 ) -> dict[str, str] | None:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
     if stop_event is not None and stop_event.is_set():
@@ -47,6 +48,7 @@ def get_ota_metadata(
                 session=session,
                 timeout=15,
                 headers={"User-Agent": "transsion-ota-prober/1.0"},
+                use_proxy_env=use_proxy_env,
             ).decode("utf-8", errors="replace")
 
             if not content.strip():
