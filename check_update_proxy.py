@@ -300,6 +300,16 @@ def _result_label(result: CheckResult, target: str) -> str:
     return f"FAILED     {result.detail}"
 
 
+def _progress_line(
+    country: str, result: CheckResult, target: str, show_proxy: bool
+) -> str:
+    """Compact per-check line; proxy identity only when it varies (free mode)."""
+    prefix = f"[{result.duration:5.1f}s] {country}"
+    if show_proxy:
+        prefix += f" {result.address} [{result.proxy_type}]"
+    return f"{prefix}  {_result_label(result, target)}"
+
+
 def _print_round_report(
     round_number: int,
     results: list[tuple[str, CheckResult]],
@@ -308,42 +318,42 @@ def _print_round_report(
     wall_time: float,
 ) -> None:
     counts = Counter(result.outcome for _, result in results)
-    conclusive = counts[OUTCOME_UPDATE] + counts[OUTCOME_NO_UPDATE]
     hits = sum(result.hit for _, result in results)
-    success_rate = 100 * conclusive / proxy_count if proxy_count else 0
 
-    print(f"\n--- ROUND {round_number} REPORT ---")
     print(
-        f"Checked {len(results)}/{proxy_count} in {wall_time:.1f}s | "
-        f"conclusive {conclusive} ({success_rate:.1f}%) | "
-        f"updates {counts[OUTCOME_UPDATE]} | no update {counts[OUTCOME_NO_UPDATE]} | "
-        f"failed {counts[OUTCOME_FAILED]} | hits {target!r}: {hits}"
+        f"\nRound {round_number}: checked {len(results)}/{proxy_count} in "
+        f"{wall_time:.1f}s | updates {counts[OUTCOME_UPDATE]} | "
+        f"no update {counts[OUTCOME_NO_UPDATE]} | failed {counts[OUTCOME_FAILED]} | "
+        f"hits {target!r}: {hits}"
     )
 
-    print("Country  Checked  Update  None  Failed  Hit  Success  Median")
+    # Per-country breakdown only pays off with several proxies per country.
     by_country: dict[str, list[CheckResult]] = defaultdict(list)
     for country, result in results:
         by_country[country].append(result)
-    for country in sorted(by_country):
-        country_results = by_country[country]
-        country_counts = Counter(result.outcome for result in country_results)
-        country_conclusive = (
-            country_counts[OUTCOME_UPDATE] + country_counts[OUTCOME_NO_UPDATE]
-        )
-        country_hits = sum(result.hit for result in country_results)
-        country_rate = 100 * country_conclusive / len(country_results)
-        country_median = median(result.duration for result in country_results)
-        print(
-            f"{country:7s} {len(country_results):7d} {country_counts[OUTCOME_UPDATE]:7d} "
-            f"{country_counts[OUTCOME_NO_UPDATE]:5d} {country_counts[OUTCOME_FAILED]:7d} "
-            f"{country_hits:4d} {country_rate:7.1f}% {country_median:6.1f}s"
-        )
+    if any(len(entries) > 1 for entries in by_country.values()):
+        print("Country  Checked  Update  None  Failed  Hit  Success  Median")
+        for country in sorted(by_country):
+            country_results = by_country[country]
+            country_counts = Counter(result.outcome for result in country_results)
+            country_conclusive = (
+                country_counts[OUTCOME_UPDATE] + country_counts[OUTCOME_NO_UPDATE]
+            )
+            country_hits = sum(result.hit for result in country_results)
+            country_rate = 100 * country_conclusive / len(country_results)
+            country_median = median(result.duration for result in country_results)
+            print(
+                f"{country:7s} {len(country_results):7d} {country_counts[OUTCOME_UPDATE]:7d} "
+                f"{country_counts[OUTCOME_NO_UPDATE]:5d} {country_counts[OUTCOME_FAILED]:7d} "
+                f"{country_hits:4d} {country_rate:7.1f}% {country_median:6.1f}s"
+            )
 
     update_locations: dict[str, Counter[str]] = defaultdict(Counter)
     for country, result in results:
         if result.outcome == OUTCOME_UPDATE:
             update_locations[result.title][country] += 1
-    if update_locations:
+    # Already visible on the progress lines when every check saw the same title.
+    if hits or len(update_locations) > 1:
         print("Updates observed:")
         for title, locations in sorted(
             update_locations.items(), key=lambda item: (-sum(item[1].values()), item[0])
@@ -378,9 +388,7 @@ def _print_target_verdict(
     update_count = sum(result.outcome == OUTCOME_UPDATE for _, result in results)
     failure_count = sum(result.outcome == OUTCOME_FAILED for _, result in results)
 
-    print(f"\n{'=' * 70}")
-    print(f" TARGET SEARCH RESULT: {target!r}")
-    print(f"{'=' * 70}")
+    print(f"\n--- TARGET SEARCH: {target!r} ---")
     if matches:
         print(
             f"FOUND — {len(matches)} matching OTA response(s) across "
@@ -413,8 +421,8 @@ def _print_target_verdict(
             )
     else:
         print(
-            f"NOT FOUND — 0 matching OTA titles across {len(results)} proxy "
-            f"attempt(s) and {update_count} update response(s)."
+            f"NOT FOUND across {len(results)} attempt(s) "
+            f"({update_count} updates, {failure_count} failed)."
         )
 
     baseline_hits = sum(baseline.hit for baseline in baselines)
@@ -424,10 +432,6 @@ def _print_target_verdict(
     baseline_state = "MATCH" if baseline_hits else "NO MATCH"
     baseline_detail = f" — {', '.join(baseline_titles)}" if baseline_titles else ""
     print(f"Direct baseline: {baseline_state}{baseline_detail}")
-    print(
-        f"Search totals: attempts {len(results)} | updates {update_count} | "
-        f"matches {len(matches)} | failed {failure_count}"
-    )
 
 
 def run_one(
@@ -607,6 +611,13 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--fetch-zip-proxy",
+        "--zip-proxy",
+        action="store_true",
+        dest="fetch_zip_proxy",
+        help="Fetch OTA ZIP metadata using proxy environment variables",
+    )
+    parser.add_argument(
         "--process-timeout",
         type=_positive_float,
         default=DEFAULT_PROCESS_TIMEOUT,
@@ -651,11 +662,6 @@ def main() -> int:
             except ValueError as exc:
                 parser.error(str(exc))
             paid_proxies.append((country, address, "PAID"))
-            if not args.verify:
-                print(
-                    f"#  [{country}] {_redact_proxy_address(address)} PAID Proxmint",
-                    file=sys.stderr,
-                )
 
         if args.verify:
             verify_workers = min(args.workers or DEFAULT_MAX_WORKERS, len(paid_proxies))
@@ -663,32 +669,25 @@ def main() -> int:
             for (country, address, proxy_type), country_check in zip(
                 paid_proxies, country_checks, strict=True
             ):
-                print(
-                    f"#  [{country}] {_redact_proxy_address(address)} "
-                    "PAID Proxmint | verifying...",
-                    file=sys.stderr,
-                )
                 if country_check.matches:
                     proxies.append((country, address, proxy_type))
-                    print(
-                        f"#  [{country}] VERIFY OK "
-                        f"country={country_check.actual_country} "
-                        f"ip={country_check.ip or '?'}",
-                        file=sys.stderr,
-                    )
                 elif country_check.actual_country:
                     print(
-                        f"#  [{country}] VERIFY MISMATCH expected={country} "
+                        f"# [{country}] VERIFY MISMATCH expected={country} "
                         f"actual={country_check.actual_country} "
                         f"ip={country_check.ip or '?'}; skipping",
                         file=sys.stderr,
                     )
                 else:
                     print(
-                        f"#  [{country}] VERIFY FAILED "
+                        f"# [{country}] VERIFY FAILED "
                         f"{country_check.detail}; skipping",
                         file=sys.stderr,
                     )
+            print(
+                f"# Verified {len(proxies)}/{len(paid_proxies)} paid proxies",
+                file=sys.stderr,
+            )
         else:
             proxies = paid_proxies
     else:
@@ -734,9 +733,10 @@ def main() -> int:
         cmd_base.extend(("--reg", args.region))
     if args.incremental:
         cmd_base.extend(("-i", args.incremental))
+    if args.fetch_zip_proxy:
+        cmd_base.append("--fetch-zip-proxy")
 
     workers = min(args.workers or DEFAULT_MAX_WORKERS, len(proxies))
-    country_label = ",".join(countries)
     source = "spys.one free" if args.free else "Proxmint paid"
     print(
         f"# Source: {source} | command: {' '.join(cmd_base)} | "
@@ -746,11 +746,12 @@ def main() -> int:
 
     all_results: list[tuple[str, CheckResult]] = []
     baselines: list[CheckResult] = []
+    # Paid mode has exactly one proxy per country, so the address adds nothing.
+    show_proxy = args.free
     for round_number in range(1, args.rounds + 1):
         print(
-            f"\n{'=' * 70}\n ROUND {round_number}/{args.rounds} {country_label}  "
-            f"{' '.join(cmd_base)}  -> find {args.target!r}  "
-            f"{len(proxies)} proxies, {workers} workers\n{'=' * 70}",
+            f"\n--- ROUND {round_number}/{args.rounds} | {len(proxies)} proxies, "
+            f"{workers} workers | find {args.target!r} ---",
             flush=True,
         )
         started = time.monotonic()
@@ -774,8 +775,7 @@ def main() -> int:
                 country = futures[future]
                 results.append((country, result))
                 print(
-                    f"[{result.duration:5.1f}s] [{country}] [{result.proxy_type:7s}] "
-                    f"{result.address:22s}  {_result_label(result, args.target)}",
+                    _progress_line(country, result, args.target, show_proxy),
                     flush=True,
                 )
         except KeyboardInterrupt:
@@ -801,15 +801,16 @@ def main() -> int:
             cmd_base, args.target, args.process_timeout
         )
         baselines.append(baseline)
-        print(f"Baseline: {_result_label(baseline, args.target)}")
+        # Baseline outcome is reported once in the final verdict; surface full
+        # output immediately only on a direct hit.
         if baseline.hit:
+            print(f"\nBaseline hit {args.target!r}:")
             print(baseline_output)
         if round_number < args.rounds:
             # Event.wait is interruptible and avoids a fixed-sleep shutdown delay.
             _STOP_EVENT.wait(0.5)
 
     _print_target_verdict(args.target, all_results, baselines)
-    print(f"\n=== DONE {country_label} {args.rounds} rounds ===", file=sys.stderr)
     return 0
 
 
