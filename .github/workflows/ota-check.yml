@@ -29,16 +29,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Scan TECNO Infinix and itel devices
+      - name: Validate latest-only runner
+        run: python -m py_compile latest_only.py
+
+      - name: Scan latest TECNO Infinix and itel OTAs only
         env:
           bot_token: ${{ secrets.BOT_TOKEN }}
           chat_id: "@tecnonamanupdate"
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
           sed -i 's/timeout=15/timeout=45/' checkota/telegram.py
-          checkota -d configs/ --jobs 4 --timeout 600
+          python latest_only.py --config-dir configs --jobs 4 --timeout 600
 
       - name: Persist OTA state
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -47,6 +51,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No OTA state changes to save."
           else
-            git commit -m "Update OTA tracker state"
+            git commit -m "Update latest OTA tracker state"
             git push
           fi
