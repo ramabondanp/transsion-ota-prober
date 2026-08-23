@@ -8,6 +8,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -24,7 +25,11 @@ class RunContext:
     processed_path: Path
     processed_titles: set[str]
     dry_run: bool
+    zip_proxy: bool = False
+    claimed_titles: set[str] = field(default_factory=set)
+    claimed_handles: dict[str, TextIO] = field(default_factory=dict, repr=False)
     metadata_cache: dict[str, dict[str, str] | None] = field(default_factory=dict)
+    metadata_failures: dict[str, float] = field(default_factory=dict)
     # URL -> Event for an in-flight metadata fetch, so concurrent workers sharing
     # a URL fetch exactly once (see processor.get_cached_ota_metadata).
     _metadata_inflight: dict[str, threading.Event] = field(
@@ -59,8 +64,48 @@ class RunContext:
                 self._sessions.append(session)
         return session
 
+    def direct_session(self) -> requests.Session:
+        """Returns a thread-local direct Session (trust_env=False) that bypasses all
+        proxy environment variables and proxy connection pools. Used for fetching
+        OTA metadata directly from Google CDN.
+        """
+        session = getattr(self._local, "direct_session", None)
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            adapter = HTTPAdapter(
+                pool_connections=self.pool_size, pool_maxsize=self.pool_size
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            self._local.direct_session = session
+            with self.session_lock:
+                self._sessions.append(session)
+        return session
+
+    def zip_session(self) -> requests.Session:
+        """Returns a thread-local Session for fetching ZIP metadata.
+        Uses session() (trust_env=True) when zip_proxy is True to respect
+        proxy environment variables, or direct_session() (trust_env=False)
+        when zip_proxy is False to bypass proxies.
+        """
+        if self.zip_proxy:
+            return self.session()
+        return self.direct_session()
+
     def stop(self) -> None:
         self.stop_event.set()
+        from checkota.fingerprints import release_processed_claim
+
+        with self.file_lock:
+            claims = list(self.claimed_handles.values())
+            self.claimed_handles.clear()
+            self.claimed_titles.clear()
+        for claim in claims:
+            try:
+                release_processed_claim(claim)
+            except (OSError, ValueError):
+                pass
         with self.session_lock:
             sessions = list(self._sessions)
             self._sessions.clear()
@@ -71,7 +116,9 @@ class RunContext:
                 pass
 
 
-def create_run_context(dry_run: bool, pool_size: int = 10) -> RunContext:
+def create_run_context(
+    dry_run: bool, pool_size: int = 10, zip_proxy: bool = False
+) -> RunContext:
     if dry_run:
         Log.i("Dry-run mode enabled: no external side effects will occur.")
 
@@ -91,6 +138,7 @@ def create_run_context(dry_run: bool, pool_size: int = 10) -> RunContext:
         # on a full pool when --jobs overshoots the default floor. This is the
         # *capacity* of HTTPAdapter.pool_maxsize, not eagerly-opened sockets.
         pool_size=max(10, pool_size),
+        zip_proxy=zip_proxy,
     )
 
 

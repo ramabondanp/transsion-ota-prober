@@ -1,5 +1,5 @@
-import threading
 import datetime
+import threading
 import time
 from pathlib import Path
 
@@ -7,12 +7,12 @@ import requests
 
 from checkota.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
 from checkota.logging import Log
+from checkota.manager import parse_fingerprint
 from checkota.zip_metadata import (
     RemoteZipFetchError,
     RemoteZipTransientError,
     fetch_zip_member,
 )
-
 
 METADATA_PATH = "META-INF/com/android/metadata"
 METADATA_KEYS = {
@@ -28,6 +28,7 @@ def get_ota_metadata(
     url: str,
     session: requests.Session | None = None,
     stop_event: threading.Event | None = None,
+    use_proxy_env: bool = False,
 ) -> dict[str, str] | None:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
     if stop_event is not None and stop_event.is_set():
@@ -47,6 +48,7 @@ def get_ota_metadata(
                 session=session,
                 timeout=15,
                 headers={"User-Agent": "transsion-ota-prober/1.0"},
+                use_proxy_env=use_proxy_env,
             ).decode("utf-8", errors="replace")
 
             if not content.strip():
@@ -63,10 +65,10 @@ def get_ota_metadata(
 
             result: dict[str, str] = {}
             fingerprint = meta.get("post-build", "")
-            if not fingerprint:
-                Log.w("post-build not found in metadata.")
-            else:
-                Log.i(f"Extracted fingerprint: {fingerprint}")
+            if not fingerprint or parse_fingerprint(fingerprint) is None:
+                Log.w("Valid post-build fingerprint not found in metadata.")
+                return None
+            Log.i(f"Extracted fingerprint: {fingerprint}")
             result["fingerprint"] = fingerprint
 
             if meta.get("post-build-incremental"):

@@ -73,19 +73,37 @@ def _range_get(
     timeout: float,
     headers: dict,
     attempts: int = 1,
+    use_proxy_env: bool = False,
 ) -> bytes:
     """Fetch an inclusive byte range [start, end] via HTTP Range. Returns the body.
 
     Args:
         attempts: Number of tries (1 = no retry, 2 = 1 retry on transient errors)
+        use_proxy_env: If True, allow requests to use proxy environment variables
     """
     hdrs = dict(headers)
     hdrs["Range"] = f"bytes={start}-{end}"
 
     for attempt in range(attempts):
+        resp = None
         try:
-            resp = session.get(url, headers=hdrs, timeout=_timeout_pair(timeout))
+            get_kwargs = {
+                "headers": hdrs,
+                "timeout": _timeout_pair(timeout),
+            }
+            if not use_proxy_env:
+                get_kwargs["proxies"] = {"http": None, "https": None, "all": None}
+            resp = session.get(
+                url,
+                **get_kwargs,
+            )
             resp.raise_for_status()
+            if resp.status_code != 206:
+                raise RemoteZipFetchError(
+                    f"Server ignored Range request (status {resp.status_code}); "
+                    "ranged reads are required."
+                )
+            content = bytes(resp.content)
         except requests.exceptions.HTTPError as exc:
             status = getattr(exc.response, "status_code", None)
             if status in _RETRYABLE_HTTP_STATUSES:
@@ -93,18 +111,13 @@ def _range_get(
                     f"Retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
                 )
                 if attempt < attempts - 1:
-                    # Close the response to release the connection before retry
-                    if exc.response is not None:
-                        exc.response.close()
                     time.sleep(1)
                     continue
                 raise transient_err from exc
-            # Non-retryable HTTP error (e.g. 416 Range Not Satisfiable).
             raise RemoteZipFetchError(
                 f"Non-retryable HTTP {status} for {url} (bytes={start}-{end}): {exc}"
             ) from exc
         except requests.exceptions.RequestException as exc:
-            # ConnectionError / Timeout / SSLError / ChunkedEncodingError / ProtocolError.
             transient_err = RemoteZipTransientError(
                 f"Transport failure for {url} (bytes={start}-{end}): {exc}"
             )
@@ -112,29 +125,36 @@ def _range_get(
                 time.sleep(1)
                 continue
             raise transient_err from exc
+        finally:
+            if resp is not None:
+                resp.close()
+        return content
 
-        if resp.status_code != 206:
-            # Range ignored AND a 2xx slipped through (rare; CDN quirks).
-            raise RemoteZipFetchError(
-                f"Server ignored Range request (status {resp.status_code}); "
-                "ranged reads are required."
-            )
-        return resp.content
-
-    # Should never reach here, but satisfy type checker
     raise RemoteZipTransientError("Unexpected end of retry loop")
 
 
 def _probe_size(
-    session: requests.Session, url: str, timeout: float, headers: dict
+    session: requests.Session,
+    url: str,
+    timeout: float,
+    headers: dict,
+    use_proxy_env: bool = False,
 ) -> int:
     """Return the total resource size using a 1-byte ranged probe."""
     hdrs = dict(headers)
     hdrs["Range"] = "bytes=0-0"
     resp = None
     try:
+        get_kwargs = {
+            "headers": hdrs,
+            "timeout": _timeout_pair(timeout),
+            "stream": True,
+        }
+        if not use_proxy_env:
+            get_kwargs["proxies"] = {"http": None, "https": None, "all": None}
         resp = session.get(
-            url, headers=hdrs, timeout=_timeout_pair(timeout), stream=True
+            url,
+            **get_kwargs,
         )
         resp.raise_for_status()
         content_range = resp.headers.get("Content-Range", "")
@@ -287,6 +307,7 @@ def fetch_zip_member(
     session: requests.Session | None = None,
     timeout: float = 15.0,
     headers: dict | None = None,
+    use_proxy_env: bool = False,
 ) -> bytes:
     """Fetch and return the decompressed bytes of a single ZIP member over HTTP.
 
@@ -296,17 +317,24 @@ def fetch_zip_member(
     retryable HTTP statuses) raise RemoteZipTransientError so callers can
     distinguish structural from transient failures.
     """
-    sess = session or requests.Session()
+    if session is None:
+        sess = requests.Session()
+        if not use_proxy_env:
+            sess.trust_env = False
+    else:
+        sess = session
     hdrs = headers or {}
     target = member.encode("utf-8")
 
-    size = _probe_size(sess, url, timeout, hdrs)
+    size = _probe_size(sess, url, timeout, hdrs, use_proxy_env=use_proxy_env)
     if size <= 0:
         raise RemoteZipFetchError("Remote ZIP reported zero size.")
 
     tail_len = min(_TAIL_CHUNK, size)
     tail_start = size - tail_len
-    tail = _range_get(sess, url, tail_start, size - 1, timeout, hdrs)
+    tail = _range_get(
+        sess, url, tail_start, size - 1, timeout, hdrs, use_proxy_env=use_proxy_env
+    )
 
     cd_offset, cd_size = _locate_cd(tail, tail_start)
     if cd_size <= 0 or cd_offset < 0 or cd_offset + cd_size > size:
@@ -316,9 +344,17 @@ def fetch_zip_member(
     if cd_offset >= tail_start:
         cd = tail[cd_offset - tail_start : cd_offset - tail_start + cd_size]
     else:
-        cd = _range_get(sess, url, cd_offset, cd_offset + cd_size - 1, timeout, hdrs)
+        cd = _range_get(
+            sess,
+            url,
+            cd_offset,
+            cd_offset + cd_size - 1,
+            timeout,
+            hdrs,
+            use_proxy_env=use_proxy_env,
+        )
 
-    method, comp_size, local_offset, name_len, extra_len = _find_entry(cd, target)
+    method, comp_size, local_offset, name_len, _ = _find_entry(cd, target)
 
     # Fetch the fixed 30-byte local header together with the compressed payload
     # in ONE Range request (saves a round-trip versus reading the header
@@ -326,12 +362,19 @@ def fetch_zip_member(
     # directory's, so over-fetch an extra 65535 bytes (the max 16-bit extra
     # length) and clamp to EOF; we re-parse the real local header below.
     end = local_offset + 30 + name_len + 65535 + comp_size - 1
-    if end > size - 1:
-        end = size - 1
+    end = min(end, size - 1)
     # attempts=1: get_ota_metadata already wraps this whole call in its own
     # 3x transient-retry loop, so retrying here too would stack two backoff
     # schedules (up to 6 tries) and lengthen worst-case hang time.
-    raw = _range_get(sess, url, local_offset, end, timeout, hdrs)
+    raw = _range_get(
+        sess,
+        url,
+        local_offset,
+        end,
+        timeout,
+        hdrs,
+        use_proxy_env=use_proxy_env,
+    )
     if raw[0:4] != _LOCAL_SIG:
         raise RemoteZipFetchError("Local file header signature mismatch.")
     loc_name_len = struct.unpack("<H", raw[26:28])[0]

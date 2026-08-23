@@ -1,4 +1,4 @@
-name: Tecno Naman OTA Check
+name: TecnoNaman OTA Tracker
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: tecno-naman-ota-check
+  group: tecnonaman-ota-check
   cancel-in-progress: false
 
 jobs:
@@ -29,10 +29,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Scan all TECNO Infinix itel configs and notify new OTA
+      - name: Scan TECNO Infinix and itel devices
         env:
           bot_token: ${{ secrets.BOT_TOKEN }}
-          chat_id: ${{ secrets.CHAT_ID }}
+          chat_id: "@tecnonamanupdate"
           telegraph_token: ${{ secrets.TELEGRAPH_TOKEN }}
         run: |
           sed -i 's/timeout=15/timeout=45/' checkota/telegram.py

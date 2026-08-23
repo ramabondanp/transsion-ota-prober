@@ -1,12 +1,35 @@
+import os
+import re
+import stat
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
-import re
 
 import yaml
 
 from checkota.constants import REGION_CODE_MAP
 from checkota.logging import Log
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    _fcntl = None  # type: ignore[assignment]
+
+
+@contextmanager
+def _config_lock(config_path: Path):
+    lock_path = config_path.with_name(config_path.name + ".lock")
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+        yield
+    finally:
+        if _fcntl is not None:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        handle.close()
 
 
 @dataclass
@@ -31,7 +54,9 @@ class Config:
         field_names = {field.name for field in fields(cls)}
         required_fields = field_names - {"variant", "variant_index"}
 
-        filtered = {key: value for key, value in data.items() if key in field_names}
+        filtered: dict[str, Any] = {
+            key: value for key, value in data.items() if key in field_names
+        }
 
         if variant_name:
             filtered["variant"] = variant_name
@@ -116,6 +141,17 @@ def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
 
 
 def update_config_from_fingerprint(
+    config_path: Path, cfg: Config, fingerprint: str
+) -> bool:
+    try:
+        with _config_lock(config_path):
+            return _update_config_from_fingerprint(config_path, cfg, fingerprint)
+    except (OSError, ValueError) as exc:
+        Log.w(f"Failed to lock config file {config_path}: {exc}")
+        return False
+
+
+def _update_config_from_fingerprint(
     config_path: Path, cfg: Config, fingerprint: str
 ) -> bool:
     parsed = parse_fingerprint(fingerprint)
@@ -308,22 +344,35 @@ def update_config_from_fingerprint(
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
+    # Write to a temporary file in the same directory, validate it, then
+    # atomically replace the original. A failure at any point leaves the
+    # original config untouched.
+    tmp_path: Path | None = None
     try:
-        config_path.write_text(new_text, encoding="utf-8")
+        original_mode = stat.S_IMODE(config_path.stat().st_mode)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(new_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, original_mode)
+        reparse = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+        if not isinstance(reparse, dict):
+            raise ValueError(f"Round-trip parse yielded {type(reparse).__name__}")
+        os.replace(tmp_path, config_path)
+        tmp_path = None
     except Exception as exc:
         Log.w(f"Failed to write updated config {config_path}: {exc}")
         return False
-
-    # Post-write round-trip smoke test: ensure the rewritten file still parses
-    # as a valid config. Catches corrupted writes (e.g. comment-collision
-    # rewrites) before the next run attempts to load the file.
-    try:
-        reparse = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        if not isinstance(reparse, dict):
-            raise ValueError(f"Round-trip parse yielded {type(reparse).__name__}")
-    except Exception as exc:
-        Log.w(f"Round-trip parse of {config_path} failed: {exc}")
-        return False
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     Log.s(
         f"Updated {config_path} -> Android {updates['android_version']}, "

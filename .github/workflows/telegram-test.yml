@@ -1,4 +1,4 @@
-name: Tecno Naman Telegram Test
+name: TecnoNaman Telegram Test
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
       - name: Test Telegram connection
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: "@tecnonamanupdate"
         run: |
           python - <<'PY'
           import json
@@ -24,7 +24,7 @@ jobs:
 
           payload = json.dumps({
               "chat_id": os.environ["CHAT_ID"],
-              "text": "✅ Tecno Naman OTA Tracker Telegram connection is working.",
+              "text": "✅ TecnoNaman OTA Tracker Telegram connection is working.",
           }).encode()
           req = urllib.request.Request(
               f"https://api.telegram.org/bot{os.environ['BOT_TOKEN']}/sendMessage",
@@ -32,7 +32,8 @@ jobs:
               headers={"Content-Type": "application/json"},
           )
           with urllib.request.urlopen(req, timeout=45) as response:
-              if response.status != 200:
-                  raise RuntimeError(f"Telegram HTTP {response.status}")
+              body = json.loads(response.read().decode("utf-8"))
+              if response.status != 200 or not body.get("ok"):
+                  raise RuntimeError(f"Telegram API failed: {body}")
           print("Telegram connection test sent successfully")
           PY

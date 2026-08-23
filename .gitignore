@@ -9,6 +9,19 @@ processed_updates.txt
 
 # Debug output
 debug_checkin_response.txt
+debug_checkin_response_*.txt
+
+# Local secrets
+.env
+**/.env
+
+# Tooling state
+.commandcode/
+
+# Runtime lock files
+*.yml.lock
+*.yaml.lock
+processed_updates.txt.*.lock
 
 # Pi runtime config
 .pi/

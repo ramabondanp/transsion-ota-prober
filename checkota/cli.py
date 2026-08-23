@@ -95,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overall wall-clock budget in seconds. When exceeded, in-flight requests are"
         " signalled to stop and the process exits (0 = no limit).",
     )
+    parser.add_argument(
+        "--fetch-zip-proxy",
+        "--zip-proxy",
+        action="store_true",
+        dest="fetch_zip_proxy",
+        help="Use proxy environment variables when fetching OTA ZIP metadata",
+    )
     return parser
 
 
@@ -125,6 +132,7 @@ def resolve_config_path(value: Path) -> Path:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    args.zip_proxy = getattr(args, "fetch_zip_proxy", False)
     if args.timeout < 0:
         parser.error("--timeout must be >= 0")
     if args.update_incremental:
@@ -330,7 +338,15 @@ def main() -> int:
     args = parser.parse_args()
     _validate_args(parser, args)
 
-    args.run_context = create_run_context(args.dry_run, pool_size=max(1, args.jobs))
+    zip_proxy = getattr(args, "zip_proxy", getattr(args, "fetch_zip_proxy", False))
+    ctx_kwargs = {}
+    if zip_proxy:
+        ctx_kwargs["zip_proxy"] = True
+    args.run_context = create_run_context(
+        args.dry_run,
+        pool_size=max(1, args.jobs),
+        **ctx_kwargs,
+    )
     ctx = args.run_context
     previous_sigint = install_interrupt_handler(ctx)
     watchdog = start_watchdog(ctx, args.timeout)
