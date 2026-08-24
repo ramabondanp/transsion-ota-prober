@@ -117,6 +117,101 @@ def test_cli_main_drains_after_interrupt_sweep(monkeypatch, tmp_path):
     )
 
 
+def test_cli_main_drains_after_worker_failure_and_preserves_status(
+    monkeypatch, tmp_path
+):
+    args = _make_args(tmp_path, config_dir_present=True)
+    ctx = args.run_context
+    sent: list[str] = []
+
+    def fake_process_config(config_path, args):
+        ctx.pending_notifications.append(
+            PendingNotification(
+                msg="<b>failed-worker-update</b>",
+                device_title="failed-worker-device",
+                title="failed-worker-title",
+                is_new_update=True,
+            )
+        )
+        return 1
+
+    class _StubNotifier:
+        def send(self, msg, truncate_desc=True, device_title=None):
+            sent.append(device_title)
+            return True
+
+    _patch_parser_to_return(monkeypatch, args)
+    _patch_create_run_context(monkeypatch, args)
+    monkeypatch.setattr(cli, "_validate_args", lambda p, a: None)
+    monkeypatch.setattr(cli, "install_interrupt_handler", lambda ctx: signal.SIG_DFL)
+    monkeypatch.setattr(cli, "start_watchdog", lambda ctx, t: None)
+    monkeypatch.setattr(
+        cli, "_collect_config_paths", lambda p, a: [tmp_path / "config.yml"]
+    )
+    monkeypatch.setattr(cli, "process_config", fake_process_config)
+    monkeypatch.setattr(processor, "create_notifier", lambda c, a: _StubNotifier())
+    monkeypatch.setattr(processor, "SWEEP_TELEGRAM_DELAY", 0)
+
+    rc = cli.main()
+
+    assert rc == 1
+    assert sent == ["failed-worker-device"]
+    assert ctx.pending_notifications == []
+
+
+def test_global_pool_does_not_shutdown_caller_owned_executor(tmp_path):
+    class _Executor:
+        def __init__(self):
+            self.shutdown_calls = []
+
+        def shutdown(self, **kwargs):
+            self.shutdown_calls.append(kwargs)
+
+    executor = _Executor()
+    ctx = _make_args(tmp_path, config_dir_present=True).run_context
+    args = argparse.Namespace(jobs=2)
+
+    assert cli._run_global_pool(ctx, args, [], executor) == 0
+    assert executor.shutdown_calls == []
+
+
+def test_cli_main_owns_and_cleans_executor_on_interrupt(monkeypatch, tmp_path):
+    args = _make_args(tmp_path, config_dir_present=True)
+    args.jobs = 2
+    created = []
+
+    class _Executor:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+            self.shutdown_calls = []
+            created.append(self)
+
+        def shutdown(self, **kwargs):
+            self.shutdown_calls.append(kwargs)
+
+    def interrupted_pool(ctx, args, config_paths, executor):
+        assert executor is created[0]
+        raise KeyboardInterrupt
+
+    _patch_parser_to_return(monkeypatch, args)
+    _patch_create_run_context(monkeypatch, args)
+    monkeypatch.setattr(cli, "_validate_args", lambda p, a: None)
+    monkeypatch.setattr(cli, "install_interrupt_handler", lambda ctx: signal.SIG_DFL)
+    monkeypatch.setattr(cli, "start_watchdog", lambda ctx, t: None)
+    monkeypatch.setattr(cli, "ThreadPoolExecutor", _Executor)
+    monkeypatch.setattr(
+        cli, "_collect_config_paths", lambda p, a: [tmp_path / "config.yml"]
+    )
+    monkeypatch.setattr(cli, "_run_global_pool", interrupted_pool)
+
+    assert cli.main() == 130
+    assert len(created) == 1
+    assert created[0].max_workers == 2
+    assert created[0].shutdown_calls == [
+        {"wait": True, "cancel_futures": True}
+    ]
+
+
 def test_cli_main_no_drain_in_direct_fp(monkeypatch, tmp_path):
     args = _make_args(tmp_path, config_dir_present=False)
     args.no_config = False

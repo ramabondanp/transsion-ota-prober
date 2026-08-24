@@ -33,7 +33,11 @@ class _RangeSession:
         resp = MagicMock()
         resp.status_code = 206
         resp.content = chunk
-        resp.headers = {"Content-Range": f"bytes {start}-{end}/{len(self.data)}"}
+        resp.headers = {
+            "Content-Range": f"bytes {start}-{end}/{len(self.data)}",
+            "Content-Length": str(len(chunk)),
+        }
+        resp.iter_content.return_value = [chunk]
         resp.raise_for_status = MagicMock()
         return resp
 
@@ -141,14 +145,15 @@ def test_range_get_attempts_2_succeeds_on_second_transient(monkeypatch):
             raise requests.exceptions.ConnectionError("transient")
         resp = MagicMock()
         resp.status_code = 206
-        resp.content = b"payload"
+        resp.headers = {"Content-Range": "bytes 0-6/7", "Content-Length": "7"}
+        resp.iter_content.return_value = [b"payload"]
         resp.raise_for_status = MagicMock()
         responses.append(resp)
         return resp
 
     sess = MagicMock()
     sess.get.side_effect = fake_get
-    result = _range_get(sess, "https://x/y.zip", 0, 10, 5.0, {}, attempts=2)
+    result = _range_get(sess, "https://x/y.zip", 0, 6, 5.0, {}, attempts=2)
     assert result == b"payload"
     assert calls["n"] == 2, "Expected exactly 2 attempts"
     responses[0].close.assert_called_once_with()

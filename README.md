@@ -155,16 +155,34 @@ sends Telegram notifications.
 
 ## Install
 
+From a source checkout, an editable install keeps configs and processed-update state
+in the repository:
+
 ```bash
 pip install -e .
 ```
 
-This installs the `checkota` command and its dependencies.
+Regular wheels are self-contained and include the pinned protobuf vendor tree and
+default YAML configs:
 
-> **Note:** Install editable (`-e`) or run from the source tree. The vendored
-> `google-ota-prober` lives at the repo root (`vendor/`), outside the package, so a
-> plain wheel install cannot bundle it. To relocate the vendored tree, set
-> `CHECKOTA_VENDOR_DIR` to its path.
+```bash
+pip install dist/checkota-*.whl
+```
+
+For a wheel install, configs are copied when bundled config lookup is first needed to
+`$XDG_CONFIG_HOME/checkota/configs` (or `~/.config/checkota/configs`) and missing
+defaults are added without overwriting existing user files. Processed-update state
+is stored in `$XDG_STATE_HOME/checkota` (or `~/.local/state/checkota`). Relative XDG
+variables are ignored in favor of the home-directory defaults. Source checkouts
+continue to use repository-local configs and `processed_updates.txt`. Wheel installs
+do not migrate `processed_updates.txt` from the current working directory.
+
+`CHECKOTA_VENDOR_DIR` remains an explicit override for a relocated vendor tree; a
+source checkout with a valid override continues to use repository-local configs and
+state even when the default `vendor/google-ota-prober/` directory has moved. The
+vendored implementation's attribution and version metadata are included in the wheel.
+Public wheel publication remains license-gated until redistribution terms are
+confirmed.
 
 ## Run
 
@@ -189,6 +207,10 @@ checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
 # Cap overall runtime (signals in-flight requests to stop, then exits)
 checkota -d configs/ --jobs 4 --timeout 600
 ```
+
+With a wheel install, the documented `-d configs/` path selects the seeded XDG config
+directory when no `configs/` directory exists in the current working directory. Any
+explicit directory that already exists is used as given.
 
 Telegram env vars:
 

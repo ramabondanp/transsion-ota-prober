@@ -1,18 +1,20 @@
 import datetime
 import threading
 import time
-from pathlib import Path
 
 import requests
 
-from checkota.constants import PROCESSED_UPDATES_FILE, SDK_TO_ANDROID
+from checkota.constants import SDK_TO_ANDROID
 from checkota.logging import Log
 from checkota.manager import parse_fingerprint
+from checkota.paths import processed_updates_path
 from checkota.zip_metadata import (
     RemoteZipFetchError,
     RemoteZipTransientError,
     fetch_zip_member,
 )
+
+__all__ = ["get_ota_metadata", "processed_updates_path"]
 
 METADATA_PATH = "META-INF/com/android/metadata"
 METADATA_KEYS = {
@@ -180,23 +182,3 @@ def build_sdk_strings(
     log_line = f"SDK level: {sdk_level}"
     release_line = f"**SDK:** {sdk_level}"
     return message, log_line, release_line
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROCESSED_UPDATES_FILE_PATH = PROJECT_ROOT / PROCESSED_UPDATES_FILE
-
-
-def processed_updates_path() -> Path:
-    """Resolve the dedup file path with backwards-compatible fallback.
-
-    Prefers the anchored path (<repo root>/processed_updates.txt). If absent,
-    falls back to the CWD-relative path used by the pre-restructure code so
-    existing dedup state survives the move.
-    """
-    anchored = PROCESSED_UPDATES_FILE_PATH
-    if anchored.exists():
-        return anchored
-    legacy = Path.cwd() / PROCESSED_UPDATES_FILE
-    if legacy.exists() and legacy != anchored:
-        return legacy
-    return anchored

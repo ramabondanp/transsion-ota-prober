@@ -166,3 +166,41 @@ def test_signal_handler_only_sets_stop_event(monkeypatch):
         "Signal handler must NOT call ctx.stop() -- that closes sessions "
         "and the drain would fail."
     )
+
+
+def test_watchdog_only_signals_and_hard_exits(monkeypatch):
+    from checkota import runtime
+
+    calls = []
+
+    class _Event:
+        def set(self):
+            calls.append("event_set")
+
+    class _Ctx:
+        stop_event = _Event()
+
+        def stop(self):
+            calls.append("stop_called")
+
+    class _Timer:
+        def __init__(self, timeout, callback):
+            self.callback = callback
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(runtime.threading, "Timer", _Timer)
+    monkeypatch.setattr(runtime.os, "_exit", lambda code: calls.append(("exit", code)))
+    monkeypatch.setattr(
+        runtime.Log,
+        "e",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("watchdog must not log before hard exit")
+        ),
+    )
+
+    watchdog = runtime.start_watchdog(_Ctx(), 1)
+    watchdog.callback()
+
+    assert calls == ["event_set", ("exit", 124)]

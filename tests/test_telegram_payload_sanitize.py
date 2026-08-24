@@ -91,7 +91,7 @@ def test_final_payload_strips_ota_markup_and_escapes_text_nodes():
 def test_over_limit_payload_preserves_telegraph_link_and_escaped_desc():
     long_desc = (
         '<small><font color=""#949494"">'
-        + ("5 < 7 & x. " * 300)
+        + ("5 < 7 & x. " * 500)
         + "</font></small><br>\n"
     )
     text = _sent_text(_update(long_desc), truncate_desc=True)
@@ -101,3 +101,121 @@ def test_over_limit_payload_preserves_telegraph_link_and_escaped_desc():
     assert "<small>" not in text
     assert "<font" not in text
     assert "<br" not in text
+
+
+def test_final_limit_applies_without_description_match_or_truncation():
+    session = _Session()
+    notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+
+    assert notifier.send("x" * 6000, truncate_desc=False)
+    text = session.posts[-1][1]["text"]
+
+    assert TgNotify._tokenize_telegram_html(text) is not None
+    assert TgNotify._rendered_length(text) <= TgNotify.MAX_LEN
+
+
+def test_final_limit_does_not_split_entities_or_supported_tags():
+    msg = (
+        "<blockquote><b>Header</b> "
+        '<a href="https://example.com/?a=1&amp;b=2">'
+        + ("&lt;value&gt; " * 1000)
+        + "</a></blockquote>"
+    )
+
+    fitted = TgNotify._fit_telegram_html(msg, 120)
+
+    assert fitted is not None
+    assert TgNotify._tokenize_telegram_html(fitted) is not None
+    assert TgNotify._rendered_length(fitted) <= 120
+    assert "<a href=" in fitted
+
+
+def test_final_limit_fails_closed_on_unbalanced_supported_tag():
+    session = _Session()
+    notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+
+    assert notifier.send("<b>unterminated", truncate_desc=False) is False
+    assert session.posts == []
+
+
+def test_common_and_arbitrary_entities_are_canonicalized_before_fitting():
+    session = _Session()
+    notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+
+    assert notifier.send(
+        "A&nbsp;B &copy; &apos; &NotEqualTilde; &#169; &#x1F600; &unknown;",
+        truncate_desc=False,
+    )
+    text = session.posts[-1][1]["text"]
+
+    assert text == "A\u00a0B \u00a9 ' \u2242\u0338 \u00a9 \U0001f600 &amp;unknown;"
+    assert TgNotify._tokenize_telegram_html(text) is not None
+
+
+def test_entity_and_tag_heavy_message_is_not_limited_by_raw_markup_length():
+    session = _Session()
+    notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+    message = "<b>&lt;</b>" * 700
+
+    assert notifier.send(message, truncate_desc=False)
+    text = session.posts[-1][1]["text"]
+
+    assert len(text) > TgNotify.MAX_LEN
+    assert "..." not in text
+    assert TgNotify._rendered_length(text) == 700
+    assert TgNotify._tokenize_telegram_html(text) is not None
+
+
+def test_numeric_entities_obey_rendered_utf16_limit():
+    fitted = TgNotify._fit_telegram_html("&#x1F600;" * 10, 11)
+
+    assert fitted is not None
+    assert fitted == "\U0001f600" * 4 + "..."
+    assert TgNotify._rendered_length(fitted) == 11
+
+
+def test_common_named_entities_can_be_fitted_at_the_rendered_limit():
+    fitted = TgNotify._fit_telegram_html("&nbsp;&copy;&apos;" * 2000, TgNotify.MAX_LEN)
+
+    assert fitted is not None
+    assert TgNotify._rendered_length(fitted) == TgNotify.MAX_LEN
+    assert fitted.endswith("...")
+    assert "&nbsp;" not in fitted
+    assert "&copy;" not in fitted
+    assert "&apos;" not in fitted
+
+
+def test_anchor_entities_are_canonicalized_and_tags_remain_balanced():
+    fitted = TgNotify._fit_telegram_html(
+        '<blockquote><a href="https://example.com/?x=1&amp;y=&quot;two&quot;">'
+        "&copy; &lt;safe&gt;</a></blockquote>",
+        100,
+    )
+
+    assert fitted == (
+        '<blockquote><a href="https://example.com/?x=1&amp;y=&quot;two&quot;">'
+        "\u00a9 &lt;safe&gt;</a></blockquote>"
+    )
+    assert TgNotify._tokenize_telegram_html(fitted) is not None
+
+
+def test_invalid_and_control_entities_fail_closed():
+    invalid_values = (
+        "&#0;",
+        "&#x1F;",
+        "&#10;",
+        "&#x7F;",
+        "&#xD800;",
+        "&#x110000;",
+        "&#xFDD0;",
+        "&#xFFFF;",
+        "&NewLine;",
+        "raw\x00control",
+        "raw\x1ccontrol",
+    )
+
+    for value in invalid_values:
+        session = _Session()
+        notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+        assert notifier.send(value, truncate_desc=False) is False
+        assert session.posts == []

@@ -13,7 +13,27 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["checkota"]
+packages = [
+    "checkota",
+    "checkota._vendor",
+    "checkota._vendor.checkin",
+    "checkota._vendor.proto",
+    "checkota._vendor.utils",
+    "checkota.bundled_configs",
+]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+"checkota._vendor" = "vendor/google-ota-prober"
+"checkota._vendor.checkin" = "vendor/google-ota-prober/checkin"
+"checkota._vendor.proto" = "vendor/google-ota-prober/proto"
+"checkota._vendor.utils" = "vendor/google-ota-prober/utils"
+"checkota.bundled_configs" = "configs"
+
+[tool.setuptools.package-data]
+"checkota._vendor" = ["ATTRIBUTION", "VERSION", "proto/*.proto"]
+"checkota._vendor.proto" = ["*.proto"]
+"checkota.bundled_configs" = ["config-*.yml", "config-*.yaml"]
 
 [tool.ruff]
 extend-exclude = ["vendor"]

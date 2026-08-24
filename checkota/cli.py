@@ -11,7 +11,7 @@ from pathlib import Path
 
 from checkota.logging import Log
 from checkota.manager import Config
-from checkota.paths import APP_CONFIGS_DIR
+from checkota.paths import IS_SOURCE_CHECKOUT, active_config_dir
 from checkota.processor import (
     config_from_fingerprint,
     drain_pending_notifications,
@@ -110,24 +110,42 @@ def resolve_config_path(value: Path) -> Path:
 
     Lookup order:
       1. value as-is (covers absolute paths, ./relative, ~/... already expanded)
-      2. APP_CONFIGS_DIR / f"config-{value}.yml" (bare codename)
-      3. APP_CONFIGS_DIR / value (when value ends in .yml/.yaml)
+      2. active config dir / f"config-{value}.yml" (bare codename)
+      3. active config dir / value (when value ends in .yml/.yaml)
     Returns the original value unchanged if nothing matches so downstream
     errors surface normally.
     """
     if value.is_file():
         return value
+    if value.is_absolute():
+        return value
+
+    config_dir = active_config_dir()
     val = str(value)
     candidates = []
     if val.endswith((".yml", ".yaml")):
-        candidates.append(APP_CONFIGS_DIR / val)
-        candidates.append(APP_CONFIGS_DIR / f"config-{val}")
+        candidates.append(config_dir / val)
+        candidates.append(config_dir / f"config-{val}")
     else:
-        candidates.append(APP_CONFIGS_DIR / f"config-{val}.yml")
-        candidates.append(APP_CONFIGS_DIR / f"{val}.yml")
+        candidates.append(config_dir / f"config-{val}.yml")
+        candidates.append(config_dir / f"{val}.yml")
     for candidate in candidates:
         if candidate.is_file():
             return candidate
+    return value
+
+
+def resolve_config_dir(value: Path) -> Path:
+    """Resolve the documented wheel ``configs/`` alias lazily.
+
+    An explicit directory always wins. Source checkouts retain their prior
+    CWD-relative behavior; only wheels map a missing ``configs/`` argument to
+    the seeded per-user config directory.
+    """
+    if value.is_dir():
+        return value
+    if not IS_SOURCE_CHECKOUT and value == Path("configs"):
+        return active_config_dir()
     return value
 
 
@@ -160,6 +178,7 @@ def _collect_config_paths(
 ) -> list[Path]:
     if args.config:
         return [args.config]
+    args.config_dir = resolve_config_dir(args.config_dir)
     if not args.config_dir.exists() or not args.config_dir.is_dir():
         parser.error("--config-dir must be an existing directory.")
     config_paths = sorted(
@@ -198,8 +217,11 @@ def _run_sequential(
 
 
 def _run_global_pool(
-    ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
-) -> tuple[int, ThreadPoolExecutor]:
+    ctx: RunContext,
+    args: argparse.Namespace,
+    config_paths: list[Path],
+    executor: ThreadPoolExecutor,
+) -> int:
     """Run every (config, variant) pair through a single pool sized by --jobs.
 
     Total in-flight requests never exceed --jobs regardless of how many variants
@@ -255,82 +277,76 @@ def _run_global_pool(
         return config_idx, variant_idx, result, buffer.getvalue()
 
     exit_code = 0
-    executor = ThreadPoolExecutor(max_workers=args.jobs)
     # Count of variant futures still pending per config; a config is ready to
     # flush (in order) once its count hits zero.
     pending: dict[int, int] = {}
     futures = []
-    try:
-        for cj in config_jobs.values():
-            if cj.status != 0 or not cj.variants:
-                pending[cj.index] = 0
-                exit_code = max(exit_code, cj.status)
-                continue
-            vt = len(cj.variants)
-            pending[cj.index] = vt
-            for v_idx, cfg in enumerate(cj.variants, start=1):
-                futures.append(
-                    executor.submit(variant_worker, cj.index, v_idx, vt, cfg, cj.path)
-                )
+    for cj in config_jobs.values():
+        if cj.status != 0 or not cj.variants:
+            pending[cj.index] = 0
+            exit_code = max(exit_code, cj.status)
+            continue
+        vt = len(cj.variants)
+        pending[cj.index] = vt
+        for v_idx, cfg in enumerate(cj.variants, start=1):
+            futures.append(
+                executor.submit(variant_worker, cj.index, v_idx, vt, cfg, cj.path)
+            )
 
-        remaining = set(futures)
-        next_index = 1
-        first = True
-        last_heartbeat = time.monotonic()
+    remaining = set(futures)
+    next_index = 1
+    first = True
+    last_heartbeat = time.monotonic()
 
-        def _flush_ready() -> None:
-            nonlocal next_index, first
-            while next_index <= total and pending.get(next_index, 0) == 0:
-                cj = config_jobs[next_index]
-                if not first:
+    def _flush_ready() -> None:
+        nonlocal next_index, first
+        while next_index <= total and pending.get(next_index, 0) == 0:
+            cj = config_jobs[next_index]
+            if not first:
+                Log.raw("")
+            first = False
+            header = (
+                f"Processing config {cj.index}/{total}: {cj.path}"
+                if total > 1
+                else f"Processing config: {cj.path}"
+            )
+            Log.i(header)
+            if cj.load_output:
+                print(cj.load_output, end="")
+            if len(cj.variants) > 1:
+                Log.raw("")
+            for v_idx in sorted(cj.results):
+                if v_idx > 1:
                     Log.raw("")
-                first = False
-                header = (
-                    f"Processing config {cj.index}/{total}: {cj.path}"
-                    if total > 1
-                    else f"Processing config: {cj.path}"
-                )
-                Log.i(header)
-                if cj.load_output:
-                    print(cj.load_output, end="")
-                if len(cj.variants) > 1:
-                    Log.raw("")
-                for v_idx in sorted(cj.results):
-                    if v_idx > 1:
-                        Log.raw("")
-                    output = cj.results[v_idx]
-                    if output:
-                        print(output, end="" if output.endswith("\n") else "\n")
-                next_index += 1
+                output = cj.results[v_idx]
+                if output:
+                    print(output, end="" if output.endswith("\n") else "\n")
+            next_index += 1
 
+    _flush_ready()
+    while remaining:
+        if ctx.stop_event.is_set():
+            return 130
+        done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
+        for future in done:
+            c_idx, v_idx, result, output = future.result()
+            exit_code = max(exit_code, result)
+            cj = config_jobs[c_idx]
+            cj.results[v_idx] = output
+            pending[c_idx] -= 1
         _flush_ready()
-        while remaining:
-            if ctx.stop_event.is_set():
-                return 130, executor
-            done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
-            for future in done:
-                c_idx, v_idx, result, output = future.result()
-                exit_code = max(exit_code, result)
-                cj = config_jobs[c_idx]
-                cj.results[v_idx] = output
-                pending[c_idx] -= 1
-            _flush_ready()
 
-            now = time.monotonic()
-            if now - last_heartbeat >= 5 and next_index <= total:
-                completed = next_index - 1
-                Log.raw(
-                    f"... waiting for config {next_index}/{total} "
-                    f"({completed}/{total} configs flushed, {len(remaining)} variant tasks in flight)"
-                )
-                last_heartbeat = now
-        _flush_ready()
-    finally:
-        # Shutdown executor without waiting — just stop accepting new tasks.
-        # Running tasks will be waited for in the outer finally block.
-        executor.shutdown(wait=False, cancel_futures=True)
+        now = time.monotonic()
+        if now - last_heartbeat >= 5 and next_index <= total:
+            completed = next_index - 1
+            Log.raw(
+                f"... waiting for config {next_index}/{total} "
+                f"({completed}/{total} configs flushed, {len(remaining)} variant tasks in flight)"
+            )
+            last_heartbeat = now
+    _flush_ready()
 
-    return exit_code, executor
+    return exit_code
 
 
 def main() -> int:
@@ -390,7 +406,8 @@ def main() -> int:
             elif args.jobs == 1:
                 exit_code = _run_sequential(ctx, args, config_paths)
             else:
-                exit_code, executor = _run_global_pool(ctx, args, config_paths)
+                executor = ThreadPoolExecutor(max_workers=args.jobs)
+                exit_code = _run_global_pool(ctx, args, config_paths, executor)
     except KeyboardInterrupt:
         Log.w("Interrupted. Stopping in-flight requests and exiting.")
         ctx.stop_event.set()
@@ -398,7 +415,7 @@ def main() -> int:
     finally:
         # Parallel mode: wait for running tasks to finish before closing sessions.
         if executor is not None:
-            executor.shutdown(wait=True)
+            executor.shutdown(wait=True, cancel_futures=True)
         # Drain AFTER all workers have stopped -- a worker that was still
         # mid-`apply_update_actions` could otherwise append to
         # `ctx.pending_notifications` after the drain took its snapshot.
@@ -409,17 +426,21 @@ def main() -> int:
         #
         # By this point the signal handler and the `except KeyboardInterrupt`
         # arm have already set stop_event. Workers are already stopped
-        # (executor.shutdown(wait=True) above), so clearing stop_event here
+        # (executor.shutdown(wait=True, cancel_futures=True) above), so clearing
+        # stop_event here
         # cannot resurrect them -- it only allows the drain to run. Sessions
         # are still alive (closed below) so `create_notifier(ctx, args)` from
         # inside drain still gets a usable session.
-        if buffered_notifications_possible and exit_code in (0, 130):
-            ctx.stop_event.clear()
-            drain_result = drain_pending_notifications(ctx, args)
-        # Close sessions safely (no worker threads should be using them).
-        ctx.stop()
-        signal.signal(signal.SIGINT, previous_sigint)
-        if watchdog is not None:
-            watchdog.cancel()
+        try:
+            if buffered_notifications_possible:
+                ctx.stop_event.clear()
+                drain_result = drain_pending_notifications(ctx, args)
+        finally:
+            # Close sessions and restore process-global handlers even if a
+            # notifier or second interrupt aborts the drain.
+            ctx.stop()
+            signal.signal(signal.SIGINT, previous_sigint)
+            if watchdog is not None:
+                watchdog.cancel()
 
     return max(exit_code, drain_result)

@@ -4,7 +4,6 @@ the wall-clock watchdog.
 
 import os
 import signal
-import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,8 +14,8 @@ from requests.adapters import HTTPAdapter
 
 from checkota.fingerprints import load_processed_titles
 from checkota.logging import Log
-from checkota.metadata import processed_updates_path
 from checkota.models import PendingNotification
+from checkota.paths import processed_updates_path
 
 
 @dataclass
@@ -165,13 +164,9 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
         return None
 
     def _on_timeout() -> None:
-        Log.e(f"Timeout of {timeout:.0f}s exceeded; signalling stop and exiting.")
         ctx.stop_event.set()
-        ctx.stop()
         # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
         # the stop_event mid-call, so force termination after the budget.
-        sys.stdout.flush()
-        sys.stderr.flush()
         os._exit(124)
 
     watchdog = threading.Timer(timeout, _on_timeout)

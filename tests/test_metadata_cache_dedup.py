@@ -112,14 +112,32 @@ def test_stopped_metadata_fetch_is_not_failure_cached_after_fetch(tmp_path):
     assert retry.call_count == 1
 
 
-def test_metadata_waiter_times_out(monkeypatch):
+def test_metadata_waiter_reuses_owner_after_multiple_polls(monkeypatch):
     ctx = _make_ctx()
-    url = "https://x/stuck.zip"
+    url = "https://x/slow.zip"
     event = threading.Event()
     with ctx.cache_lock:
         ctx._metadata_inflight[url] = event
-    monkeypatch.setattr("checkota.processor._METADATA_WAIT_TIMEOUT", 0.01)
-    assert get_cached_ota_metadata(ctx, url) is None
+    monkeypatch.setattr("checkota.processor._METADATA_WAIT_POLL_INTERVAL", 0.001)
+
+    def publish_result():
+        import time
+
+        time.sleep(0.01)
+        with ctx.cache_lock:
+            ctx.metadata_cache[url] = {
+                "fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"
+            }
+            ctx._metadata_inflight.pop(url, None)
+            event.set()
+
+    publisher = threading.Thread(target=publish_result)
+    publisher.start()
+    assert get_cached_ota_metadata(ctx, url) == {
+        "fingerprint": "X/Y/Z:14/A/B:1:user/release-keys"
+    }
+    publisher.join(timeout=1)
+    assert not publisher.is_alive()
 
 
 def test_get_cached_ota_metadata_uses_zip_proxy_flag():
@@ -144,4 +162,3 @@ def test_get_cached_ota_metadata_uses_zip_proxy_flag():
         assert res is not None
         assert received["session"] is ctx.session()
         assert received["use_proxy_env"] is True
-

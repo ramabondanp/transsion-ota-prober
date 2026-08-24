@@ -53,11 +53,19 @@ def test_zip_metadata_bypasses_proxies():
 
         def get(self, url, headers=None, timeout=None, stream=False, **kwargs):
             self.get_kwargs = kwargs
+            start, end = (int(value) for value in headers["Range"].split("=")[1].split("-"))
 
             class MockResp:
-                status_code = 206
-                headers = {"Content-Range": "bytes 0-0/100"}
-                content = b"x"
+                def __init__(self):
+                    self.status_code = 206
+                    self.headers = {
+                        "Content-Range": f"bytes {start}-{end}/100",
+                        "Content-Length": str(end - start + 1),
+                    }
+                    self.content = b"x" * (end - start + 1)
+
+                def iter_content(self, chunk_size):
+                    return iter((self.content,))
 
                 def raise_for_status(self):
                     pass
@@ -92,11 +100,19 @@ def test_zip_metadata_uses_proxy_env():
 
         def get(self, url, headers=None, timeout=None, stream=False, **kwargs):
             self.get_kwargs = kwargs
+            start, end = (int(value) for value in headers["Range"].split("=")[1].split("-"))
 
             class MockResp:
-                status_code = 206
-                headers = {"Content-Range": "bytes 0-0/100"}
-                content = b"x"
+                def __init__(self):
+                    self.status_code = 206
+                    self.headers = {
+                        "Content-Range": f"bytes {start}-{end}/100",
+                        "Content-Length": str(end - start + 1),
+                    }
+                    self.content = b"x" * (end - start + 1)
+
+                def iter_content(self, chunk_size):
+                    return iter((self.content,))
 
                 def raise_for_status(self):
                     pass
@@ -140,4 +156,3 @@ def test_cli_parser_fetch_zip_proxy():
 
     args3 = parser.parse_args(["-c", "X6873"])
     assert args3.fetch_zip_proxy is False
-

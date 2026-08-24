@@ -2,16 +2,27 @@ from __future__ import annotations
 
 import html
 import re
+from html.entities import html5
 
 import requests
 
 from checkota.constants import (
     DESC_SECTION_RE,
     SECTION_HEADER_RE,
-    SENTENCE_BOUNDARY_RE,
     TELEGRAPH_API_URL,
 )
 from checkota.logging import Log
+
+_SUPPORTED_TAG_RE = re.compile(
+    r"</?(?:b|code|blockquote)>|</a>|"
+    r"<a\s+href=(?:\"[^\"]*\"|'[^']*')>",
+    flags=re.IGNORECASE,
+)
+_HTML_ENTITY_RE = re.compile(r"&(?:#[xX][0-9A-Fa-f]+|#\d+|[A-Za-z][A-Za-z0-9]+);")
+_ANCHOR_TAG_RE = re.compile(
+    r"<a\s+href=(?P<quote>\"|')(?P<href>.*)(?P=quote)>",
+    flags=re.IGNORECASE,
+)
 
 
 class TgNotify:
@@ -150,79 +161,229 @@ class TgNotify:
         if max_len is None:
             max_len = self.DESC_MAX_LEN
 
-        link_text = (
-            f'... <a href="{telegraph_url}">Read full changelogs</a>'
+        link_suffix = (
+            f' <a href="{telegraph_url}">Read full changelogs</a>'
             if telegraph_url
-            else "..."
+            else ""
         )
-        effective_max_len = max_len - len(link_text) if telegraph_url else max_len
 
-        if len(desc) <= effective_max_len:
+        if self._rendered_length(desc) <= max_len:
             return desc
 
-        truncated = desc[:effective_max_len]
+        effective_max_len = max_len - self._rendered_length(link_suffix)
+        truncated = self._fit_telegram_html(desc, effective_max_len)
+        if truncated is None:
+            return link_suffix.lstrip()
+        return truncated + link_suffix
 
-        sentence_endings = [
-            match.end() - 1 for match in SENTENCE_BOUNDARY_RE.finditer(truncated)
-        ]
+    @staticmethod
+    def _is_safe_code_point(char: str, *, allow_newline: bool = True) -> bool:
+        code_point = ord(char)
+        return not (
+            code_point < 0x20
+            and (char != "\n" or not allow_newline)
+            or 0x7F <= code_point <= 0x9F
+            or 0xD800 <= code_point <= 0xDFFF
+            or 0xFDD0 <= code_point <= 0xFDEF
+            or code_point & 0xFFFF in (0xFFFE, 0xFFFF)
+        )
 
-        if sentence_endings and sentence_endings[-1] > effective_max_len * 0.6:
-            result = truncated[: sentence_endings[-1] + 1]
-        else:
-            last_paragraph = truncated.rfind("\n\n")
-            if last_paragraph > effective_max_len * 0.5:
-                result = truncated[:last_paragraph]
+    @staticmethod
+    def _escape_telegram_char(char: str, *, attribute: bool = False) -> str:
+        if char == "&":
+            return "&amp;"
+        if char == "<":
+            return "&lt;"
+        if char == ">":
+            return "&gt;"
+        if attribute and char == '"':
+            return "&quot;"
+        return char
+
+    @staticmethod
+    def _canonicalize_text(text: str, *, attribute: bool = False) -> list[str] | None:
+        """Decode HTML entities once and emit Telegram-safe text fragments."""
+        fragments: list[str] = []
+        position = 0
+        while position < len(text):
+            match = _HTML_ENTITY_RE.match(text, position)
+            from_entity = match is not None
+            if match is None:
+                decoded = text[position]
+                position += 1
             else:
-                last_line = truncated.rfind("\n")
-                if last_line > effective_max_len * 0.7:
-                    result = truncated[:last_line]
+                entity = match.group(0)
+                position = match.end()
+                if entity.startswith("&#"):
+                    number = entity[2:-1]
+                    base = 10
+                    if number[:1].lower() == "x":
+                        number = number[1:]
+                        base = 16
+                    try:
+                        code_point = int(number, base)
+                        decoded = chr(code_point)
+                    except (ValueError, OverflowError):
+                        return None
                 else:
-                    last_space = truncated.rfind(" ")
-                    if last_space > effective_max_len * 0.8:
-                        result = truncated[:last_space]
-                    else:
-                        result = truncated
+                    decoded = html5.get(entity[1:])
+                    if decoded is None:
+                        decoded = entity
 
-        result += link_text
+            for char in decoded:
+                if not TgNotify._is_safe_code_point(
+                    char, allow_newline=not from_entity
+                ):
+                    return None
+                fragments.append(
+                    TgNotify._escape_telegram_char(char, attribute=attribute)
+                )
+        return fragments
+
+    @staticmethod
+    def _tokenize_telegram_html(value: str) -> list[tuple[str, str, str | None]] | None:
+        """Canonicalize and tokenize supported, balanced Telegram HTML."""
+        tokens: list[tuple[str, str, str | None]] = []
+        stack: list[str] = []
+        last_end = 0
+
+        def add_text(text: str) -> bool:
+            fragments = TgNotify._canonicalize_text(text)
+            if fragments is None:
+                return False
+            tokens.extend(("text", fragment, None) for fragment in fragments)
+            return True
+
+        for match in _SUPPORTED_TAG_RE.finditer(value):
+            if not add_text(value[last_end : match.start()]):
+                return None
+
+            matched_tag = match.group(0)
+            is_closing = matched_tag.startswith("</")
+            name = (
+                "a"
+                if re.match(r"<\s*/?\s*a\b", matched_tag, re.IGNORECASE)
+                else matched_tag[2 if is_closing else 1 : -1].lower()
+            )
+            if is_closing:
+                if not stack or stack[-1] != name:
+                    return None
+                stack.pop()
+                tokens.append(("tag_close", f"</{name}>", name))
+            else:
+                if name == "a":
+                    anchor_match = _ANCHOR_TAG_RE.fullmatch(matched_tag)
+                    if anchor_match is None:
+                        return None
+                    href = TgNotify._canonicalize_text(
+                        anchor_match.group("href"), attribute=True
+                    )
+                    if href is None:
+                        return None
+                    raw_tag = f'<a href="{"".join(href)}">'
+                else:
+                    raw_tag = f"<{name}>"
+                stack.append(name)
+                tokens.append(("tag_open", raw_tag, name))
+            last_end = match.end()
+
+        if not add_text(value[last_end:]) or stack:
+            return None
+        return tokens
+
+    @staticmethod
+    def _rendered_units(value: str) -> int:
+        """Count Telegram-visible UTF-16 code units conservatively."""
+        return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+
+    @staticmethod
+    def _rendered_length(value: str) -> int:
+        tokens = TgNotify._tokenize_telegram_html(value)
+        if tokens is None:
+            return TgNotify._rendered_units(value)
+        return sum(
+            TgNotify._rendered_units(html.unescape(raw))
+            for kind, raw, _ in tokens
+            if kind in ("text", "entity")
+        )
+
+    @staticmethod
+    def _fit_telegram_html(value: str, max_len: int) -> str | None:
+        """Canonicalize and fit HTML by Telegram's rendered UTF-16 limit."""
+        if max_len <= 0:
+            return None
+
+        tokens = TgNotify._tokenize_telegram_html(value)
+        if tokens is None:
+            return None
+
+        rendered_len = sum(
+            TgNotify._rendered_units(html.unescape(raw))
+            for kind, raw, _ in tokens
+            if kind in ("text", "entity")
+        )
+        canonical = "".join(raw for _, raw, _ in tokens)
+        if rendered_len <= max_len:
+            return canonical
+
+        ellipsis = "." * min(3, max_len)
+        ellipsis_len = TgNotify._rendered_units(ellipsis)
+        selected: list[tuple[str, str, str | None]] = []
+        open_tags: list[tuple[str, str]] = []
+        selected_rendered_len = 0
+
+        def closing_markup(tags: list[tuple[str, str]]) -> str:
+            return "".join(f"</{name}>" for name, _ in reversed(tags))
+
+        def fits(
+            candidate_rendered_len: int,
+        ) -> bool:
+            return candidate_rendered_len + ellipsis_len <= max_len
+
+        for kind, raw, name in tokens:
+            next_tags = open_tags
+            next_rendered_len = selected_rendered_len
+            if kind in ("text", "entity"):
+                next_rendered_len += TgNotify._rendered_units(html.unescape(raw))
+            elif kind == "tag_open":
+                if name is None:
+                    return None
+                next_tags = [*open_tags, (name, raw)]
+            elif kind == "tag_close":
+                if not open_tags or name != open_tags[-1][0]:
+                    return None
+                next_tags = open_tags[:-1]
+
+            if not fits(next_rendered_len):
+                break
+
+            selected.append((kind, raw, name))
+            selected_rendered_len = next_rendered_len
+            open_tags = next_tags
+
+        result = "".join(raw for _, raw, _ in selected)
+        result += ellipsis + closing_markup(open_tags)
+        if TgNotify._rendered_length(result) > max_len:
+            return None
         return result
 
     @staticmethod
-    def _escape_text_preserving_telegram_tags(html: str) -> str:
-        """Escape text nodes while preserving trusted Telegram HTML tags."""
-        tag_re = re.compile(
-            r"</?(?:b|code|blockquote)>|<a\s+href=\"[^\"]+\">|</a>",
-            flags=re.IGNORECASE,
-        )
-        pieces: list[str] = []
-        last_end = 0
-        for match in tag_re.finditer(html):
-            if match.start() > last_end:
-                text = html[last_end : match.start()]
-                text = re.sub(
-                    r"&(?!#\d+;|#x[0-9A-Fa-f]+;|[A-Za-z][A-Za-z0-9]+;)",
-                    "&amp;",
-                    text,
-                )
-                pieces.append(text.replace("<", "&lt;").replace(">", "&gt;"))
-            pieces.append(match.group(0))
-            last_end = match.end()
-        if last_end < len(html):
-            text = html[last_end:]
-            text = re.sub(
-                r"&(?!#\d+;|#x[0-9A-Fa-f]+;|[A-Za-z][A-Za-z0-9]+;)",
-                "&amp;",
-                text,
-            )
-            pieces.append(text.replace("<", "&lt;").replace(">", "&gt;"))
-        return "".join(pieces)
+    def _escape_text_preserving_telegram_tags(html: str) -> str | None:
+        """Canonicalize text and attributes while preserving balanced tags."""
+        tokens = TgNotify._tokenize_telegram_html(html)
+        if tokens is None:
+            return None
+        return "".join(raw for _, raw, _ in tokens)
 
     @staticmethod
-    def _sanitize_html(html: str) -> str:
+    def _sanitize_html(html: str) -> str | None:
         if not html:
             return html
+        if any(not TgNotify._is_safe_code_point(char) for char in html):
+            return None
 
         # --- Step 1: Bold section headers in raw HTML ---
-        # Headers are short lines followed by <br> that are NOT wrapped in <small>/<font>.
+        # Headers are short lines followed by <br> and not wrapped in tags.
         # The structure in OTA descriptions is consistently:
         #   <small><font>content</font></small><br>
         #   HEADER<br>
@@ -292,10 +453,13 @@ class TgNotify:
         Log.i("Sending Telegram notification...")
 
         msg = self._sanitize_html(msg)
+        if msg is None:
+            Log.e("Failed to canonicalize Telegram notification HTML")
+            return False
 
         telegraph_url = None
 
-        if truncate_desc and len(msg) > self.MAX_LEN:
+        if truncate_desc and self._rendered_length(msg) > self.MAX_LEN:
             match = DESC_SECTION_RE.search(msg)
 
             if match:
@@ -303,9 +467,7 @@ class TgNotify:
                 description = match.group(2).strip()
                 after_desc = match.group(3)
 
-                excess_chars = len(msg) - self.MAX_LEN
-
-                if excess_chars > 0 and len(description) > self.DESC_MAX_LEN:
+                if self._rendered_length(description) > self.DESC_MAX_LEN:
                     title_match = re.search(r"<b>Title:</b> (.*?)\n", before_desc)
                     page_title = (
                         title_match.group(1)
@@ -324,6 +486,13 @@ class TgNotify:
                     msg = msg.replace(
                         match.group(0), before_desc + truncated_desc + after_desc
                     )
+
+        # The description-specific path is only an optimization. Always apply
+        # the final Telegram limit after all sanitization and optional rewriting.
+        msg = self._fit_telegram_html(msg, self.MAX_LEN)
+        if msg is None:
+            Log.e("Failed to fit Telegram notification within the final length limit")
+            return False
 
         try:
             payload = {

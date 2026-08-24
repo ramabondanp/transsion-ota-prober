@@ -18,6 +18,7 @@ from checkota.fingerprints import (
 from checkota.logging import Log
 from checkota.manager import (
     Config,
+    fingerprint_identity_matches_config,
     parse_fingerprint,
     region_code_from_product,
     region_from_product,
@@ -96,10 +97,9 @@ def log_variant_header(
 
 _CACHE_MISS = object()
 
-#: How long a waiting worker blocks on a peer's in-flight fetch before looping
-#: to re-check stop_event / cache. Bounds a waiter's stall independently of the
-#: fetcher, so a stuck fetch can never strand its waiters indefinitely.
-_METADATA_WAIT_TIMEOUT = 15.0
+#: Polling interval for workers waiting on a peer's in-flight fetch. The owner
+#: controls completion; polling only keeps waiters responsive to cancellation.
+_METADATA_WAIT_POLL_INTERVAL = 1.0
 
 
 def get_cached_ota_metadata(
@@ -134,18 +134,9 @@ def get_cached_ota_metadata(
                 ctx._metadata_inflight[url] = fetcher_event
 
         if wait_event is not None:
-            # Bound the wait independently of the fetcher so a stuck socket
-            # cannot strand this worker indefinitely.
-            if not wait_event.wait(_METADATA_WAIT_TIMEOUT):
-                Log.w(f"Timed out waiting for metadata fetch: {url}")
-                return None
-            with ctx.cache_lock:
-                cached = ctx.metadata_cache.get(url, _CACHE_MISS)
-            if cached is not _CACHE_MISS:
-                return cast(dict[str, str] | None, cached)
-            # Woken but nothing cached => the fetch failed. Loop; the failure
-            # cache will make this worker (and any other waiter) return None
-            # rather than immediately trying the same bad URL again.
+            # The owner may need several range requests and retries. Polling
+            # keeps cancellation responsive without abandoning a valid fetch.
+            wait_event.wait(_METADATA_WAIT_POLL_INTERVAL)
             continue
 
         assert fetcher_event is not None
@@ -243,6 +234,8 @@ def collect_update_info(
     debug_label = config_path.stem
     if variant_label:
         debug_label = f"{debug_label}-{variant_label}"
+    if cfg.variant_index is not None:
+        debug_label = f"{debug_label}-v{cfg.variant_index + 1}"
     checker = UpdateChecker(
         cfg,
         session=ctx.session(),
@@ -278,6 +271,12 @@ def collect_update_info(
         ota_meta = get_cached_ota_metadata(ctx, url)
         if not ota_meta or not ota_meta.get("fingerprint"):
             Log.e("Could not determine target fingerprint from OTA metadata.")
+            return 1, None
+        if not fingerprint_identity_matches_config(cfg, ota_meta["fingerprint"]):
+            Log.e(
+                "Target fingerprint identity does not match the current config; "
+                "not printing it."
+            )
             return 1, None
         Log.raw(ota_meta["fingerprint"])
         return 0, None
@@ -337,6 +336,12 @@ def collect_update_info(
         return 1, None
 
     target_fp = ota_meta["fingerprint"]
+    if not fingerprint_identity_matches_config(cfg, target_fp):
+        Log.e(
+            "Target fingerprint identity does not match the current config. "
+            "Skipping config update, notification, and title processing."
+        )
+        return 1, None
     Log.i(f"Target build: {target_fp}")
     inc = ota_meta.get("post_build_incremental")
     spl = ota_meta.get("post_security_patch_level")
@@ -387,6 +392,13 @@ def collect_update_info(
 def apply_update_actions(
     ctx: RunContext, update: VariantUpdate, args: argparse.Namespace
 ) -> int:
+    if not fingerprint_identity_matches_config(update.cfg, update.target_fp):
+        Log.e(
+            "Target fingerprint identity does not match the current config. "
+            "Skipping config update and notification."
+        )
+        return 1
+
     update_incremental_only = bool(getattr(args, "update_incremental", False))
     if update_incremental_only or update.is_new_update:
         parsed_target = parse_fingerprint(update.target_fp)

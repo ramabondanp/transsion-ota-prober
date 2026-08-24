@@ -1,8 +1,9 @@
-"""checkota — OTA firmware update checker for Transsion devices.
+"""checkota - OTA firmware update checker for Transsion devices.
 
-Importing the package injects the vendored ``google-ota-prober`` tree onto
-``sys.path`` so submodules can import the vendored ``checkin``/``utils``
-packages regardless of how the app is launched.
+The package bootstrap makes both the source checkout and a regular wheel
+self-contained: source uses its repository vendor tree, while a wheel uses the
+namespaced vendor resources included by setuptools. Wheel config defaults are
+seeded lazily only when config lookup needs them.
 """
 
 from .paths import ensure_vendor_on_path
