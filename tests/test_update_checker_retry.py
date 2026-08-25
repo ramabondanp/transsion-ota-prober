@@ -37,9 +37,7 @@ class _Response:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(
-                f"HTTP {self.status_code}", response=self
-            )
+            raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
     def close(self):
         self.close_calls += 1

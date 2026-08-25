@@ -207,9 +207,7 @@ def test_cli_main_owns_and_cleans_executor_on_interrupt(monkeypatch, tmp_path):
     assert cli.main() == 130
     assert len(created) == 1
     assert created[0].max_workers == 2
-    assert created[0].shutdown_calls == [
-        {"wait": True, "cancel_futures": True}
-    ]
+    assert created[0].shutdown_calls == [{"wait": True, "cancel_futures": True}]
 
 
 def test_cli_main_no_drain_in_direct_fp(monkeypatch, tmp_path):

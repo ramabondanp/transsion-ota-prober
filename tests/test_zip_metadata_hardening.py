@@ -22,7 +22,9 @@ from checkota.zip_metadata import (
 
 
 class _Response:
-    def __init__(self, body, start, end, total, *, status=206, chunks=None, headers=None):
+    def __init__(
+        self, body, start, end, total, *, status=206, chunks=None, headers=None
+    ):
         self.status_code = status
         self.headers = {
             "Content-Range": f"bytes {start}-{end}/{total}",
@@ -49,7 +51,9 @@ class _RangeSession:
 
     def get(self, url, headers=None, **kwargs):
         range_header = (headers or {}).get("Range", "")
-        start, end = (int(value) for value in range_header.removeprefix("bytes=").split("-"))
+        start, end = (
+            int(value) for value in range_header.removeprefix("bytes=").split("-")
+        )
         self.requests.append((start, end, kwargs))
         body = self.data[start : end + 1]
         return _Response(body, start, end, len(self.data))
@@ -92,7 +96,9 @@ def _upgrade_to_zip64(archive):
     return archive[:eocd_offset] + eocd64 + locator + bytes(eocd)
 
 
-def _central_record(name, *, method=0, compressed=1, uncompressed=1, offset=0, extra=b""):
+def _central_record(
+    name, *, method=0, compressed=1, uncompressed=1, offset=0, extra=b""
+):
     record = bytearray(46)
     record[:4] = b"PK\x01\x02"
     struct.pack_into("<H", record, 10, method)
@@ -137,7 +143,10 @@ def test_range_get_streams_with_status_206_and_exact_length():
     session = MagicMock()
     session.get.return_value = response
 
-    assert _range_get(session, "https://example.test/archive.zip", 0, 3, 5.0, {}) == b"abcd"
+    assert (
+        _range_get(session, "https://example.test/archive.zip", 0, 3, 5.0, {})
+        == b"abcd"
+    )
     assert session.get.call_args.kwargs["stream"] is True
     assert response.closed is True
 
@@ -253,20 +262,24 @@ def test_deflate_output_is_bounded_and_must_match_declaration():
 
 def test_local_header_name_and_sizes_are_validated():
     name = b"META-INF/com/android/metadata"
-    raw = struct.pack(
-        "<4s5H3I2H",
-        _LOCAL_SIG,
-        20,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        1,
-        len(name),
-        0,
-    ) + name + b"x"
+    raw = (
+        struct.pack(
+            "<4s5H3I2H",
+            _LOCAL_SIG,
+            20,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            len(name),
+            0,
+        )
+        + name
+        + b"x"
+    )
 
     with pytest.raises(RemoteZipFetchError):
         _validate_local_header(raw, b"other", 0, 1, 1, 0)
@@ -279,7 +292,9 @@ def test_local_header_name_and_sizes_are_validated():
 
 def test_zip64_uncompressed_size_and_session_ownership(monkeypatch):
     member = "META-INF/com/android/metadata"
-    content = b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    content = (
+        b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    )
     zip64_extra = struct.pack("<HHQ", 0x0001, 8, len(content))
     archive = bytearray(_build_zip(member, content, extra=zip64_extra))
     central_offset = archive.find(b"PK\x01\x02")
@@ -287,9 +302,12 @@ def test_zip64_uncompressed_size_and_session_ownership(monkeypatch):
     archive = bytes(archive)
 
     caller_session = _RangeSession(archive)
-    assert fetch_zip_member(
-        "https://example.test/archive.zip", member, session=caller_session
-    ) == content
+    assert (
+        fetch_zip_member(
+            "https://example.test/archive.zip", member, session=caller_session
+        )
+        == content
+    )
     assert caller_session.close_count == 0
 
     owned_session = _RangeSession(archive)
@@ -300,20 +318,27 @@ def test_zip64_uncompressed_size_and_session_ownership(monkeypatch):
 
 def test_fetch_member_from_archive_with_zip64_eocd_and_locator():
     member = "META-INF/com/android/metadata"
-    content = b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    content = (
+        b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    )
     archive = _upgrade_to_zip64(_build_zip(member, content))
 
-    assert fetch_zip_member(
-        "https://example.test/archive.zip",
-        member,
-        session=_RangeSession(archive),
-    ) == content
+    assert (
+        fetch_zip_member(
+            "https://example.test/archive.zip",
+            member,
+            session=_RangeSession(archive),
+        )
+        == content
+    )
 
 
 @pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
 def test_fetch_member_rejects_corrupt_crc_for_stored_and_deflated(compression):
     member = "META-INF/com/android/metadata"
-    content = b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    content = (
+        b"post-build=vendor/product/device:14/build/incremental:user/release-keys\n"
+    )
     archive = bytearray(_build_zip(member, content, compression))
     wrong_crc = (zip_metadata.zlib.crc32(content) + 1) & 0xFFFFFFFF
     struct.pack_into("<I", archive, archive.find(_LOCAL_SIG) + 14, wrong_crc)

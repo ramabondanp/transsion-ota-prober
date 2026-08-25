@@ -53,7 +53,9 @@ def test_zip_metadata_bypasses_proxies():
 
         def get(self, url, headers=None, timeout=None, stream=False, **kwargs):
             self.get_kwargs = kwargs
-            start, end = (int(value) for value in headers["Range"].split("=")[1].split("-"))
+            start, end = (
+                int(value) for value in headers["Range"].split("=")[1].split("-")
+            )
 
             class MockResp:
                 def __init__(self):
@@ -100,7 +102,9 @@ def test_zip_metadata_uses_proxy_env():
 
         def get(self, url, headers=None, timeout=None, stream=False, **kwargs):
             self.get_kwargs = kwargs
-            start, end = (int(value) for value in headers["Range"].split("=")[1].split("-"))
+            start, end = (
+                int(value) for value in headers["Range"].split("=")[1].split("-")
+            )
 
             class MockResp:
                 def __init__(self):
@@ -128,7 +132,9 @@ def test_zip_metadata_uses_proxy_env():
     _probe_size(session, "https://example.com/test.zip", 10.0, {}, use_proxy_env=True)  # type: ignore[arg-type]
     assert "proxies" not in session.get_kwargs
 
-    _range_get(session, "https://example.com/test.zip", 0, 10, 10.0, {}, use_proxy_env=True)  # type: ignore[arg-type]
+    _range_get(
+        session, "https://example.com/test.zip", 0, 10, 10.0, {}, use_proxy_env=True
+    )  # type: ignore[arg-type]
     assert "proxies" not in session.get_kwargs
 
 

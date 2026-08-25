@@ -13,8 +13,7 @@ def _fake_fetch_returning_content(monkeypatch, content: str) -> None:
 def test_invalid_timestamp_logs_warning(monkeypatch, capsys):
     _fake_fetch_returning_content(
         monkeypatch,
-        "post-build=X/Y/Z:14/A/B:1:user/release-keys\n"
-        "post-timestamp=not-a-number\n",
+        "post-build=X/Y/Z:14/A/B:1:user/release-keys\npost-timestamp=not-a-number\n",
     )
     result = get_ota_metadata("https://x/y.zip")
     captured = capsys.readouterr()
@@ -28,8 +27,7 @@ def test_invalid_timestamp_logs_warning(monkeypatch, capsys):
 def test_valid_timestamp_builds_date(monkeypatch, capsys):
     _fake_fetch_returning_content(
         monkeypatch,
-        "post-build=X/Y/Z:14/A/B:1:user/release-keys\n"
-        "post-timestamp=1700000000\n",
+        "post-build=X/Y/Z:14/A/B:1:user/release-keys\npost-timestamp=1700000000\n",
     )
     result = get_ota_metadata("https://x/y.zip")
     assert result is not None

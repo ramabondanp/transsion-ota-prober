@@ -342,9 +342,10 @@ def test_sweep_failure_retains_and_releases_claim_for_retry(tmp_path):
             return self.calls != 2
 
     notifier = _Notifier()
-    with patch(
-        "checkota.processor.create_notifier", return_value=notifier
-    ), patch("checkota.processor.SWEEP_TELEGRAM_DELAY", 0):
+    with (
+        patch("checkota.processor.create_notifier", return_value=notifier),
+        patch("checkota.processor.SWEEP_TELEGRAM_DELAY", 0),
+    ):
         assert drain_pending_notifications(ctx, _args()) == 1
 
     assert ctx.pending_notifications == [second]
@@ -353,9 +354,10 @@ def test_sweep_failure_retains_and_releases_claim_for_retry(tmp_path):
     assert "T1" in ctx.processed_titles
     assert "T2" not in ctx.processed_titles
 
-    with patch(
-        "checkota.processor.create_notifier", return_value=notifier
-    ), patch("checkota.processor.SWEEP_TELEGRAM_DELAY", 0):
+    with (
+        patch("checkota.processor.create_notifier", return_value=notifier),
+        patch("checkota.processor.SWEEP_TELEGRAM_DELAY", 0),
+    ):
         assert drain_pending_notifications(ctx, _args()) == 0
 
     assert ctx.pending_notifications == []

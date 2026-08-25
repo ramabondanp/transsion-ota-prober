@@ -150,6 +150,6 @@ def test_pyproject_declares_packaged_vendor_and_configs():
         "config-*.yml",
         "config-*.yaml",
     ]
-    assert "ATTRIBUTION" in data["tool"]["setuptools"]["package-data"][
-        "checkota._vendor"
-    ]
+    assert (
+        "ATTRIBUTION" in data["tool"]["setuptools"]["package-data"]["checkota._vendor"]
+    )

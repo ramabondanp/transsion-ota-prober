@@ -48,7 +48,9 @@ def test_direct_fingerprint_does_not_seed_configs(monkeypatch):
         ],
     )
     monkeypatch.setattr(cli, "create_run_context", lambda *args, **kwargs: ctx)
-    monkeypatch.setattr(cli, "install_interrupt_handler", lambda context: signal.SIG_DFL)
+    monkeypatch.setattr(
+        cli, "install_interrupt_handler", lambda context: signal.SIG_DFL
+    )
     monkeypatch.setattr(cli, "start_watchdog", lambda context, timeout: None)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
     monkeypatch.setattr(cli, "config_from_fingerprint", lambda fingerprint: object())

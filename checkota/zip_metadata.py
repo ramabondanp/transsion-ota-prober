@@ -96,8 +96,7 @@ def _is_allowed_ota_redirect(value: str) -> bool:
         )
         return (
             not any(
-                char.isspace() or ord(char) < 32 or ord(char) == 127
-                for char in value
+                char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
             )
             and parsed.scheme == "https"
             and trusted_host
@@ -133,9 +132,7 @@ def _validate_range_response(
         raise RemoteZipFetchError("Missing Content-Range header on ranged response.")
     match = _CONTENT_RANGE_RE.fullmatch(content_range.strip())
     if match is None:
-        raise RemoteZipFetchError(
-            f"Malformed Content-Range header {content_range!r}."
-        )
+        raise RemoteZipFetchError(f"Malformed Content-Range header {content_range!r}.")
 
     response_start, response_end, total = (int(value) for value in match.groups())
     expected_length = end - start + 1
@@ -146,7 +143,9 @@ def _validate_range_response(
     if response_end >= total:
         raise RemoteZipFetchError("Content-Range extends beyond the remote resource.")
     if expected_total is not None and total != expected_total:
-        raise RemoteZipFetchError("Content-Range reports an inconsistent resource size.")
+        raise RemoteZipFetchError(
+            "Content-Range reports an inconsistent resource size."
+        )
 
     content_length_header = _header_value(response_headers, "Content-Length")
     if content_length_header is not None:
@@ -178,7 +177,9 @@ def _read_range_response(
                 raise RemoteZipFetchError("Ranged response yielded a non-byte chunk.")
             received += len(chunk)
             if received > expected_length:
-                raise RemoteZipFetchError("Ranged response body is larger than declared.")
+                raise RemoteZipFetchError(
+                    "Ranged response body is larger than declared."
+                )
             chunks.append(chunk)
     except AttributeError as exc:
         raise RemoteZipFetchError("Ranged response cannot be streamed.") from exc
@@ -355,7 +356,10 @@ def _locate_cd(tail: bytes, tail_start: int) -> tuple[int, int]:
     )
     if zip64_needed:
         locator_pos = eocd_pos - 20
-        if locator_pos < 0 or tail[locator_pos : locator_pos + 4] != _EOCD64_LOCATOR_SIG:
+        if (
+            locator_pos < 0
+            or tail[locator_pos : locator_pos + 4] != _EOCD64_LOCATOR_SIG
+        ):
             raise RemoteZipFetchError("ZIP64 locator not found for large archive.")
         if locator_pos + 20 > len(tail):
             raise RemoteZipFetchError("Truncated ZIP64 locator.")
@@ -498,7 +502,9 @@ def _find_entry(
             extra, uncomp_size, comp_size, local_offset, disk_start
         )
         if disk_start != 0:
-            raise RemoteZipFetchError("Multi-disk central-directory entries are unsupported.")
+            raise RemoteZipFetchError(
+                "Multi-disk central-directory entries are unsupported."
+            )
 
         if name == target_name:
             if comp_size > MAX_COMPRESSED_METADATA_BYTES:
@@ -603,7 +609,9 @@ def _decompress_deflate(payload: bytes, expected_size: int) -> bytes:
         raise RemoteZipFetchError("Malformed deflated metadata.") from exc
 
     if len(output) > MAX_DECOMPRESSED_METADATA_BYTES or len(output) != expected_size:
-        raise RemoteZipFetchError("Deflated metadata size does not match its declaration.")
+        raise RemoteZipFetchError(
+            "Deflated metadata size does not match its declaration."
+        )
     return output
 
 
@@ -653,9 +661,7 @@ def _fetch_zip_member(
             expected_total=size,
         )
 
-    method, uncomp_size, comp_size, local_offset, _, _, crc32 = _find_entry(
-        cd, target
-    )
+    method, uncomp_size, comp_size, local_offset, _, _, crc32 = _find_entry(cd, target)
     if method not in (0, 8):
         raise RemoteZipFetchError(f"Unsupported ZIP compression method {method}.")
     if local_offset > size - 30:
@@ -688,7 +694,9 @@ def _fetch_zip_member(
 
     if method == 0:
         if len(payload) != uncomp_size:
-            raise RemoteZipFetchError("Stored metadata size does not match its declaration.")
+            raise RemoteZipFetchError(
+                "Stored metadata size does not match its declaration."
+            )
         result = payload
     else:
         result = _decompress_deflate(payload, uncomp_size)
