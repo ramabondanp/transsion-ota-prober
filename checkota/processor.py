@@ -99,15 +99,13 @@ def log_variant_header(
 
 _CACHE_MISS = object()
 
-#: Polling interval for workers waiting on a peer's in-flight fetch. The owner
-#: controls completion; polling only keeps waiters responsive to cancellation.
-#:
-#: Trade-off vs. the previous 15s bounded wait: a waiter now blocks until the
-#: owner finishes (success, failure, or stop_event) instead of giving up early,
-#: so waiters get the real fetch result instead of a spurious timeout while the
-#: owner is still retrying. The wait is bounded in practice by the owner's own
-#: retry/backoff budget and by the global --timeout watchdog, which hard-exits
-#: the process even if socket reads stall past requests' read timeout.
+#: Upper bound on how long a waiter blocks on the owner's per-fetch Event
+#: before re-checking cache/failures/stop_event. The Event itself wakes waiters
+#: immediately when the owner finishes, so this cap is NOT a completion latency:
+#: it only bounds cancellation lag (a waiter that misses the wake still notices
+#: stop_event within 1s) and guards against a missed set. A Condition-based
+#: broadcast was evaluated and rejected: any correct Condition design also needs
+#: a periodic timeout for stop responsiveness, which converges back to this.
 _METADATA_WAIT_POLL_INTERVAL = 1.0
 
 
