@@ -3,9 +3,11 @@
 import io
 import struct
 import zipfile
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from checkota import zip_metadata
 from checkota.zip_metadata import (
@@ -251,6 +253,21 @@ def test_find_entry_rejects_member_size_caps_before_reading_payload():
         )
 
 
+def test_find_entry_tolerates_malformed_unrelated_entries():
+    """Only the requested member is deep-validated during the CD scan."""
+    name = b"META-INF/com/android/metadata"
+    # Three-byte extra field: too short for a valid extra-field header.
+    malformed_other = _central_record(b"META-INF/other", extra=b"\x99\x99\x00")
+    target = _central_record(name, compressed=4, uncompressed=4, offset=512)
+
+    method, unc, comp, offset, name_len, extra_len, crc32 = _find_entry(
+        malformed_other + target, name
+    )
+
+    assert (method, unc, comp, offset) == (0, 4, 4, 512)
+    assert (name_len, extra_len, crc32) == (len(name), 0, 0)
+
+
 def test_deflate_output_is_bounded_and_must_match_declaration():
     compressor = zip_metadata.zlib.compressobj(wbits=-zip_metadata.zlib.MAX_WBITS)
     payload = compressor.compress(b"x" * (MAX_DECOMPRESSED_METADATA_BYTES + 1))
@@ -304,7 +321,9 @@ def test_zip64_uncompressed_size_and_session_ownership(monkeypatch):
     caller_session = _RangeSession(archive)
     assert (
         fetch_zip_member(
-            "https://example.test/archive.zip", member, session=caller_session
+            "https://example.test/archive.zip",
+            member,
+            session=cast("requests.Session", caller_session),
         )
         == content
     )
@@ -327,7 +346,7 @@ def test_fetch_member_from_archive_with_zip64_eocd_and_locator():
         fetch_zip_member(
             "https://example.test/archive.zip",
             member,
-            session=_RangeSession(archive),
+            session=cast("requests.Session", _RangeSession(archive)),
         )
         == content
     )
@@ -348,5 +367,5 @@ def test_fetch_member_rejects_corrupt_crc_for_stored_and_deflated(compression):
         fetch_zip_member(
             "https://example.test/archive.zip",
             member,
-            session=_RangeSession(bytes(archive)),
+            session=cast("requests.Session", _RangeSession(bytes(archive))),
         )

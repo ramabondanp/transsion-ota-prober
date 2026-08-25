@@ -72,7 +72,10 @@ def _timeout_pair(read_budget: float) -> tuple[float, float]:
 def _decimal_header(value: str | None, name: str) -> int:
     if not isinstance(value, str) or not value.strip().isdigit():
         raise RemoteZipFetchError(f"Missing or malformed {name} header.")
-    return int(value.strip())
+    try:
+        return int(value.strip())
+    except ValueError as exc:  # pragma: no cover - guarded by isdigit() above
+        raise RemoteZipFetchError(f"Malformed {name} header.") from exc
 
 
 def _header_value(headers, name: str):
@@ -134,7 +137,9 @@ def _validate_range_response(
     if match is None:
         raise RemoteZipFetchError(f"Malformed Content-Range header {content_range!r}.")
 
-    response_start, response_end, total = (int(value) for value in match.groups())
+    response_start, response_end, total = (
+        _decimal_header(group, "Content-Range") for group in match.groups()
+    )
     expected_length = end - start + 1
     if response_start != start or response_end != end:
         raise RemoteZipFetchError(
@@ -466,6 +471,11 @@ def _find_entry(
 
     Returns (compression method, uncompressed size, compressed size,
     local-header offset, name length, extra length, CRC-32).
+
+    Record framing (signature, field lengths) is validated for every entry so
+    the scan can never run past the directory, but extra-field parsing and
+    ZIP64 fixup only run for the requested entry: a malformed or multi-disk
+    unrelated member must not fail an otherwise valid metadata fetch.
     """
     if len(cd) > MAX_CENTRAL_DIRECTORY_BYTES:
         raise RemoteZipFetchError("Central directory exceeds its size cap.")
@@ -495,8 +505,12 @@ def _find_entry(
         name_start = pos + 46
         extra_start = name_start + name_len
         name = cd[name_start:extra_start]
+        if name != target_name:
+            pos = record_end
+            continue
+
+        # Deep validation only for the entry we are about to fetch.
         extra = cd[extra_start : extra_start + extra_len]
-        # Validate every extra field even when this is not the requested entry.
         list(_extra_fields(extra))
         uncomp_size, comp_size, local_offset, disk_start = _zip64_fixup(
             extra, uncomp_size, comp_size, local_offset, disk_start
@@ -505,22 +519,19 @@ def _find_entry(
             raise RemoteZipFetchError(
                 "Multi-disk central-directory entries are unsupported."
             )
-
-        if name == target_name:
-            if comp_size > MAX_COMPRESSED_METADATA_BYTES:
-                raise RemoteZipFetchError("Compressed metadata exceeds its size cap.")
-            if uncomp_size > MAX_DECOMPRESSED_METADATA_BYTES:
-                raise RemoteZipFetchError("Decompressed metadata exceeds its size cap.")
-            return (
-                method,
-                uncomp_size,
-                comp_size,
-                local_offset,
-                name_len,
-                extra_len,
-                crc32,
-            )
-        pos = record_end
+        if comp_size > MAX_COMPRESSED_METADATA_BYTES:
+            raise RemoteZipFetchError("Compressed metadata exceeds its size cap.")
+        if uncomp_size > MAX_DECOMPRESSED_METADATA_BYTES:
+            raise RemoteZipFetchError("Decompressed metadata exceeds its size cap.")
+        return (
+            method,
+            uncomp_size,
+            comp_size,
+            local_offset,
+            name_len,
+            extra_len,
+            crc32,
+        )
 
     raise RemoteZipFetchError("Target entry not found in central directory.")
 
