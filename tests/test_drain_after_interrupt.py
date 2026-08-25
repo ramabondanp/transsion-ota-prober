@@ -67,6 +67,7 @@ def test_m4_drain_completes_after_stop_event_set(tmp_path, monkeypatch, capsys):
 
     class _StubNotifier:
         def send(self, msg, truncate_desc=True, device_title=None):
+            assert device_title is not None
             sent.append(device_title)
             return True
 
@@ -192,6 +193,16 @@ def test_watchdog_only_signals_and_hard_exits(monkeypatch):
 
     monkeypatch.setattr(runtime.threading, "Timer", _Timer)
     monkeypatch.setattr(runtime.os, "_exit", lambda code: calls.append(("exit", code)))
+
+    class _Stream:
+        def __init__(self, name):
+            self._name = name
+
+        def flush(self):
+            calls.append(f"flush_{self._name}")
+
+    monkeypatch.setattr(runtime.sys, "stdout", _Stream("stdout"))
+    monkeypatch.setattr(runtime.sys, "stderr", _Stream("stderr"))
     monkeypatch.setattr(
         runtime.Log,
         "e",
@@ -200,7 +211,8 @@ def test_watchdog_only_signals_and_hard_exits(monkeypatch):
         ),
     )
 
-    watchdog = runtime.start_watchdog(_Ctx(), 1)
-    watchdog.callback()
+    watchdog = runtime.start_watchdog(_Ctx(), 1)  # type: ignore[arg-type]
+    watchdog.callback()  # type: ignore[union-attr,attr-defined]
 
-    assert calls == ["event_set", ("exit", 124)]
+    # Buffered stdio must be flushed before the hard exit or piped output is lost.
+    assert calls == ["event_set", "flush_stdout", "flush_stderr", ("exit", 124)]

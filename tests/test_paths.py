@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import io
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -87,6 +88,41 @@ def test_wheel_config_seeding_is_safe_for_concurrent_first_use(monkeypatch, tmp_
 
     assert (config_dir / "config-X6873.yml").read_bytes() == b"product: X6873-OP\n"
     assert list(config_dir.glob("*.tmp")) == []
+
+
+def test_publish_falls_back_to_rename_without_hardlink_support(monkeypatch, tmp_path):
+    source = tmp_path / "config-X6873.yml"
+    source.write_bytes(b"product: X6873-OP\n")
+    destination = tmp_path / "configs" / "config-X6873.yml"
+
+    def link_without_hardlink_support(src, dst):
+        raise OSError(errno.EPERM, "operation not supported")
+
+    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
+
+    assert paths._publish_if_missing(source, destination, 0o644) is True
+    assert destination.read_bytes() == b"product: X6873-OP\n"
+    assert list(destination.parent.glob("*.tmp")) == []
+
+
+def test_publish_still_skips_existing_destination_when_link_fails(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "config-X6873.yml"
+    source.write_bytes(b"bundled: true\n")
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    destination.parent.mkdir()
+    destination.write_bytes(b"user-edited: true\n")
+
+    def link_without_hardlink_support(src, dst):
+        raise OSError(errno.EPERM, "operation not supported")
+
+    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
+
+    # A pre-existing user file must never be replaced by bundled defaults,
+    # even when publication has to fall back to renaming.
+    assert paths._publish_if_missing(source, destination, 0o644) is False
+    assert destination.read_bytes() == b"user-edited: true\n"
 
 
 def test_source_detection_accepts_relocated_vendor_override(monkeypatch, tmp_path):
