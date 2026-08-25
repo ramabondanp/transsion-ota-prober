@@ -3,12 +3,15 @@
 # attributes such as AndroidCheckinRequest. Suppress attribute-access errors for
 # this file only; runtime resolution is guaranteed by ensure_vendor_on_path().
 # pyright: reportAttributeAccessIssue=false
+import contextlib
 import datetime
 import gzip
+import os
+import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import requests
 from checkin import checkin_generator_pb2
@@ -17,15 +20,20 @@ from google.protobuf.message import DecodeError
 from utils import functions
 
 from checkota.constants import (
+    CHECKIN_API_HOST,
     CHECKIN_URL,
     DEBUG_FILE,
+    OTA_URL_PATH_PREFIXES,
     OTA_URL_PREFIX,
     PROTO_TYPE,
+    RETRY_BACKOFF_MULTIPLIER,
+    RETRY_BASE_DELAY_SECONDS,
     RETRYABLE_HTTP_STATUSES,
     USER_AGENT_TPL,
 )
 from checkota.logging import Log
 from checkota.manager import Config
+from checkota.validation import has_control_chars, is_google_https_url
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _STREAM_CHUNK_SIZE = 64 * 1024
@@ -44,6 +52,49 @@ class UpdateCheckError(Exception):
     This deliberately excludes "no update found", which is a successful
     check-in with an empty result.
     """
+
+
+def _write_debug_file(path: str, data: str | bytes) -> None:
+    """Write a debug artifact without following symlinks at the target.
+
+    Debug paths are CWD-relative and predictable, so on a shared host a local
+    attacker could pre-plant a symlink there to clobber an arbitrary file with
+    server-controlled content. Writing through a same-directory temp file and
+    atomically replacing the entry closes that hole: rename() swaps the
+    directory entry itself instead of writing through the link.
+    """
+    target = Path(path)
+    payload = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=target.parent or Path("."), prefix=f"{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as tmp:
+            tmp.write(payload)
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+@dataclass
+class _AttemptOutcome:
+    """Classified result of one check-in attempt.
+
+    Exactly one of ``result`` / ``interrupted`` / ``retryable`` / plain
+    ``error`` drives the caller's next move.
+    """
+
+    result: tuple[bool, dict] | None = None  # success branch
+    retryable: bool = False  # transient failure; another attempt may help
+    interrupted: bool = False  # stop requested; give up quietly
+    error: Exception | None = None  # always set on failure branches
+    http_status: int | None = None  # set when an HTTP status drove the verdict
+    error_content: bytes | None = None  # captured body for --debug dumps
+
+
+_CHECK_RETRIES = 3
+_CHECK_TIMEOUT = (5.0, 10.0)
 
 
 class UpdateChecker:
@@ -92,28 +143,17 @@ class UpdateChecker:
     @staticmethod
     def _is_allowed_ota_url(value: str) -> bool:
         """Accept only HTTPS OTA objects served by Google's OTA endpoint."""
-        try:
-            parsed = urlsplit(value)
-            return (
-                not any(
-                    char.isspace() or ord(char) < 32 or ord(char) == 127
-                    for char in value
-                )
-                and parsed.scheme == "https"
-                and parsed.hostname == "android.googleapis.com"
-                and parsed.port is None
-                and not parsed.username
-                and not parsed.password
-                and parsed.path.startswith(("/packages/ota/", "/packages/ota-api/"))
-            )
-        except ValueError:
-            return False
+        return is_google_https_url(
+            value,
+            allowed_hosts=(CHECKIN_API_HOST,),
+            path_prefixes=OTA_URL_PATH_PREFIXES,
+        )
 
     @staticmethod
     def _safe_title(value: str) -> str | None:
         """Reject titles that can corrupt the line-oriented dedup file/logs."""
         title = value.strip()
-        if any(ord(char) < 32 or ord(char) == 127 for char in title):
+        if has_control_chars(title):
             return None
         return title
 
@@ -183,142 +223,146 @@ class UpdateChecker:
         Log.i("Checking for updates...")
         if self.imei:
             Log.i(f"Using custom IMEI: {self.imei}")
-        retries = 3
-        delay = 1
+        delay = RETRY_BASE_DELAY_SECONDS
         data = self._build_request()
-        response = None
 
-        for attempt in range(retries):
+        for attempt in range(_CHECK_RETRIES):
             if self._stopped():
                 Log.w("Update check interrupted.")
                 return False, None
-            response = None
-            error = None
-            error_content = None
-            try:
-                try:
-                    response = self.session.post(
-                        CHECKIN_URL,
-                        data=data,
-                        headers=self.headers,
-                        timeout=(5.0, 10.0),
-                        allow_redirects=False,
-                        stream=True,
-                    )
-                    status = getattr(response, "status_code", None)
-                    if isinstance(status, int) and 300 <= status < 400:
-                        raise requests.exceptions.HTTPError(
-                            f"Check-in redirect HTTP {status} rejected",
-                            response=response,
-                        )
-                    response.raise_for_status()
+            outcome = self._attempt_once(data, debug)
 
-                    resp = checkin_generator_pb2.AndroidCheckinResponse()
-                    resp.ParseFromString(self._read_response_body(response))
+            if outcome.result is not None:
+                return outcome.result
+            assert outcome.error is not None  # failure branches always carry it
 
-                    if debug:
-                        Path(self.debug_file).write_text(
-                            text_format.MessageToString(resp), encoding="utf-8"
-                        )
-                        Log.i(f"Debug response saved to {self.debug_file}")
+            if outcome.interrupted or (outcome.retryable and self._stopped()):
+                Log.w("Update check interrupted.")
+                return False, None
 
-                    info = self._parse(resp)
-                except Exception as exc:  # noqa: BLE001 -- classified below
-                    error = exc
-                    if (
-                        debug
-                        and response is not None
-                        and isinstance(exc, requests.exceptions.HTTPError)
-                    ):
-                        try:
-                            error_content = self._read_response_body(response)
-                        except (
-                            requests.exceptions.RequestException,
-                            UpdateCheckError,
-                        ):
-                            error_content = None
-                else:
-                    has_update = info.get("found", False) and "url" in info
-                    return has_update, info
-            finally:
-                if response is not None:
-                    close = getattr(response, "close", None)
-                    if callable(close):
-                        close()
-
-            if error is None:
-                raise UpdateCheckError("Update check failed: request loop exhausted")
-
-            if isinstance(
-                error,
-                (*_RETRYABLE_TRANSPORT_ERRORS, DecodeError),
-            ):
-                if self._stopped():
-                    Log.w("Update check interrupted.")
-                    return False, None
-                if attempt < retries - 1:
+            if outcome.retryable and attempt < _CHECK_RETRIES - 1:
+                if outcome.http_status is None:
                     Log.w(
-                        f"Update check network error: {error}. Retrying in "
+                        f"Update check network error: {outcome.error}. Retrying in "
                         f"{delay} seconds... "
-                        f"({attempt + 1}/{retries})"
+                        f"({attempt + 1}/{_CHECK_RETRIES})"
                     )
-                    if not self._wait_for_retry(delay):
-                        Log.w("Update check interrupted during retry delay.")
-                        return False, None
-                    delay *= 2
-                    continue
+                else:
+                    Log.w(
+                        f"Update check HTTP {outcome.http_status}: {outcome.error}. "
+                        f"Retrying in {delay} seconds... "
+                        f"({attempt + 1}/{_CHECK_RETRIES})"
+                    )
+                if not self._wait_for_retry(delay):
+                    Log.w("Update check interrupted during retry delay.")
+                    return False, None
+                delay *= RETRY_BACKOFF_MULTIPLIER
+                continue
+
+            # Giving up: the final attempt failed, or the failure is permanent.
+            if debug and isinstance(outcome.error_content, (bytes, bytearray)):
+                _write_debug_file(self.debug_error_file, outcome.error_content)
+                Log.i("Raw error response saved")
+            if outcome.retryable and outcome.http_status is None:
                 Log.e(
                     "Update check failed after multiple retries due to network "
-                    f"error: {error}"
+                    f"error: {outcome.error}"
                 )
                 raise UpdateCheckError(
                     "Update check failed after multiple retries due to network "
-                    f"error: {error}"
-                ) from error
-
-            if isinstance(error, requests.exceptions.HTTPError):
-                status = getattr(getattr(error, "response", None), "status_code", None)
-                if not isinstance(status, int) and response is not None:
-                    status = getattr(response, "status_code", None)
-
-                if status in RETRYABLE_HTTP_STATUSES:
-                    if self._stopped():
-                        Log.w("Update check interrupted.")
-                        return False, None
-                    if attempt < retries - 1:
-                        Log.w(
-                            f"Update check HTTP {status}: {error}. Retrying in "
-                            f"{delay} seconds... "
-                            f"({attempt + 1}/{retries})"
-                        )
-                        if not self._wait_for_retry(delay):
-                            Log.w("Update check interrupted during retry delay.")
-                            return False, None
-                        delay *= 2
-                        continue
-                    Log.e(
-                        f"Update check failed after multiple retries due to HTTP "
-                        f"{status}: {error}"
-                    )
-                else:
-                    Log.e(f"Update check failed: {error}")
-
-                if debug and isinstance(error_content, (bytes, bytearray)):
-                    Path(self.debug_error_file).write_bytes(error_content)
-                    Log.i("Raw error response saved")
-                raise UpdateCheckError(f"Update check failed: {error}") from error
-
-            if self._stopped() and isinstance(
-                error, requests.exceptions.RequestException
-            ):
-                Log.w("Update check interrupted.")
-                return False, None
-            Log.e(f"Update check failed: {error}")
-            if debug and isinstance(error_content, (bytes, bytearray)):
-                Path(self.debug_error_file).write_bytes(error_content)
-                Log.i("Raw error response saved")
-            raise UpdateCheckError(f"Update check failed: {error}") from error
+                    f"error: {outcome.error}"
+                ) from outcome.error
+            if outcome.retryable:
+                Log.e(
+                    f"Update check failed after multiple retries due to HTTP "
+                    f"{outcome.http_status}: {outcome.error}"
+                )
+            else:
+                Log.e(f"Update check failed: {outcome.error}")
+            raise UpdateCheckError(
+                f"Update check failed: {outcome.error}"
+            ) from outcome.error
         raise UpdateCheckError("Update check failed: request loop exhausted")
+
+    def _attempt_once(self, data: bytes, debug: bool) -> _AttemptOutcome:
+        """Perform a single POST + parse and classify the outcome."""
+        response = None
+        try:
+            try:
+                response = self.session.post(
+                    CHECKIN_URL,
+                    data=data,
+                    headers=self.headers,
+                    timeout=_CHECK_TIMEOUT,
+                    allow_redirects=False,
+                    stream=True,
+                )
+                status = getattr(response, "status_code", None)
+                if isinstance(status, int) and 300 <= status < 400:
+                    raise requests.exceptions.HTTPError(
+                        f"Check-in redirect HTTP {status} rejected",
+                        response=response,
+                    )
+                response.raise_for_status()
+
+                resp = checkin_generator_pb2.AndroidCheckinResponse()
+                resp.ParseFromString(self._read_response_body(response))
+
+                if debug:
+                    _write_debug_file(
+                        self.debug_file, text_format.MessageToString(resp)
+                    )
+                    Log.i(f"Debug response saved to {self.debug_file}")
+
+                info = self._parse(resp)
+                has_update = info.get("found", False) and "url" in info
+                return _AttemptOutcome(result=(has_update, info))
+            except Exception as exc:  # noqa: BLE001 -- classified below
+                error_content: bytes | bytearray | None = None
+                if (
+                    debug
+                    and response is not None
+                    and isinstance(exc, requests.exceptions.HTTPError)
+                ):
+                    try:
+                        error_content = self._read_response_body(response)
+                    except (
+                        requests.exceptions.RequestException,
+                        UpdateCheckError,
+                    ):
+                        error_content = None
+                return self._classify_failure(exc, response, error_content)
+        finally:
+            if response is not None:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+
+    def _classify_failure(
+        self,
+        exc: Exception,
+        response: requests.Response | None,
+        error_content: bytes | bytearray | None,
+    ) -> _AttemptOutcome:
+        """Sort a failed attempt into retryable / interrupted / fatal."""
+        if isinstance(exc, (*_RETRYABLE_TRANSPORT_ERRORS, DecodeError)):
+            return _AttemptOutcome(retryable=True, error=exc)
+
+        if isinstance(exc, requests.exceptions.HTTPError):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if not isinstance(status, int) and response is not None:
+                status = getattr(response, "status_code", None)
+            if isinstance(status, int) and status in RETRYABLE_HTTP_STATUSES:
+                return _AttemptOutcome(
+                    retryable=True, error=exc, http_status=status
+                )
+            return _AttemptOutcome(error=exc, error_content=error_content)
+
+        # A transport error noticed after stop was requested is teardown, not
+        # a failure worth reporting.
+        if self._stopped() and isinstance(exc, requests.exceptions.RequestException):
+            return _AttemptOutcome(interrupted=True, error=exc)
+        return _AttemptOutcome(error=exc, error_content=error_content)
 
     def _parse(self, resp: checkin_generator_pb2.AndroidCheckinResponse) -> dict:
         info = {
@@ -345,7 +389,13 @@ class UpdateChecker:
                     info["url"] = url
                     info["found"] = True
                 elif url:
-                    Log.w(f"Ignoring update URL outside the trusted OTA origin: {url}")
+                    # repr() -- the URL was rejected partly because it may carry
+                    # control characters; interpolating it raw would let a
+                    # hostile response forge log lines.
+                    Log.w(
+                        "Ignoring update URL outside the trusted OTA origin: "
+                        f"{url!r}"
+                    )
 
             try:
                 name = name_bytes.decode("utf-8")

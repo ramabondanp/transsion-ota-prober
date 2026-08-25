@@ -2,6 +2,7 @@
 the wall-clock watchdog.
 """
 
+import argparse
 import os
 import signal
 import sys
@@ -13,6 +14,7 @@ from typing import TextIO
 import requests
 from requests.adapters import HTTPAdapter
 
+from checkota.constants import EMERGENCY_DRAIN_MAX_SENDS
 from checkota.fingerprints import load_processed_titles
 from checkota.logging import Log
 from checkota.models import PendingNotification
@@ -45,6 +47,13 @@ class RunContext:
     pending_notifications: list["PendingNotification"] = field(default_factory=list)
     telegram_notice_printed: bool = False
     pool_size: int = 10
+    # Parsed CLI arguments, stashed so the watchdog thread's emergency drain
+    # can run without access to main()'s locals.
+    cli_args: argparse.Namespace | None = None
+    # Serializes notification drains: the watchdog thread's emergency drain
+    # skips (instead of waiting) if main() is already draining, and main()
+    # waits for an in-flight emergency drain to finish before its own.
+    drain_lock: threading.Lock = field(default_factory=threading.Lock)
     _local: threading.local = field(default_factory=threading.local, repr=False)
     _sessions: list[requests.Session] = field(default_factory=list, repr=False)
 
@@ -142,7 +151,7 @@ def create_run_context(
     )
 
 
-def install_interrupt_handler(ctx: RunContext):
+def install_interrupt_handler(ctx: RunContext) -> object:
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def handle_interrupt(signum, frame):
@@ -170,6 +179,13 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
         # (block-buffered) output would otherwise be lost.
         sys.stdout.flush()
         sys.stderr.flush()
+        # Best-effort flush of buffered Telegram notifications before the hard
+        # exit; a one-shot cron run would otherwise lose every update found by
+        # this sweep. Bounded and fully guarded -- teardown must not hang or
+        # crash because of it.
+        _emergency_drain_notifications(ctx)
+        sys.stdout.flush()
+        sys.stderr.flush()
         # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
         # the stop_event mid-call, so force termination after the budget.
         os._exit(124)
@@ -178,3 +194,41 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
     watchdog.daemon = True
     watchdog.start()
     return watchdog
+
+
+def _emergency_drain_notifications(ctx: RunContext) -> None:
+    """Best-effort synchronous notification drain from the watchdog thread.
+
+    Workers only BUFFER notifications during a sweep; the drain is the sole
+    sender, so running it here cannot double-send. Skips silently when main()
+    is already draining (its own budget covers those notifications), and caps
+    the number of sends so a huge buffer cannot extend teardown indefinitely.
+    Titles for unsent notifications are never committed, so whatever this does
+    not get to is retried naturally by the next run.
+    """
+    with ctx.pending_lock:
+        has_pending = bool(ctx.pending_notifications)
+    if not has_pending or ctx.cli_args is None:
+        return
+    try:
+        from checkota.processor import drain_pending_notifications
+    except Exception:  # noqa: BLE001 -- teardown path; skip rather than crash
+        return
+
+    if not ctx.drain_lock.acquire(blocking=False):
+        return  # main() owns the drain right now
+    try:
+        # drain_pending_notifications refuses to run while stop_event is set;
+        # workers have already been signalled (or are stuck in socket reads
+        # that ignore it), so clearing it here only lets the drain proceed.
+        ctx.stop_event.clear()
+        drain_pending_notifications(
+            ctx,
+            ctx.cli_args,
+            max_sends=EMERGENCY_DRAIN_MAX_SENDS,
+        )
+    except Exception as exc:  # noqa: BLE001 -- teardown path
+        Log.w(f"Emergency notification drain failed: {exc}")
+    finally:
+        ctx.stop_event.set()
+        ctx.drain_lock.release()

@@ -18,7 +18,9 @@ resurrect them, it only tells the drain to proceed. Sessions are still alive
 
 import argparse
 import threading
+import typing
 
+from checkota.constants import EMERGENCY_DRAIN_MAX_SENDS
 from checkota.runtime import RunContext
 
 
@@ -180,6 +182,11 @@ def test_watchdog_only_signals_and_hard_exits(monkeypatch):
 
     class _Ctx:
         stop_event = _Event()
+        # Nothing buffered: the emergency notification drain must be a no-op.
+        pending_notifications: typing.ClassVar[list[object]] = []
+        pending_lock = threading.Lock()
+        cli_args = None
+        drain_lock = threading.Lock()
 
         def stop(self):
             calls.append("stop_called")
@@ -214,5 +221,97 @@ def test_watchdog_only_signals_and_hard_exits(monkeypatch):
     watchdog = runtime.start_watchdog(_Ctx(), 1)  # type: ignore[arg-type]
     watchdog.callback()  # type: ignore[union-attr,attr-defined]
 
-    # Buffered stdio must be flushed before the hard exit or piped output is lost.
-    assert calls == ["event_set", "flush_stdout", "flush_stderr", ("exit", 124)]
+    # Buffered stdio must be flushed before the hard exit or piped output is
+    # lost; the flush runs again after the (no-op) emergency drain.
+    assert calls == [
+        "event_set",
+        "flush_stdout",
+        "flush_stderr",
+        "flush_stdout",
+        "flush_stderr",
+        ("exit", 124),
+    ]
+
+
+def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
+    """Timeout mid-sweep must flush buffered notifications, not discard them.
+
+    A one-shot cron run that finds updates but then hits --timeout on a stuck
+    socket used to lose every buffered notification; now the watchdog performs
+    a bounded best-effort drain between the stdio flushes and the hard exit.
+    """
+    from checkota import runtime
+
+    calls = []
+
+    class _Event:
+        def set(self):
+            calls.append("event_set")
+
+        def clear(self):
+            pass
+
+        def is_set(self):
+            return True
+
+    class _Lock:
+        def acquire(self, blocking=True):
+            return True
+
+        def release(self):
+            pass
+
+    class _Ctx:
+        stop_event = _Event()
+        pending_notifications: typing.ClassVar[list[object]] = [object()]
+        pending_lock = threading.Lock()
+        cli_args = argparse.Namespace(dry_run=False)
+        drain_lock = _Lock()
+
+    class _Timer:
+        def __init__(self, timeout, callback):
+            self.callback = callback
+
+        def start(self):
+            pass
+
+    drained = []
+
+    def _fake_drain(ctx, args, *, max_sends=None):
+        drained.append((ctx, args, max_sends))
+
+    monkeypatch.setattr(runtime.threading, "Timer", _Timer)
+    monkeypatch.setattr(runtime.os, "_exit", lambda code: calls.append(("exit", code)))
+    monkeypatch.setattr(
+        runtime.sys,
+        "stdout",
+        type("_S", (), {"flush": staticmethod(lambda: calls.append("flush_stdout"))})(),
+    )
+    monkeypatch.setattr(
+        runtime.sys,
+        "stderr",
+        type("_S", (), {"flush": staticmethod(lambda: calls.append("flush_stderr"))})(),
+    )
+    monkeypatch.setattr(
+        "checkota.processor.drain_pending_notifications", _fake_drain
+    )
+
+    ctx = _Ctx()
+    watchdog = runtime.start_watchdog(ctx, 1)  # type: ignore[arg-type]
+    watchdog.callback()  # type: ignore[union-attr,attr-defined]
+
+    assert len(drained) == 1
+    assert drained[0][0] is ctx
+    assert drained[0][2] == EMERGENCY_DRAIN_MAX_SENDS
+    # Emergency drain runs between the stdio flushes; stop_event is re-armed
+    # afterwards so the process still exits via the same hard-exit path.
+    assert calls == [
+        "event_set",
+        "flush_stdout",
+        "flush_stderr",
+        "event_set",
+        "flush_stdout",
+        "flush_stderr",
+        ("exit", 124),
+    ]
+    assert ctx.stop_event.is_set()

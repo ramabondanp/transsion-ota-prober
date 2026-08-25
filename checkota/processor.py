@@ -5,6 +5,7 @@ actions, and orchestrate per-config / per-variant processing.
 import argparse
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -228,21 +229,106 @@ def _commit_claimed_update(ctx: RunContext, title: str) -> bool:
     return committed
 
 
-def collect_update_info(
-    ctx: RunContext,
-    cfg: Config,
-    config_path: Path,
-    args: argparse.Namespace,
-    variant_label: str | None = None,
-) -> tuple[int, VariantUpdate | None]:
-    update_incremental_only = bool(getattr(args, "update_incremental", False))
+@dataclass
+class _TargetMetadata:
+    """Validated target-build facts derived from the OTA ZIP metadata."""
 
-    region_name, _ = log_variant_header(cfg, variant_label)
-    debug_label = config_path.stem
+    fingerprint: str
+    sdk_message: str | None
+    post_build_incremental: str | None
+    post_security_patch_level: str | None
+    build_date: str | None
+    post_sdk_level: str | None
+    android_version: str | None
+
+    @property
+    def response_extras(self) -> dict[str, str]:
+        """Entries merged into the update info for downstream consumers."""
+        extras = {"fingerprint": self.fingerprint}
+        for key, value in (
+            ("post_build_incremental", self.post_build_incremental),
+            ("post_security_patch_level", self.post_security_patch_level),
+            ("build_date", self.build_date),
+            ("post_sdk_level", self.post_sdk_level),
+            ("android_version", self.android_version),
+        ):
+            if value:
+                extras[key] = value
+        return extras
+
+
+def _log_target_metadata(target: _TargetMetadata) -> None:
+    Log.i(f"Target build: {target.fingerprint}")
+    if target.post_build_incremental:
+        Log.i(f"Incremental: {target.post_build_incremental}")
+    if target.post_security_patch_level:
+        Log.i(f"Security patch: {target.post_security_patch_level}")
+    if target.build_date:
+        Log.i(f"Build date: {target.build_date} (CST)")
+
+
+def _resolve_target_metadata(
+    ctx: RunContext, cfg: Config, url: str, data: dict
+) -> tuple[int, _TargetMetadata | None]:
+    """Fetch OTA metadata for the update URL and validate it against the config.
+
+    Identity mismatches fail closed: without a matching target the caller must
+    not update configs, notify, or process titles.
+    """
+    ota_meta = get_cached_ota_metadata(ctx, url)
+    if not ota_meta or not ota_meta.get("fingerprint"):
+        Log.e(
+            "Could not determine target fingerprint from OTA metadata. Cannot derive incremental information."
+        )
+        return 1, None
+
+    target_fp = ota_meta["fingerprint"]
+    if not fingerprint_identity_matches_config(cfg, target_fp):
+        Log.e(
+            "Target fingerprint identity does not match the current config. "
+            "Skipping config update, notification, and title processing."
+        )
+        return 1, None
+
+    inc = ota_meta.get("post_build_incremental")
+    spl = ota_meta.get("post_security_patch_level")
+    build_date = ota_meta.get("build_date")
+    sdk_level = ota_meta.get("post_sdk_level")
+    android_ver = ota_meta.get("android_version")
+    sdk_message, _, _ = build_sdk_strings(sdk_level, android_ver)
+    target = _TargetMetadata(
+        fingerprint=target_fp,
+        sdk_message=sdk_message,
+        post_build_incremental=inc,
+        post_security_patch_level=spl,
+        build_date=build_date,
+        post_sdk_level=sdk_level,
+        android_version=android_ver,
+    )
+    _log_target_metadata(target)
+    return 0, target
+
+
+def _debug_label(
+    config_path: Path, variant_label: str | None, cfg: Config
+) -> str:
+    """Build the per-(config,variant) label used for --debug artifact names."""
+    label = config_path.stem
     if variant_label:
-        debug_label = f"{debug_label}-{variant_label}"
+        label = f"{label}-{variant_label}"
     if cfg.variant_index is not None:
-        debug_label = f"{debug_label}-v{cfg.variant_index + 1}"
+        label = f"{label}-v{cfg.variant_index + 1}"
+    return label
+
+
+def _check_for_updates(
+    ctx: RunContext, cfg: Config, args: argparse.Namespace, debug_label: str
+) -> tuple[int, dict | None]:
+    """Run one check-in round-trip.
+
+    Returns (status, info). (0, None) means a successful check-in with no
+    update; non-zero status means the check failed or was interrupted.
+    """
     checker = UpdateChecker(
         cfg,
         session=ctx.session(),
@@ -263,33 +349,54 @@ def collect_update_info(
     if not found or not data:
         Log.i("No updates found")
         return 0, None
+    return 0, data
+
+
+def _generate_fingerprint(ctx: RunContext, cfg: Config, url: str | None) -> int:
+    """--gen-fp mode: print the OTA's target fingerprint instead of acting."""
+    if not url:
+        Log.e("Missing OTA URL in update response; cannot fetch target fingerprint.")
+        return 1
+    ota_meta = get_cached_ota_metadata(ctx, url)
+    if not ota_meta or not ota_meta.get("fingerprint"):
+        Log.e("Could not determine target fingerprint from OTA metadata.")
+        return 1
+    if not fingerprint_identity_matches_config(cfg, ota_meta["fingerprint"]):
+        Log.e(
+            "Target fingerprint identity does not match the current config; "
+            "not printing it."
+        )
+        return 1
+    Log.raw(ota_meta["fingerprint"])
+    return 0
+
+
+def collect_update_info(
+    ctx: RunContext,
+    cfg: Config,
+    config_path: Path,
+    args: argparse.Namespace,
+    variant_label: str | None = None,
+) -> tuple[int, VariantUpdate | None]:
+    update_incremental_only = bool(getattr(args, "update_incremental", False))
+
+    region_name, _ = log_variant_header(cfg, variant_label)
+    debug_label = _debug_label(config_path, variant_label, cfg)
+
+    status, data = _check_for_updates(ctx, cfg, args, debug_label)
+    if status != 0 or data is None:
+        return status, None
+
+    if getattr(args, "gen_fp", False):
+        return _generate_fingerprint(ctx, cfg, data.get("url")), None
 
     title = data.get("title")
     url = data.get("url")
     size = data.get("size")
     desc = data.get("description", "No description")
 
-    if getattr(args, "gen_fp", False):
-        if not url:
-            Log.e(
-                "Missing OTA URL in update response; cannot fetch target fingerprint."
-            )
-            return 1, None
-        ota_meta = get_cached_ota_metadata(ctx, url)
-        if not ota_meta or not ota_meta.get("fingerprint"):
-            Log.e("Could not determine target fingerprint from OTA metadata.")
-            return 1, None
-        if not fingerprint_identity_matches_config(cfg, ota_meta["fingerprint"]):
-            Log.e(
-                "Target fingerprint identity does not match the current config; "
-                "not printing it."
-            )
-            return 1, None
-        Log.raw(ota_meta["fingerprint"])
-        return 0, None
-
     if args.dry_run and not title and url and size:
-        title = "UNKNOWN_TITLE_DRY_RUN"
+        data["title"] = title = "UNKNOWN_TITLE_DRY_RUN"
         Log.w("Missing update title; continuing because --dry-run is enabled.")
     elif not all([title, url, size]):
         Log.e("Missing essential update info (title, url, or size)")
@@ -336,53 +443,18 @@ def collect_update_info(
             Log.i(
                 "Update title already known; proceeding to update incremental value (--update-incremental)."
             )
-        elif not args.force_notify:
+        elif not getattr(args, "force_notify", False):
             Log.i("This update has already been processed. Skipping.")
             return 0, None
 
-    ota_meta = get_cached_ota_metadata(ctx, url)
-    if not ota_meta or not ota_meta.get("fingerprint"):
-        Log.e(
-            "Could not determine target fingerprint from OTA metadata. Cannot derive incremental information."
-        )
-        return 1, None
+    status, target = _resolve_target_metadata(ctx, cfg, url, data)
+    if status != 0 or target is None:
+        return status, None
 
-    target_fp = ota_meta["fingerprint"]
-    if not fingerprint_identity_matches_config(cfg, target_fp):
-        Log.e(
-            "Target fingerprint identity does not match the current config. "
-            "Skipping config update, notification, and title processing."
-        )
-        return 1, None
-    Log.i(f"Target build: {target_fp}")
-    inc = ota_meta.get("post_build_incremental")
-    spl = ota_meta.get("post_security_patch_level")
-    build_date = ota_meta.get("build_date")
-    sdk_level = ota_meta.get("post_sdk_level")
-    android_ver = ota_meta.get("android_version")
-    sdk_message, sdk_log_line, _ = build_sdk_strings(sdk_level, android_ver)
-    if inc:
-        Log.i(f"Incremental: {inc}")
-    if spl:
-        Log.i(f"Security patch: {spl}")
-    if build_date:
-        Log.i(f"Build date: {build_date} (CST)")
-    if sdk_log_line:
-        Log.i(sdk_log_line)
-    if not is_new_update and args.force_notify:
+    if not is_new_update and getattr(args, "force_notify", False):
         Log.w(f"Forcing notification for an already processed update: {title}")
 
-    data["fingerprint"] = target_fp
-    if inc:
-        data["post_build_incremental"] = inc
-    if spl:
-        data["post_security_patch_level"] = spl
-    if build_date:
-        data["build_date"] = build_date
-    if sdk_level:
-        data["post_sdk_level"] = sdk_level
-    if android_ver:
-        data["android_version"] = android_ver
+    data.update(target.response_extras)
 
     return 0, VariantUpdate(
         cfg=cfg,
@@ -394,11 +466,140 @@ def collect_update_info(
         size=size,
         desc=desc,
         is_new_update=is_new_update,
-        target_fp=target_fp,
-        target_incremental=inc or extract_incremental_from_fingerprint(target_fp),
-        sdk_message=sdk_message,
+        target_fp=target.fingerprint,
+        target_incremental=target.post_build_incremental
+        or extract_incremental_from_fingerprint(target.fingerprint),
+        sdk_message=target.sdk_message,
         data=data,
     )
+
+
+def _log_dry_run_config_update(
+    update: VariantUpdate, parsed_target: dict[str, str] | None
+) -> None:
+    if parsed_target:
+        Log.i(
+            f"Dry-run: would update {update.config_path} "
+            f"android_version={parsed_target['android_version']}, "
+            f"build_tag={parsed_target['build_tag']}, "
+            f"incremental={parsed_target['incremental']}."
+        )
+    else:
+        Log.i(
+            f"Dry-run: would update {update.config_path} incremental to {update.target_incremental}."
+        )
+
+
+def _apply_config_update(ctx: RunContext, update: VariantUpdate, args) -> bool:
+    """Rewrite the device config for the target build. Returns success.
+
+    Every "skip" reason logs and returns True: skipping the rewrite must not
+    abort the notification pipeline.
+    """
+    parsed_target = parse_fingerprint(update.target_fp)
+    if getattr(args, "incremental", None):
+        Log.i("--incremental override active; skipping config file update.")
+        return True
+    if getattr(args, "no_config", False):
+        Log.i("No config file mode; skipping incremental config update.")
+        return True
+    if (
+        "Tcard" in update.title
+        and parsed_target
+        and parsed_target["android_version"] == update.cfg.android_version
+    ):
+        Log.i(
+            "Skipping config update because update title contains 'Tcard' without an Android version change."
+        )
+        return True
+    if not update.target_incremental:
+        Log.w(
+            "Unable to determine new incremental value from OTA metadata; config not updated."
+        )
+        return True
+    if args.dry_run:
+        _log_dry_run_config_update(update, parsed_target)
+        return True
+
+    with ctx.file_lock:
+        config_updated = update_config_from_fingerprint(
+            update.config_path, update.cfg, update.target_fp
+        )
+    if not config_updated:
+        return False
+    # Even on the no-op path (YAML already matches), we still mutate the
+    # in-memory cfg so subsequent code paths see the post-OTA values regardless
+    # of whether the file changed on disk. See the two early-return paths in
+    # manager.update_config_from_fingerprint.
+    if parsed_target:
+        update.cfg.android_version = parsed_target["android_version"]
+        update.cfg.build_tag = parsed_target["build_tag"]
+        update.cfg.incremental = parsed_target["incremental"]
+    return True
+
+
+def _dispatch_or_buffer_notification(
+    ctx: RunContext,
+    notifier,
+    update: VariantUpdate,
+    args: argparse.Namespace,
+    claimed: bool,
+) -> int:
+    """Buffer (sweep mode) or send (direct mode) the notification."""
+    msg = build_notification_message(update)
+    device_title = f"{update.cfg.model} - {update.title}"
+
+    if is_sweep_mode(args):
+        # Sweep mode: buffer the notification; drain at end of run with a
+        # SWEEP_TELEGRAM_DELAY-second gap between sends.
+        with ctx.pending_lock:
+            ctx.pending_notifications.append(
+                PendingNotification(
+                    msg=msg,
+                    device_title=device_title,
+                    title=update.title,
+                    is_new_update=update.is_new_update,
+                )
+            )
+        if args.dry_run:
+            Log.i(
+                "Dry-run: would buffer Telegram notification "
+                f"(drained with {SWEEP_TELEGRAM_DELAY}s gap)."
+            )
+        else:
+            Log.i(
+                f"Telegram notification buffered "
+                f"({len(ctx.pending_notifications)} pending)."
+            )
+        return 0
+
+    if args.dry_run:
+        Log.i("Dry-run: would send Telegram notification with OTA details.")
+        if update.is_new_update:
+            Log.i(
+                "Dry-run: would save new update title after successful notification."
+            )
+        return 0
+
+    with ctx.telegram_lock:
+        sent = notifier.send(
+            msg,
+            truncate_desc=True,
+            device_title=device_title,
+        )
+    if not sent:
+        if claimed:
+            _release_claimed_update(ctx, update.title)
+        Log.e("Failed to send notification. Update title will not be saved.")
+        return 1
+    if update.is_new_update:
+        if claimed:
+            if not _commit_claimed_update(ctx, update.title):
+                Log.e("Notification sent, but update title could not be saved.")
+                return 1
+        elif not save_processed_update(ctx, update.title):
+            return 1
+    return 0
 
 
 def apply_update_actions(
@@ -411,133 +612,48 @@ def apply_update_actions(
         )
         return 1
 
-    update_incremental_only = bool(getattr(args, "update_incremental", False))
-    if update_incremental_only or update.is_new_update:
-        parsed_target = parse_fingerprint(update.target_fp)
-        if args.incremental:
-            Log.i("--incremental override active; skipping config file update.")
-        elif getattr(args, "no_config", False):
-            Log.i("No config file mode; skipping incremental config update.")
-        elif (
-            "Tcard" in update.title
-            and parsed_target
-            and parsed_target["android_version"] == update.cfg.android_version
-        ):
-            Log.i(
-                "Skipping config update because update title contains 'Tcard' without an Android version change."
-            )
-        elif update.target_incremental:
-            if args.dry_run:
-                if parsed_target:
-                    Log.i(
-                        f"Dry-run: would update {update.config_path} "
-                        f"android_version={parsed_target['android_version']}, "
-                        f"build_tag={parsed_target['build_tag']}, "
-                        f"incremental={parsed_target['incremental']}."
-                    )
-                else:
-                    Log.i(
-                        f"Dry-run: would update {update.config_path} incremental to {update.target_incremental}."
-                    )
-            else:
-                with ctx.file_lock:
-                    config_updated = update_config_from_fingerprint(
-                        update.config_path, update.cfg, update.target_fp
-                    )
-                if not config_updated:
-                    Log.e(
-                        f"Failed to update config {update.config_path}; "
-                        "not sending notification or saving title."
-                    )
-                    return 1
-                # Even on the no-op path (YAML already matches), we still
-                # mutate the in-memory cfg so subsequent code paths see the
-                # post-OTA values regardless of whether the file changed on
-                # disk. See the two early-return paths in
-                # manager.update_config_from_fingerprint.
-                if parsed_target:
-                    update.cfg.android_version = parsed_target["android_version"]
-                    update.cfg.build_tag = parsed_target["build_tag"]
-                    update.cfg.incremental = parsed_target["incremental"]
-        else:
-            Log.w(
-                "Unable to determine new incremental value from OTA metadata; config not updated."
-            )
-
     notifier = create_notifier(ctx, args)
-    if notifier:
-        msg = build_notification_message(update)
-        device_title = f"{update.cfg.model} - {update.title}"
 
-        # Reserve a new title before sending/buffering so concurrent workers
-        # cannot both notify for the same fresh OTA. `--force-notify` bypasses
-        # this because the user explicitly asked for notifications even for
-        # already-processed titles.
-        claimed = False
-        if (
-            update.is_new_update
-            and not args.dry_run
-            and not getattr(args, "force_notify", False)
-        ):
-            claim_result = _claim_new_update(ctx, update.title)
-            if claim_result is None:
-                Log.e("Could not reserve update title; notification was not sent.")
-                return 1
-            if not claim_result:
-                Log.i(
-                    "Update already claimed or processed by another worker; "
-                    "skipping duplicate notification."
-                )
-                return 0
-            claimed = True
+    # Reserve a new title BEFORE mutating the config: if claiming fails we
+    # leave no partial state behind, whereas a config rewrite followed by a
+    # failed claim would persist YAML changes nothing recorded or notified.
+    # `--force-notify` bypasses this because the user explicitly asked for
+    # notifications even for already-processed titles.
+    claimed = False
+    if (
+        notifier
+        and update.is_new_update
+        and not args.dry_run
+        and not getattr(args, "force_notify", False)
+    ):
+        claim_result = _claim_new_update(ctx, update.title)
+        if claim_result is None:
+            Log.e("Could not reserve update title; notification was not sent.")
+            return 1
+        if not claim_result:
+            Log.i(
+                "Update already claimed or processed by another worker; "
+                "skipping duplicate notification."
+            )
+            return 0
+        claimed = True
 
-        if is_sweep_mode(args):
-            # Sweep mode: buffer the notification; drain at end of run with a
-            # SWEEP_TELEGRAM_DELAY-second gap between sends.
-            with ctx.pending_lock:
-                ctx.pending_notifications.append(
-                    PendingNotification(
-                        msg=msg,
-                        device_title=device_title,
-                        title=update.title,
-                        is_new_update=update.is_new_update,
-                    )
-                )
-            if args.dry_run:
-                Log.i(
-                    "Dry-run: would buffer Telegram notification "
-                    f"(drained with {SWEEP_TELEGRAM_DELAY}s gap)."
-                )
-            else:
-                Log.i(
-                    f"Telegram notification buffered "
-                    f"({len(ctx.pending_notifications)} pending)."
-                )
-        elif args.dry_run:
-            Log.i("Dry-run: would send Telegram notification with OTA details.")
-            if update.is_new_update:
-                Log.i(
-                    "Dry-run: would save new update title after successful notification."
-                )
-        else:
-            with ctx.telegram_lock:
-                sent = notifier.send(
-                    msg,
-                    truncate_desc=True,
-                    device_title=device_title,
-                )
-            if not sent:
-                if claimed:
-                    _release_claimed_update(ctx, update.title)
-                Log.e("Failed to send notification. Update title will not be saved.")
-                return 1
-            if update.is_new_update:
-                if claimed:
-                    if not _commit_claimed_update(ctx, update.title):
-                        Log.e("Notification sent, but update title could not be saved.")
-                        return 1
-                elif not save_processed_update(ctx, update.title):
-                    return 1
+    update_incremental_only = bool(getattr(args, "update_incremental", False))
+    if (update_incremental_only or update.is_new_update) and not _apply_config_update(
+        ctx, update, args
+    ):
+        if claimed:
+            _release_claimed_update(ctx, update.title)
+        Log.e(
+            f"Failed to update config {update.config_path}; "
+            "not sending notification or saving title."
+        )
+        return 1
+
+    if notifier and (
+        _dispatch_or_buffer_notification(ctx, notifier, update, args, claimed) != 0
+    ):
+        return 1
 
     Log.s("Update check completed successfully")
     return 0
@@ -556,10 +672,22 @@ def _release_pending_claim(ctx: RunContext, note: PendingNotification) -> None:
         _release_claimed_update(ctx, note.title)
 
 
-def drain_pending_notifications(ctx: RunContext, args: argparse.Namespace) -> int:
-    """Drain buffered Telegram notifications, retaining unsent work for retry."""
+def drain_pending_notifications(
+    ctx: RunContext,
+    args: argparse.Namespace,
+    *,
+    max_sends: int | None = None,
+) -> int:
+    """Drain buffered Telegram notifications, retaining unsent work for retry.
+
+    max_sends bounds how many notifications this call will attempt; anything
+    beyond it stays buffered. The watchdog thread's emergency drain uses the
+    bound so a huge sweep buffer cannot extend process teardown indefinitely.
+    """
     with ctx.pending_lock:
         pending = list(ctx.pending_notifications)
+    if max_sends is not None:
+        pending = pending[:max_sends]
 
     if not pending:
         return 0

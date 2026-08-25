@@ -9,6 +9,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from checkota.constants import DRAIN_WATCHDOG_SECONDS, HEARTBEAT_INTERVAL_SECONDS
 from checkota.logging import Log
 from checkota.manager import Config
 from checkota.paths import IS_SOURCE_CHECKOUT, active_config_dir
@@ -216,6 +217,38 @@ def _run_sequential(
     return exit_code
 
 
+@dataclass
+class _ConfigJob:
+    """Per-config load result plus the buffered outputs of its variants."""
+
+    index: int
+    path: Path
+    load_output: str
+    status: int
+    variants: list[Config]
+    results: dict[int, str] = field(default_factory=dict)
+
+
+def _load_config_jobs(
+    ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
+) -> dict[int, _ConfigJob]:
+    """Load every config's variants upfront (YAML parse only, no network),
+    capturing any filter/error output into a per-config buffer."""
+    config_jobs: dict[int, _ConfigJob] = {}
+    for idx, config_path in enumerate(config_paths, start=1):
+        buf = io.StringIO()
+        with Log.capture(buf):
+            status, variants = load_config_variants(config_path, args)
+        config_jobs[idx] = _ConfigJob(
+            index=idx,
+            path=config_path,
+            load_output=buf.getvalue(),
+            status=status,
+            variants=variants,
+        )
+    return config_jobs
+
+
 def _run_global_pool(
     ctx: RunContext,
     args: argparse.Namespace,
@@ -229,30 +262,7 @@ def _run_global_pool(
     original config order (variants in order within each config).
     """
     total = len(config_paths)
-
-    @dataclass
-    class _ConfigJob:
-        index: int
-        path: Path
-        load_output: str
-        status: int
-        variants: list[Config]
-        results: dict[int, str] = field(default_factory=dict)
-
-    # Load every config's variants upfront (YAML parse only, no network),
-    # capturing any filter/error output into a per-config buffer.
-    config_jobs: dict[int, _ConfigJob] = {}
-    for idx, config_path in enumerate(config_paths, start=1):
-        buf = io.StringIO()
-        with Log.capture(buf):
-            status, variants = load_config_variants(config_path, args)
-        config_jobs[idx] = _ConfigJob(
-            index=idx,
-            path=config_path,
-            load_output=buf.getvalue(),
-            status=status,
-            variants=variants,
-        )
+    config_jobs = _load_config_jobs(ctx, args, config_paths)
 
     def variant_worker(
         config_idx: int, variant_idx: int, variants_total: int, cfg: Config, path: Path
@@ -326,6 +336,10 @@ def _run_global_pool(
     _flush_ready()
     while remaining:
         if ctx.stop_event.is_set():
+            # Flush whatever already-completed variants are ready before
+            # bailing; their side effects happened, so their output should
+            # not be silently dropped.
+            _flush_ready()
             return 130
         done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
         for future in done:
@@ -337,7 +351,7 @@ def _run_global_pool(
         _flush_ready()
 
         now = time.monotonic()
-        if now - last_heartbeat >= 5 and next_index <= total:
+        if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS and next_index <= total:
             completed = next_index - 1
             Log.raw(
                 f"... waiting for config {next_index}/{total} "
@@ -364,6 +378,7 @@ def main() -> int:
         **ctx_kwargs,
     )
     ctx = args.run_context
+    ctx.cli_args = args
     previous_sigint = install_interrupt_handler(ctx)
     watchdog = start_watchdog(ctx, args.timeout)
     executor = None
@@ -427,20 +442,44 @@ def main() -> int:
         # By this point the signal handler and the `except KeyboardInterrupt`
         # arm have already set stop_event. Workers are already stopped
         # (executor.shutdown(wait=True, cancel_futures=True) above), so clearing
-        # stop_event here
-        # cannot resurrect them -- it only allows the drain to run. Sessions
-        # are still alive (closed below) so `create_notifier(ctx, args)` from
-        # inside drain still gets a usable session.
+        # stop_event here cannot resurrect them -- it only allows the drain to
+        # run. Sessions are still alive (closed below) so
+        # `create_notifier(ctx, args)` from inside drain still gets a usable
+        # session.
+        #
+        # The run-budget watchdog is cancelled BEFORE draining and replaced by
+        # a dedicated drain watchdog: otherwise a nearly-expired budget could
+        # hard-exit mid-drain and discard exactly the notifications being
+        # flushed. The emergency drain inside the run watchdog skips while we
+        # hold ctx.drain_lock, so the two drains can never interleave.
+        if watchdog is not None:
+            watchdog.cancel()
+        drain_watchdog = (
+            start_watchdog(ctx, DRAIN_WATCHDOG_SECONDS)
+            if buffered_notifications_possible
+            else None
+        )
         try:
             if buffered_notifications_possible:
-                ctx.stop_event.clear()
-                drain_result = drain_pending_notifications(ctx, args)
+                with ctx.drain_lock:
+                    ctx.stop_event.clear()
+                    try:
+                        drain_result = drain_pending_notifications(ctx, args)
+                    except KeyboardInterrupt:
+                        # A second Ctrl-C during the drain must not escape as
+                        # an unhandled traceback; cleanup below still runs and
+                        # unsent notifications keep their claims for retry.
+                        Log.w(
+                            "Interrupted during notification drain; "
+                            "remaining notifications retained for retry."
+                        )
+                        exit_code = max(exit_code, 130)
         finally:
             # Close sessions and restore process-global handlers even if a
             # notifier or second interrupt aborts the drain.
+            if drain_watchdog is not None:
+                drain_watchdog.cancel()
             ctx.stop()
             signal.signal(signal.SIGINT, previous_sigint)
-            if watchdog is not None:
-                watchdog.cancel()
 
     return max(exit_code, drain_result)

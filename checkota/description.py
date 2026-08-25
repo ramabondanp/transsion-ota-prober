@@ -77,7 +77,7 @@ class TerminalParser(HTMLParser):
     def handle_data(self, data):
         self.buffer += html.unescape(data)
 
-    def flush(self, style=None):
+    def flush(self, style: str | None = None) -> None:
         text = self.buffer.strip()
         self.buffer = ""
         if not text:

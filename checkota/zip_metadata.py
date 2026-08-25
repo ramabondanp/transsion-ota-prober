@@ -11,11 +11,16 @@ import re
 import struct
 import time
 import zlib
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import requests
 
-from checkota.constants import RETRYABLE_HTTP_STATUSES
+from checkota.constants import (
+    RETRYABLE_HTTP_STATUSES,
+    ZIP_REDIRECT_ALLOWED_HOSTS,
+    ZIP_REDIRECT_PATH_PREFIXES,
+)
+from checkota.validation import is_google_https_url
 
 # ZIP record signatures
 _EOCD_SIG = b"PK\x05\x06"
@@ -63,7 +68,6 @@ class RemoteZipTransientError(RemoteZipFetchError):
 
 _CONNECT_TIMEOUT = 5.0
 
-
 def _timeout_pair(read_budget: float) -> tuple[float, float]:
     """Convert a single numeric timeout into requests' (connect, read) tuple."""
     return (_CONNECT_TIMEOUT, max(read_budget, _CONNECT_TIMEOUT))
@@ -91,25 +95,11 @@ def _header_value(headers, name: str):
 
 def _is_allowed_ota_redirect(value: str) -> bool:
     """Allow only HTTPS redirects within Google's OTA delivery network."""
-    try:
-        parsed = urlsplit(value)
-        hostname = parsed.hostname or ""
-        trusted_host = hostname == "android.googleapis.com" or (
-            hostname == "gvt1.com" or hostname.endswith(".gvt1.com")
-        )
-        return (
-            not any(
-                char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
-            )
-            and parsed.scheme == "https"
-            and trusted_host
-            and parsed.port is None
-            and not parsed.username
-            and not parsed.password
-            and parsed.path.startswith("/packages/")
-        )
-    except ValueError:
-        return False
+    return is_google_https_url(
+        value,
+        allowed_hosts=ZIP_REDIRECT_ALLOWED_HOSTS,
+        path_prefixes=ZIP_REDIRECT_PATH_PREFIXES,
+    )
 
 
 def _validate_range_response(

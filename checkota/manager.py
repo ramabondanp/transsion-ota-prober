@@ -384,6 +384,11 @@ def update_config_from_fingerprint(
 def _update_config_from_fingerprint(
     config_path: Path, cfg: Config, fingerprint: str
 ) -> bool:
+    """Apply a target fingerprint to a config file (lock must be held).
+
+    Pipeline: validate target -> read/parse -> resolve the matching variant ->
+    rewrite lines -> atomic persist with round-trip verification.
+    """
     parsed = parse_fingerprint(fingerprint)
     if not parsed:
         Log.w("No valid target fingerprint available to update configuration.")
@@ -408,48 +413,17 @@ def _update_config_from_fingerprint(
         Log.w(f"Failed to read config file {config_path}: {exc}")
         return False
 
-    lines = raw_text.splitlines(keepends=True)
-
-    if "\r\n" in raw_text:
-        newline = "\r\n"
-    elif "\r" in raw_text:
-        newline = "\r"
-    else:
-        newline = "\n"
-
-    def insert_key_line(start_idx: int, indent: int, key: str, value: str) -> None:
-        lines.insert(
-            start_idx,
-            " " * indent + f"{key}: {_quote_yaml_string(value)}{newline}",
-        )
-
     try:
         data = _load_yaml(raw_text)
     except yaml.YAMLError as exc:
         Log.w(f"Could not parse config {config_path} before updating: {exc}")
         return False
-
     if not isinstance(data, dict):
         Log.w(f"Config {config_path} did not parse as a dictionary.")
         return False
 
-    variants = data.get("variants")
-    match_idx: int | None = None
-    if isinstance(variants, list):
-        match_idx = _matching_variant_index(data, cfg)
-        if match_idx is None:
-            Log.w(
-                f"Could not locate matching variant in {config_path} when updating incremental."
-            )
-            return False
-    elif "variants" in data:
-        Log.w(f"Config {config_path} has an invalid variants section.")
-        return False
-    elif not _identity_matches(data, cfg):
-        Log.w(
-            f"Config identity changed before updating {config_path}; "
-            "configuration was not updated."
-        )
+    proceed, match_idx = _resolve_update_target(data, cfg, config_path)
+    if not proceed:
         return False
 
     effective = _effective_variant_values(data, match_idx)
@@ -469,133 +443,230 @@ def _update_config_from_fingerprint(
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
+    lines = raw_text.splitlines(keepends=True)
+    newline = _detect_newline(raw_text)
+
+    variants = data.get("variants")
     if isinstance(variants, list):
-        variants_line_idx = next(
-            (
-                i
-                for i, line in enumerate(lines)
-                if _direct_key_line(line, "variants", indent=0)
-            ),
-            None,
-        )
-        if variants_line_idx is None:
-            Log.w(f"Could not find variants section in {config_path}.")
+        variant_index = cast(int, match_idx)
+        if not _rewrite_variant_block(
+            lines, len(variants), variant_index, updates, newline, config_path
+        ):
             return False
+    elif not _rewrite_top_level_keys(lines, updates, config_path):
+        return False
 
-        variants_indent = len(lines[variants_line_idx]) - len(
-            lines[variants_line_idx].lstrip(" ")
+    return _write_updated_config(config_path, lines, raw_text, cfg, match_idx, updates)
+
+
+def _detect_newline(raw_text: str) -> str:
+    if "\r\n" in raw_text:
+        return "\r\n"
+    if "\r" in raw_text:
+        return "\r"
+    return "\n"
+
+
+def _resolve_update_target(
+    data: dict[str, Any], cfg: Config, config_path: Path
+) -> tuple[bool, int | None]:
+    """Locate which part of the parsed config the target applies to.
+
+    Returns (proceed, variant_index). variant_index is None for single-variant
+    configs; proceed=False means the reason was already logged.
+    """
+    variants = data.get("variants")
+    if isinstance(variants, list):
+        match_idx = _matching_variant_index(data, cfg)
+        if match_idx is None:
+            Log.w(
+                f"Could not locate matching variant in {config_path} when updating incremental."
+            )
+            return False, None
+        return True, match_idx
+    if "variants" in data:
+        Log.w(f"Config {config_path} has an invalid variants section.")
+        return False, None
+    if not _identity_matches(data, cfg):
+        Log.w(
+            f"Config identity changed before updating {config_path}; "
+            "configuration was not updated."
         )
+        return False, None
+    return True, None
 
-        sequence_indent: int | None = None
-        variant_lines: list[int] = []
-        variants_end_idx = len(lines)
-        for i in range(variants_line_idx + 1, len(lines)):
-            line = lines[i]
-            stripped = line.strip()
-            indent = len(line) - len(line.lstrip(" "))
-            if not stripped or stripped.startswith("#"):
-                continue
 
-            item_indent = _sequence_item_indent(line)
-            if sequence_indent is None:
-                if item_indent is not None and item_indent >= variants_indent:
-                    sequence_indent = item_indent
-                    variant_lines.append(i)
-                    continue
-                if indent <= variants_indent:
-                    variants_end_idx = i
-                    break
-                continue
+def _rewrite_variant_block(
+    lines: list[str],
+    variants_count: int,
+    variant_index: int,
+    updates: dict[str, str],
+    newline: str,
+    config_path: Path,
+) -> bool:
+    """Rewrite (or insert) the target keys inside one variants-list entry."""
+    variants_line_idx = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if _direct_key_line(line, "variants", indent=0)
+        ),
+        None,
+    )
+    if variants_line_idx is None:
+        Log.w(f"Could not find variants section in {config_path}.")
+        return False
 
-            if item_indent == sequence_indent:
+    variants_indent = len(lines[variants_line_idx]) - len(
+        lines[variants_line_idx].lstrip(" ")
+    )
+
+    sequence_indent: int | None = None
+    variant_lines: list[int] = []
+    variants_end_idx = len(lines)
+    for i in range(variants_line_idx + 1, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        item_indent = _sequence_item_indent(line)
+        if sequence_indent is None:
+            if item_indent is not None and item_indent >= variants_indent:
+                sequence_indent = item_indent
                 variant_lines.append(i)
                 continue
             if indent <= variants_indent:
                 variants_end_idx = i
                 break
+            continue
 
-        if sequence_indent is None or len(variant_lines) != len(variants):
-            Log.w(f"Failed to map variant blocks in {config_path}.")
-            return False
+        if item_indent == sequence_indent:
+            variant_lines.append(i)
+            continue
+        if indent <= variants_indent:
+            variants_end_idx = i
+            break
 
-        # The variants branch above returns early unless a matching variant
-        # index was resolved, so match_idx is an int here.
-        variant_index = cast(int, match_idx)
-        variant_line_idx = variant_lines[variant_index]
-        variant_end_idx = (
-            variant_lines[variant_index + 1]
-            if variant_index + 1 < len(variant_lines)
-            else variants_end_idx
+    if sequence_indent is None or len(variant_lines) != variants_count:
+        Log.w(f"Failed to map variant blocks in {config_path}.")
+        return False
+
+    mapping_indent = _variant_mapping_indent(
+        lines, variant_lines, variant_index, variants_end_idx, sequence_indent
+    )
+    if mapping_indent is None:
+        Log.w(
+            f"Failed to locate variant block #{variant_index + 1} in {config_path}."
         )
-        marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
-        marker_key_match = _SEQUENCE_KEY_RE.match(marker_body)
-        if marker_key_match is not None:
-            mapping_indent = marker_key_match.start("key")
-        else:
-            mapping_indent = next(
-                (
-                    len(match.group("indent"))
-                    for line in lines[variant_line_idx + 1 : variant_end_idx]
-                    if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
-                    and len(match.group("indent")) > sequence_indent
-                ),
-                None,
-            )
+        return False
 
-        if mapping_indent is None:
-            Log.w(
-                f"Failed to locate variant block #{variant_index + 1} in {config_path}."
-            )
-            return False
+    variant_line_idx = variant_lines[variant_index]
+    variant_end_idx = (
+        variant_lines[variant_index + 1]
+        if variant_index + 1 < len(variant_lines)
+        else variants_end_idx
+    )
 
-        key_lines: dict[str, int] = {}
-        for key in ("android_version", "build_tag", "incremental"):
-            marker_match = _SEQUENCE_KEY_RE.match(marker_body)
-            if marker_match is not None and marker_match.group("key") == key:
-                key_lines[key] = variant_line_idx
-                continue
-            line_idx = next(
-                (
-                    i
-                    for i in range(variant_line_idx + 1, variant_end_idx)
-                    if _direct_key_line(lines[i], key, indent=mapping_indent)
-                ),
-                None,
-            )
-            if line_idx is not None:
-                key_lines[key] = line_idx
-
-        for key, line_idx in key_lines.items():
-            lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
-
-        insert_idx = variant_line_idx + 1
-        for key in ("android_version", "build_tag", "incremental"):
-            if key not in key_lines:
-                insert_key_line(insert_idx, mapping_indent, key, updates[key])
-                insert_idx += 1
-    else:
-        top_level_end = next(
+    key_lines: dict[str, int] = {}
+    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
+    for key in ("android_version", "build_tag", "incremental"):
+        marker_match = _SEQUENCE_KEY_RE.match(marker_body)
+        if marker_match is not None and marker_match.group("key") == key:
+            key_lines[key] = variant_line_idx
+            continue
+        line_idx = next(
             (
                 i
-                for i, line in enumerate(lines)
-                if _direct_key_line(line, "variants", indent=0)
+                for i in range(variant_line_idx + 1, variant_end_idx)
+                if _direct_key_line(lines[i], key, indent=mapping_indent)
             ),
-            len(lines),
+            None,
         )
-        for key in ("android_version", "build_tag", "incremental"):
-            line_idx = next(
-                (
-                    i
-                    for i, line in enumerate(lines[:top_level_end])
-                    if _direct_key_line(line, key, indent=0)
-                ),
-                None,
-            )
-            if line_idx is None:
-                Log.w(f"Could not find {key} entry in {config_path}.")
-                return False
-            lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
+        if line_idx is not None:
+            key_lines[key] = line_idx
 
+    for key, line_idx in key_lines.items():
+        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
+
+    insert_idx = variant_line_idx + 1
+    for key in ("android_version", "build_tag", "incremental"):
+        if key not in key_lines:
+            lines.insert(
+                insert_idx,
+                " " * mapping_indent + f"{key}: {_quote_yaml_string(updates[key])}{newline}",
+            )
+            insert_idx += 1
+    return True
+
+
+def _variant_mapping_indent(
+    lines: list[str],
+    variant_lines: list[int],
+    variant_index: int,
+    variants_end_idx: int,
+    sequence_indent: int,
+) -> int | None:
+    """Find the indentation of the key mappings inside one variant block."""
+    variant_line_idx = variant_lines[variant_index]
+    variant_end_idx = (
+        variant_lines[variant_index + 1]
+        if variant_index + 1 < len(variant_lines)
+        else variants_end_idx
+    )
+    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
+    marker_key_match = _SEQUENCE_KEY_RE.match(marker_body)
+    if marker_key_match is not None:
+        return marker_key_match.start("key")
+    return next(
+        (
+            len(match.group("indent"))
+            for line in lines[variant_line_idx + 1 : variant_end_idx]
+            if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
+            and len(match.group("indent")) > sequence_indent
+        ),
+        None,
+    )
+
+
+def _rewrite_top_level_keys(
+    lines: list[str], updates: dict[str, str], config_path: Path
+) -> bool:
+    """Rewrite the target keys at the top level of a single-variant config."""
+    top_level_end = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if _direct_key_line(line, "variants", indent=0)
+        ),
+        len(lines),
+    )
+    for key in ("android_version", "build_tag", "incremental"):
+        line_idx = next(
+            (
+                i
+                for i, line in enumerate(lines[:top_level_end])
+                if _direct_key_line(line, key, indent=0)
+            ),
+            None,
+        )
+        if line_idx is None:
+            Log.w(f"Could not find {key} entry in {config_path}.")
+            return False
+        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
+    return True
+
+
+def _write_updated_config(
+    config_path: Path,
+    lines: list[str],
+    raw_text: str,
+    cfg: Config,
+    match_idx: int | None,
+    updates: dict[str, str],
+) -> bool:
+    """Persist rewritten lines atomically after a round-trip verification."""
     new_text = "".join(lines)
     if new_text == raw_text:
         Log.i(f"{config_path} already matches target fingerprint values.")
@@ -606,7 +677,13 @@ def _update_config_from_fingerprint(
     # original config untouched.
     tmp_path: Path | None = None
     try:
-        original_mode = stat.S_IMODE(config_path.stat().st_mode)
+        # lstat, not stat: if an external tamperer swaps config_path for a
+        # symlink mid-write we must not read the symlink target's mode.
+        # os.replace() below swaps the directory entry itself, so the final
+        # write cannot be redirected through that link either. This narrows
+        # the local-tamperer window to a documented threat model; the advisory
+        # flock only coordinates cooperative checkota processes.
+        original_mode = stat.S_IMODE(config_path.lstat().st_mode)
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
         )

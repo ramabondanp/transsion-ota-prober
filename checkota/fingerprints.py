@@ -1,3 +1,6 @@
+import contextlib
+import os
+import tempfile
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
@@ -66,11 +69,36 @@ def _append_title(handle: TextIO, lines: list[str], title: str) -> None:
     handle.flush()
 
     all_lines = lines + [f"{title}\n"]
-    if len(all_lines) > MAX_PROCESSED_ENTRIES:
-        handle.seek(0)
-        handle.truncate()
-        handle.writelines(all_lines[-MAX_PROCESSED_ENTRIES:])
-        handle.flush()
+    if len(all_lines) <= MAX_PROCESSED_ENTRIES:
+        return
+    _rewrite_trimmed(handle.name, all_lines[-MAX_PROCESSED_ENTRIES:])
+
+
+def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
+    """Replace the dedup file with its newest entries atomically.
+
+    Truncating the locked handle in place is not crash-safe: a power loss
+    mid-truncate loses the whole dedup history and causes duplicate
+    notifications. A temp-file swap keeps either the old or the new content,
+    never nothing. The lock held on the old inode stays effective for this
+    critical section because the swap happens last.
+    """
+    path = Path(name)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+    )
+    try:
+        with contextlib.suppress(OSError):
+            os.chmod(tmp_name, path.stat().st_mode & 0o7777)
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.writelines(trimmed)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def load_processed_titles(path: Path) -> set[str]:
@@ -121,7 +149,18 @@ def commit_processed_title(path: Path, title: str, claim: TextIO) -> bool:
 
 
 def release_processed_claim(claim: TextIO) -> None:
-    _close_locked(claim)
+    """Release a title claim, tolerating an already-closed handle.
+
+    RunContext.stop() pops and closes claimed handles under file_lock; a race
+    with _commit_claimed_update could otherwise hand us a closed fd and turn
+    cleanup into an uncaught OSError. Cleanup must never crash the caller.
+    """
+    try:
+        _close_locked(claim)
+    except OSError as exc:
+        Log.w(f"Ignoring error while releasing update-title claim: {exc}")
+        with contextlib.suppress(OSError, ValueError):
+            claim.close()
 
 
 def save_processed_title(path: Path, title: str) -> bool:

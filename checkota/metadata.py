@@ -4,7 +4,12 @@ import time
 
 import requests
 
-from checkota.constants import SDK_TO_ANDROID
+from checkota.constants import (
+    RETRY_BACKOFF_MULTIPLIER,
+    RETRY_BASE_DELAY_SECONDS,
+    SDK_TO_ANDROID,
+    ZIP_MEMBER_READ_TIMEOUT_SECONDS,
+)
 from checkota.logging import Log
 from checkota.manager import parse_fingerprint
 from checkota.paths import processed_updates_path
@@ -41,7 +46,7 @@ def get_ota_metadata(
         Log.w("OTA metadata fetch interrupted before start.")
         return None
     retries = 3
-    delay = 1
+    delay = RETRY_BASE_DELAY_SECONDS
 
     for attempt in range(retries):
         if _stop_requested(stop_event):
@@ -52,7 +57,7 @@ def get_ota_metadata(
                 url,
                 METADATA_PATH,
                 session=session,
-                timeout=15,
+                timeout=ZIP_MEMBER_READ_TIMEOUT_SECONDS,
                 headers={"User-Agent": "transsion-ota-prober/1.0"},
                 use_proxy_env=use_proxy_env,
             ).decode("utf-8", errors="replace")
@@ -125,7 +130,7 @@ def get_ota_metadata(
                         return None
                 else:
                     time.sleep(delay)
-                delay *= 2
+                delay *= RETRY_BACKOFF_MULTIPLIER
                 continue
             Log.e(f"Error extracting OTA metadata after multiple retries: {exc}")
             return None

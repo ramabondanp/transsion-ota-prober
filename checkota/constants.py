@@ -7,11 +7,42 @@ DEBUG_FILE = "debug_checkin_response.txt"
 PROCESSED_UPDATES_FILE = "processed_updates.txt"
 OTA_URL_PREFIX = b"https://android.googleapis.com/packages/ota"
 
+# Host/path allowlists for server-controlled URLs. The check-in response may
+# only point at Google's OTA API endpoint; ZIP range-fetch redirects may hop
+# within Google's delivery network.
+CHECKIN_API_HOST = "android.googleapis.com"
+ZIP_REDIRECT_ALLOWED_HOSTS = ("android.googleapis.com", ".gvt1.com")
+OTA_URL_PATH_PREFIXES = ("/packages/ota/", "/packages/ota-api/")
+ZIP_REDIRECT_PATH_PREFIXES = ("/packages/",)
+
 TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
 
 # HTTP statuses that are transient for Google check-in and OTA fetches.
 # Shared by update_checker.py and zip_metadata.py.
 RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+# Shared exponential backoff policy for transient failures (check-in request,
+# OTA metadata fetch, ZIP range reads).
+RETRY_BASE_DELAY_SECONDS = 1
+RETRY_BACKOFF_MULTIPLIER = 2
+
+# Per-request HTTP timeouts (seconds).
+ZIP_MEMBER_READ_TIMEOUT_SECONDS = 15.0
+TELEGRAM_API_TIMEOUT_SECONDS = 15
+TELEGRAPH_API_TIMEOUT_SECONDS = 10
+
+# CLI progress heartbeat interval while waiting on parallel variant workers.
+HEARTBEAT_INTERVAL_SECONDS = 5
+
+# Wall-clock budget granted exclusively to the end-of-run notification drain,
+# armed after the main run watchdog is cancelled. Keeps a nearly-expired run
+# budget from killing the process mid-drain (which would discard exactly the
+# notifications being flushed).
+DRAIN_WATCHDOG_SECONDS = 300.0
+
+# Upper bound on sends performed by the watchdog thread's emergency drain when
+# the run budget expires mid-sweep.
+EMERGENCY_DRAIN_MAX_SENDS = 30
 
 REGION_CODE_MAP = {
     "GL": "Global - GL Market",
