@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, cast
 
 from checkota.logging import Log
 
@@ -21,11 +21,11 @@ def _title_lock_path(path: Path, title: str) -> Path:
 
 
 def _open_locked(path: Path, mode: str) -> TextIO:
-    handle = path.open(mode, encoding="utf-8")
+    handle = cast(TextIO, path.open(mode, encoding="utf-8"))
     try:
         if _fcntl is not None:
             _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
-    except Exception:
+    except OSError:
         handle.close()
         raise
     return handle

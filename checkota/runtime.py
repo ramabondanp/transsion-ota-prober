@@ -4,6 +4,7 @@ the wall-clock watchdog.
 
 import os
 import signal
+import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,8 +112,8 @@ class RunContext:
         for session in sessions:
             try:
                 session.close()
-            except Exception:
-                pass
+            except (OSError, requests.exceptions.RequestException) as exc:
+                Log.w(f"Ignoring error while closing session: {exc}")
 
 
 def create_run_context(
@@ -165,6 +166,10 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
 
     def _on_timeout() -> None:
         ctx.stop_event.set()
+        # Flush buffered stdio: os._exit skips interpreter shutdown, so piped
+        # (block-buffered) output would otherwise be lost.
+        sys.stdout.flush()
+        sys.stderr.flush()
         # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
         # the stop_event mid-call, so force termination after the budget.
         os._exit(124)

@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import cast
 
+import yaml
+
 from checkota.description import format_update_description
 from checkota.fingerprints import (
     claim_processed_title,
@@ -99,6 +101,13 @@ _CACHE_MISS = object()
 
 #: Polling interval for workers waiting on a peer's in-flight fetch. The owner
 #: controls completion; polling only keeps waiters responsive to cancellation.
+#:
+#: Trade-off vs. the previous 15s bounded wait: a waiter now blocks until the
+#: owner finishes (success, failure, or stop_event) instead of giving up early,
+#: so waiters get the real fetch result instead of a spurious timeout while the
+#: owner is still retrying. The wait is bounded in practice by the owner's own
+#: retry/backoff budget and by the global --timeout watchdog, which hard-exits
+#: the process even if socket reads stall past requests' read timeout.
 _METADATA_WAIT_POLL_INTERVAL = 1.0
 
 
@@ -287,6 +296,11 @@ def collect_update_info(
     elif not all([title, url, size]):
         Log.e("Missing essential update info (title, url, or size)")
         return 1, None
+    # The checks above guarantee presence; narrow the Optional lookups so the
+    # rest of the pipeline can rely on plain strings.
+    title = cast(str, title)
+    url = cast(str, url)
+    size = cast(str, size)
 
     Log.s(f"New OTA update found: {title}")
     Log.i(f"Size: {size}")
@@ -522,9 +536,7 @@ def apply_update_actions(
             if update.is_new_update:
                 if claimed:
                     if not _commit_claimed_update(ctx, update.title):
-                        Log.e(
-                            "Notification sent, but update title could not be saved."
-                        )
+                        Log.e("Notification sent, but update title could not be saved.")
                         return 1
                 elif not save_processed_update(ctx, update.title):
                     return 1
@@ -673,7 +685,7 @@ def load_config_variants(
     """
     try:
         configs = Config.from_yaml(config_path)
-    except Exception as exc:
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
         Log.e(f"Config error for {config_path}: {exc}")
         return 1, []
 

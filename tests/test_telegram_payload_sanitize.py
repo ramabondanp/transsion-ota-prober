@@ -130,12 +130,16 @@ def test_final_limit_does_not_split_entities_or_supported_tags():
     assert "<a href=" in fitted
 
 
-def test_final_limit_fails_closed_on_unbalanced_supported_tag():
+def test_unbalanced_supported_tag_degrades_to_escaped_plain_text():
     session = _Session()
     notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
 
-    assert notifier.send("<b>unterminated", truncate_desc=False) is False
-    assert session.posts == []
+    # Invalid structure must degrade to literal plain text, not drop the
+    # notification entirely.
+    assert notifier.send("<b>unterminated", truncate_desc=False) is True
+    text = session.posts[-1][1]["text"]
+    assert text == "&lt;b&gt;unterminated"
+    assert TgNotify._tokenize_telegram_html(text) is not None
 
 
 def test_common_and_arbitrary_entities_are_canonicalized_before_fitting():
@@ -199,23 +203,42 @@ def test_anchor_entities_are_canonicalized_and_tags_remain_balanced():
     assert TgNotify._tokenize_telegram_html(fitted) is not None
 
 
-def test_invalid_and_control_entities_fail_closed():
-    invalid_values = (
-        "&#0;",
-        "&#x1F;",
-        "&#10;",
-        "&#x7F;",
-        "&#xD800;",
-        "&#x110000;",
-        "&#xFDD0;",
-        "&#xFFFF;",
-        "&NewLine;",
-        "raw\x00control",
-        "raw\x1ccontrol",
+def test_invalid_and_control_entities_degrade_or_fail_closed():
+    """Hostile entities yield safe plain text, or nothing when unsalvageable."""
+    cases = (
+        ("&#0;", "\ufffd"),
+        ("&#x1F;", None),
+        ("&#10;", None),  # whitespace-only content is dropped
+        ("&#x7F;", None),
+        ("&#xD800;", "\ufffd"),
+        ("&#x110000;", "\ufffd"),
+        ("&#xFDD0;", None),
+        ("&#xFFFF;", None),
+        ("&NewLine;", None),  # whitespace-only content is dropped
+        ("raw\x00control", "rawcontrol"),
+        ("raw\x1ccontrol", "rawcontrol"),
     )
 
-    for value in invalid_values:
+    for value, expected in cases:
         session = _Session()
         notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
-        assert notifier.send(value, truncate_desc=False) is False
-        assert session.posts == []
+        result = notifier.send(value, truncate_desc=False)
+        if expected is None:
+            assert result is False, value
+            assert session.posts == [], value
+        else:
+            assert result is True, value
+            text = session.posts[-1][1]["text"]
+            assert text == expected, value
+            assert TgNotify._tokenize_telegram_html(text) is not None, value
+            assert TgNotify._rendered_length(text) <= TgNotify.MAX_LEN, value
+
+
+def test_multiline_content_with_encoded_newline_still_delivered():
+    session = _Session()
+    notifier = TgNotify("token", "chat", session=session)  # type: ignore[arg-type]
+
+    # Entity-encoded newlines cannot pass strict canonicalization, but real
+    # content around them must survive via the plain-text fallback.
+    assert notifier.send("line1&#10;line2", truncate_desc=False) is True
+    assert session.posts[-1][1]["text"] == "line1\nline2"

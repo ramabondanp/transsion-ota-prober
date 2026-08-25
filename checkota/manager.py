@@ -5,7 +5,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -78,11 +78,14 @@ class Config:
         if not file.is_file():
             raise FileNotFoundError(f"Config file not found: {file}")
 
-        with open(file, encoding="utf-8") as handle:
-            data = _load_yaml(handle)
+        try:
+            with open(file, encoding="utf-8") as handle:
+                data = _load_yaml(handle)
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"Could not read or parse config {file}: {exc}") from exc
 
         if not isinstance(data, dict):
-            raise ValueError("Config file content is not a valid dictionary.")
+            raise TypeError("Config file content is not a valid dictionary.")
 
         variants = data.get("variants")
 
@@ -96,7 +99,7 @@ class Config:
         configs = []
         for idx, variant in enumerate(variants, start=1):
             if not isinstance(variant, dict):
-                raise ValueError(f"Variant entry #{idx} is not a dictionary.")
+                raise TypeError(f"Variant entry #{idx} is not a dictionary.")
 
             merged = {**base, **variant}
             variant_name = (
@@ -401,7 +404,7 @@ def _update_config_from_fingerprint(
     try:
         with config_path.open("r", encoding="utf-8", newline="") as handle:
             raw_text = handle.read()
-    except Exception as exc:
+    except OSError as exc:
         Log.w(f"Failed to read config file {config_path}: {exc}")
         return False
 
@@ -422,7 +425,7 @@ def _update_config_from_fingerprint(
 
     try:
         data = _load_yaml(raw_text)
-    except Exception as exc:
+    except yaml.YAMLError as exc:
         Log.w(f"Could not parse config {config_path} before updating: {exc}")
         return False
 
@@ -515,10 +518,13 @@ def _update_config_from_fingerprint(
             Log.w(f"Failed to map variant blocks in {config_path}.")
             return False
 
-        variant_line_idx = variant_lines[match_idx]
+        # The variants branch above returns early unless a matching variant
+        # index was resolved, so match_idx is an int here.
+        variant_index = cast(int, match_idx)
+        variant_line_idx = variant_lines[variant_index]
         variant_end_idx = (
-            variant_lines[match_idx + 1]
-            if match_idx + 1 < len(variant_lines)
+            variant_lines[variant_index + 1]
+            if variant_index + 1 < len(variant_lines)
             else variants_end_idx
         )
         marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
@@ -537,7 +543,9 @@ def _update_config_from_fingerprint(
             )
 
         if mapping_indent is None:
-            Log.w(f"Failed to locate variant block #{match_idx + 1} in {config_path}.")
+            Log.w(
+                f"Failed to locate variant block #{variant_index + 1} in {config_path}."
+            )
             return False
 
         key_lines: dict[str, int] = {}
@@ -610,7 +618,7 @@ def _update_config_from_fingerprint(
         os.chmod(tmp_path, original_mode)
         reparse = _load_yaml(tmp_path.read_text(encoding="utf-8"))
         if not isinstance(reparse, dict):
-            raise ValueError(f"Round-trip parse yielded {type(reparse).__name__}")
+            raise TypeError(f"Round-trip parse yielded {type(reparse).__name__}")
 
         if isinstance(reparse.get("variants"), list):
             reparsed_effective = _effective_variant_values(reparse, match_idx)
@@ -632,15 +640,15 @@ def _update_config_from_fingerprint(
 
         os.replace(tmp_path, config_path)
         tmp_path = None
-    except Exception as exc:
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
         Log.w(f"Failed to write updated config {config_path}: {exc}")
         return False
     finally:
         if tmp_path is not None:
             try:
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                Log.w(f"Could not remove temporary file {tmp_path}: {exc}")
 
     Log.s(
         f"Updated {config_path} -> Android {updates['android_version']}, "

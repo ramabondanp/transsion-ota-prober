@@ -269,7 +269,7 @@ def _run_global_pool(
                 if args.incremental:
                     Log.i(f"Override incremental: {args.incremental}")
                 result = process_config_variant(ctx, cfg, path, local_args, cfg.variant)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- buffered per-variant safety net
             buffer.write(
                 f"\033[91m✗\033[0m {path} variant {variant_idx} failed with unhandled exception: {exc}\n"
             )

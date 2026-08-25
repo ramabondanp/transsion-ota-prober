@@ -37,3 +37,8 @@ include-package-data = true
 
 [tool.ruff]
 extend-exclude = ["vendor"]
+
+[tool.pyright]
+# `checkin` and `utils` are vendored packages injected onto sys.path at runtime
+# by checkota.paths.ensure_vendor_on_path(); teach the type checker about them.
+extraPaths = ["vendor/google-ota-prober"]

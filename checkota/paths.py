@@ -63,8 +63,10 @@ STATE_DIR = PROJECT_ROOT if IS_SOURCE_CHECKOUT else _wheel_state_dir()
 # An explicit override always wins, including in a wheel. Otherwise source
 # checkouts use the repository tree and wheels use the namespaced package tree.
 _explicit_vendor_dir = os.environ.get("CHECKOTA_VENDOR_DIR")
-VENDOR_DIR = Path(_explicit_vendor_dir).expanduser() if _explicit_vendor_dir else (
-    SOURCE_VENDOR_DIR if IS_SOURCE_CHECKOUT else PACKAGED_VENDOR_DIR
+VENDOR_DIR = (
+    Path(_explicit_vendor_dir).expanduser()
+    if _explicit_vendor_dir
+    else (SOURCE_VENDOR_DIR if IS_SOURCE_CHECKOUT else PACKAGED_VENDOR_DIR)
 )
 
 _vendor_ready = False
@@ -96,6 +98,11 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
             os.link(temporary, destination)
         except FileExistsError:
             return False
+        except OSError:
+            # Filesystems without hardlink support (e.g. some network mounts):
+            # publish by renaming instead. Contents are the identical bundled
+            # defaults, so last-writer-wins is harmless.
+            os.replace(temporary, destination)
         return True
     finally:
         if fd != -1:

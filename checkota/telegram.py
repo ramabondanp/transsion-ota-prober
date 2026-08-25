@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from html.entities import html5
+from typing import cast
 
 import requests
 
@@ -23,6 +24,10 @@ _ANCHOR_TAG_RE = re.compile(
     r"<a\s+href=(?P<quote>\"|')(?P<href>.*)(?P=quote)>",
     flags=re.IGNORECASE,
 )
+
+# requests treats None proxy values as "disable proxies" at runtime, but its
+# typeshed annotation only admits str values; normalize the type once here.
+_NO_PROXIES = cast("dict[str, str]", {"http": None, "https": None, "all": None})
 
 
 class TgNotify:
@@ -138,7 +143,7 @@ class TgNotify:
             response = self.session.post(
                 TELEGRAPH_API_URL,
                 json=payload,
-                proxies={"http": None, "https": None, "all": None},
+                proxies=_NO_PROXIES,
                 timeout=10,
             )
             response.raise_for_status()
@@ -151,7 +156,7 @@ class TgNotify:
             Log.w(f"Telegraph API error: {result}")
             return None
 
-        except Exception as exc:
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             Log.w(f"Failed to create Telegraph page: {exc}")
             return None
 
@@ -297,6 +302,21 @@ class TgNotify:
         return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
 
     @staticmethod
+    def _fallback_plain_text(value: str) -> str | None:
+        """Last-resort rendering when structured canonicalization fails.
+
+        Decodes entities, drops code points Telegram rejects, and escapes all
+        markup literally, so a notification is degraded (markup shown verbatim
+        as text) instead of dropped entirely. Returns None when nothing
+        sendable remains.
+        """
+        decoded = html.unescape(value)
+        kept = "".join(char for char in decoded if TgNotify._is_safe_code_point(char))
+        if not kept.strip():
+            return None
+        return kept.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    @staticmethod
     def _rendered_length(value: str) -> int:
         tokens = TgNotify._tokenize_telegram_html(value)
         if tokens is None:
@@ -304,7 +324,7 @@ class TgNotify:
         return sum(
             TgNotify._rendered_units(html.unescape(raw))
             for kind, raw, _ in tokens
-            if kind in ("text", "entity")
+            if kind == "text"
         )
 
     @staticmethod
@@ -320,7 +340,7 @@ class TgNotify:
         rendered_len = sum(
             TgNotify._rendered_units(html.unescape(raw))
             for kind, raw, _ in tokens
-            if kind in ("text", "entity")
+            if kind == "text"
         )
         canonical = "".join(raw for _, raw, _ in tokens)
         if rendered_len <= max_len:
@@ -343,7 +363,7 @@ class TgNotify:
         for kind, raw, name in tokens:
             next_tags = open_tags
             next_rendered_len = selected_rendered_len
-            if kind in ("text", "entity"):
+            if kind == "text":
                 next_rendered_len += TgNotify._rendered_units(html.unescape(raw))
             elif kind == "tag_open":
                 if name is None:
@@ -440,7 +460,13 @@ class TgNotify:
         sanitized = re.sub(r"\n[ \t]+", "\n", sanitized)
         sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
         sanitized = sanitized.replace(" \n", "\n").strip()
-        return TgNotify._escape_text_preserving_telegram_tags(sanitized)
+        canonical = TgNotify._escape_text_preserving_telegram_tags(sanitized)
+        if canonical is not None:
+            return canonical
+        # Unbalanced/unsupported markup must not silently drop the whole
+        # notification; degrade to literal plain text instead.
+        Log.w("Telegram HTML structure is invalid; falling back to plain text")
+        return TgNotify._fallback_plain_text(sanitized)
 
     def send(
         self,
@@ -452,10 +478,17 @@ class TgNotify:
     ) -> bool:
         Log.i("Sending Telegram notification...")
 
-        msg = self._sanitize_html(msg)
-        if msg is None:
-            Log.e("Failed to canonicalize Telegram notification HTML")
-            return False
+        raw_msg = msg
+        canonical_msg = self._sanitize_html(raw_msg)
+        if canonical_msg is None:
+            # Unsafe code points survived sanitization; degrade to plain text
+            # rather than dropping the notification entirely.
+            Log.w("Notification HTML could not be canonicalized; sending as plain text")
+            canonical_msg = TgNotify._fallback_plain_text(raw_msg)
+            if canonical_msg is None:
+                Log.e("Notification contained no sendable content after sanitization")
+                return False
+        msg = canonical_msg
 
         telegraph_url = None
 
@@ -469,11 +502,8 @@ class TgNotify:
 
                 if self._rendered_length(description) > self.DESC_MAX_LEN:
                     title_match = re.search(r"<b>Title:</b> (.*?)\n", before_desc)
-                    page_title = (
-                        title_match.group(1)
-                        if title_match
-                        else (device_title or "Update")
-                    )
+                    matched_title = title_match.group(1) if title_match else None
+                    page_title = matched_title or device_title or "Update"
                     if self.telegraph_token:
                         telegraph_url = self._create_telegraph_page(
                             page_title, description
@@ -489,10 +519,11 @@ class TgNotify:
 
         # The description-specific path is only an optimization. Always apply
         # the final Telegram limit after all sanitization and optional rewriting.
-        msg = self._fit_telegram_html(msg, self.MAX_LEN)
-        if msg is None:
+        fitted_msg = self._fit_telegram_html(msg, self.MAX_LEN)
+        if fitted_msg is None:
             Log.e("Failed to fit Telegram notification within the final length limit")
             return False
+        msg = fitted_msg
 
         try:
             payload = {
@@ -510,7 +541,7 @@ class TgNotify:
             response = self.session.post(
                 f"{self.url}/sendMessage",
                 json=payload,
-                proxies={"http": None, "https": None, "all": None},
+                proxies=_NO_PROXIES,
                 timeout=15,
             )
             response.raise_for_status()
@@ -528,10 +559,15 @@ class TgNotify:
             if exc.response is not None:
                 try:
                     detail = exc.response.text
-                except Exception:
+                except requests.RequestException:
                     detail = str(exc.response)
             Log.e(f"Failed to send notification: {exc} - {detail}")
             return False
-        except Exception as exc:
+        except (
+            requests.RequestException,
+            ValueError,
+            TypeError,
+            KeyError,
+        ) as exc:
             Log.e(f"Failed to send notification: {exc}")
             return False

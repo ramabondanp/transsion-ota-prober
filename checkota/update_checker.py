@@ -1,3 +1,8 @@
+# The vendored checkin_generator_pb2 constructs its message classes dynamically
+# at import time (protobuf builder -> globals()), so static analyzers cannot see
+# attributes such as AndroidCheckinRequest. Suppress attribute-access errors for
+# this file only; runtime resolution is guaranteed by ensure_vendor_on_path().
+# pyright: reportAttributeAccessIssue=false
 import datetime
 import gzip
 import threading
@@ -218,7 +223,7 @@ class UpdateChecker:
                         Log.i(f"Debug response saved to {self.debug_file}")
 
                     info = self._parse(resp)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 -- classified below
                     error = exc
                     if (
                         debug
@@ -227,7 +232,10 @@ class UpdateChecker:
                     ):
                         try:
                             error_content = self._read_response_body(response)
-                        except Exception:
+                        except (
+                            requests.exceptions.RequestException,
+                            UpdateCheckError,
+                        ):
                             error_content = None
                 else:
                     has_update = info.get("found", False) and "url" in info
@@ -341,7 +349,7 @@ class UpdateChecker:
 
             try:
                 name = name_bytes.decode("utf-8")
-            except Exception as exc:
+            except UnicodeDecodeError as exc:
                 Log.w(
                     f"Skipping setting with non-UTF-8 name "
                     f"({len(name_bytes)} bytes): {exc}"

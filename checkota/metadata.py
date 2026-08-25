@@ -26,6 +26,10 @@ METADATA_KEYS = {
 }
 
 
+def _stop_requested(stop_event: threading.Event | None) -> bool:
+    return stop_event is not None and stop_event.is_set()
+
+
 def get_ota_metadata(
     url: str,
     session: requests.Session | None = None,
@@ -33,14 +37,14 @@ def get_ota_metadata(
     use_proxy_env: bool = False,
 ) -> dict[str, str] | None:
     Log.i("Fetching OTA metadata (fingerprint, patch level, sdk)...")
-    if stop_event is not None and stop_event.is_set():
+    if _stop_requested(stop_event):
         Log.w("OTA metadata fetch interrupted before start.")
         return None
     retries = 3
     delay = 1
 
     for attempt in range(retries):
-        if stop_event is not None and stop_event.is_set():
+        if _stop_requested(stop_event):
             Log.w("OTA metadata fetch interrupted.")
             return None
         try:
@@ -87,7 +91,7 @@ def get_ota_metadata(
                     tz_cst = datetime.timezone(datetime.timedelta(hours=8))
                     dt_cst = dt_utc.astimezone(tz_cst)
                     result["build_date"] = dt_cst.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception as exc:
+                except (TypeError, ValueError, OverflowError, OSError) as exc:
                     Log.w(
                         f"Could not parse post-timestamp "
                         f"{meta.get('post-timestamp')!r}: {exc}"
@@ -101,13 +105,13 @@ def get_ota_metadata(
                     android = SDK_TO_ANDROID.get(sdk_int) if sdk_int >= 33 else None
                     if android:
                         result["android_version"] = android
-                except Exception:
-                    pass
+                except (TypeError, ValueError) as exc:
+                    Log.w(f"Could not parse SDK level {sdk_level!r}: {exc}")
 
             return result
 
         except RemoteZipTransientError as exc:
-            if stop_event is not None and stop_event.is_set():
+            if _stop_requested(stop_event):
                 Log.w("OTA metadata fetch interrupted.")
                 return None
             if attempt < retries - 1:
@@ -126,13 +130,13 @@ def get_ota_metadata(
             Log.e(f"Error extracting OTA metadata after multiple retries: {exc}")
             return None
         except RemoteZipFetchError as exc:
-            if stop_event is not None and stop_event.is_set():
+            if _stop_requested(stop_event):
                 Log.w("OTA metadata fetch interrupted.")
                 return None
             Log.e(f"Error extracting OTA metadata: {exc}")
             return None
-        except Exception as exc:
-            if stop_event is not None and stop_event.is_set():
+        except Exception as exc:  # noqa: BLE001 -- last-resort metadata safety net
+            if _stop_requested(stop_event):
                 Log.w("OTA metadata fetch interrupted.")
                 return None
             Log.e(f"Error extracting OTA metadata: {exc}")

@@ -10,8 +10,7 @@ OTA_URL_PREFIX = b"https://android.googleapis.com/packages/ota"
 TELEGRAPH_API_URL = "https://api.telegra.ph/createPage"
 
 # HTTP statuses that are transient for Google check-in and OTA fetches.
-# Keep this set aligned with zip_metadata.py until that module can import the
-# shared constant without widening this change's scope.
+# Shared by update_checker.py and zip_metadata.py.
 RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 REGION_CODE_MAP = {
