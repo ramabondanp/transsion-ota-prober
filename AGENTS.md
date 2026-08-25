@@ -12,8 +12,12 @@ available updates, and optionally sends Telegram notifications.
 checkota/              ← Package (import: from checkota.cli import main)
     __init__.py        ← Bootstraps vendored google-ota-prober onto sys.path on import
     __main__.py        ← `python -m checkota` entry → checkota.cli.main
-    paths.py           ← PROJECT_ROOT/APP_CONFIGS_DIR/VENDOR_DIR anchors + ensure_vendor_on_path()
-                         (CHECKOTA_VENDOR_DIR override; fails loud if vendor missing)
+    paths.py           ← Path anchors + install-mode detection (_is_source_checkout):
+                         source → repo-local configs/state/vendor; wheel → XDG dirs
+                         ($XDG_CONFIG_HOME/checkota/configs seeded lazily from bundled
+                         defaults, $XDG_STATE_HOME/checkota for state). VENDOR_DIR honors
+                         CHECKOTA_VENDOR_DIR override; ensure_vendor_on_path() fails loud
+                         if missing. processed_updates_path() lives here.
     cli.py             ← argparse, arg validation, config-path resolution; orchestration:
                          _run_sequential (--jobs 1), _run_global_pool ((config,variant) pool)
     runtime.py         ← RunContext (per-thread sessions w/ tuned HTTPAdapter pool, locks,
@@ -26,23 +30,37 @@ checkota/              ← Package (import: from checkota.cli import main)
     description.py     ← TerminalParser (HTML→ANSI) + format_update_description
     notifier.py        ← create_notifier + build_notification_message
     constants.py       ← URLs, region codes, SDK versions, regex patterns
-    manager.py         ← Config dataclass, YAML parsing, fingerprint handling
-    update_checker.py  ← Builds/sends protobuf check-in request, parses response
-    metadata.py        ← Parses OTA ZIP metadata; processed_updates_path() anchored to repo root
+    manager.py         ← Config dataclass, YAML parsing (_UniqueKeyLoader rejects duplicate
+                         keys), fingerprint handling, identity matching, safe in-place
+                         YAML rewrites (temp file → fsync → round-trip verify → os.replace)
+    update_checker.py  ← Builds/sends protobuf check-in request (streamed, size-capped,
+                         redirect-rejecting, transient-status retries), parses response
+    metadata.py        ← Parses OTA ZIP metadata; transient retry loop + failure cache
     zip_metadata.py    ← Direct HTTP Range fetch of one ZIP member (replaces remotezip);
-                         ZIP64-aware, absolute ranges only (Google rejects suffix ranges)
+                         ZIP64-aware, absolute ranges only (Google rejects suffix ranges);
+                         strict 206/Content-Range validation, gvt1-only redirect
+                         allowlist, per-member size caps, bounded inflate, CRC checks
     fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
     logging.py         ← Thread-safe logging with ANSI colors
-    telegram.py        ← Telegram notify + Telegraph fallback + HTML sanitization
+    telegram.py        ← Telegram notify + Telegraph fallback + HTML canonicalization;
+                         rendered-UTF-16 length fitting; plain-text fallback for
+                         uncanonicalizable markup
 configs/               ← YAML device configs (one per codename, 114 files)
 tests/                 ← pytest suite
 processed_updates.txt  ← Append-only log of seen update titles (trimmed at 2000)
 pyproject.toml         ← Package metadata + deps (requests, PyYAML, protobuf)
 
+configs/               ← YAML device configs (one per codename); bundled into wheels as
+                         checkota.bundled_configs and seeded to XDG on first use
 vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION = scope/license)
   checkin/             ← Compiled protobuf modules (checkin_generator_pb2)
   proto/               ← .proto sources
   utils/functions.py   ← IMEI/digest/serial/MAC generators
+
+Wheel packaging maps the vendor tree to checkota._vendor.* (package-dir →
+vendor/) so regular wheels are self-contained; runtime imports still go through
+the sys.path bootstrap (vendored code uses top-level `checkin`/`utils` imports).
+pyproject [tool.pyright] extraPaths teaches static analysis the same trick.
 ```
 
 ## Data Flow
@@ -55,11 +73,16 @@ vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION 
    `update_url`, `update_title`, `update_description`, `update_size`.
 4. **Fetch OTA metadata** — `get_ota_metadata()` reads `META-INF/com/android/metadata`
    from the remote ZIP via `zip_metadata.fetch_zip_member()` (HTTP Range, no full download)
-   for target `post-build` fingerprint, incremental, patch level, SDK level.
-5. **Update config** — YAML rewritten in-place with new `android_version`, `build_tag`,
-   `incremental` from the target fingerprint.
-6. **Notify** — Telegram message sent. If > 4090 chars, description truncated and a
-   Telegraph page created as fallback.
+   for target `post-build` fingerprint, incremental, patch level, SDK level. Results are
+   deduplicated per URL across workers (in-flight event + cache + negative-failure TTL).
+5. **Validate identity** — target fingerprint's oem/product/device must match the config
+   (`fingerprint_identity_matches_config`); mismatches skip config updates, notifications,
+   and title processing.
+6. **Update config** — YAML rewritten in-place with new `android_version`, `build_tag`,
+   `incremental`: identity-checked, duplicate-key-safe, atomic (temp → fsync → reparse
+   round-trip verification → `os.replace`), preserving comments/quoting/newline style.
+7. **Notify** — Telegram message sent. If over the rendered UTF-16 limit, description is
+   truncated and a Telegraph page created as fallback; final payload always fitted locally.
 
 ## Key Design Decisions & Conventions
 
@@ -133,6 +156,53 @@ Same two-stage approach as Telegram:
 + `DESC_SECTION_RE` captures `<b>Title:</b>` → description → `\n\n?<b>Size:</b>`. Second
   newline optional (`\n\n?`) since sanitization may collapse the blank line.
 
+### Install modes & path resolution (`paths.py`)
+
++ `_is_source_checkout()` (import-time): pyproject.toml + repo configs + vendor dir (or a
+  valid `CHECKOTA_VENDOR_DIR` override) ⇒ source mode. Everything else is wheel mode.
++ Source mode: configs/state stay repository-local; legacy CWD fallback for an existing
+  `processed_updates.txt` is preserved.
++ Wheel mode: bundled defaults are seeded lazily to `$XDG_CONFIG_HOME/checkota/configs`
+  (relative XDG values ignored → home fallback) via copy-once publication
+  (`_publish_if_missing`: mkstemp → hardlink, rename fallback on FS without hardlinks;
+  never overwrites). State goes to `$XDG_STATE_HOME/checkota`; no CWD migration.
++ Importing the package never seeds anything; seeding happens only when config lookup
+  needs it (`active_config_dir()`).
+
+### Fingerprint identity validation (`manager.py`, `processor.py`)
+
+A target fingerprint's immutable identity (`oem`, `product`, `device`) must match the
+config before any action: dry-run printing, config update, notification, and title
+processing all gate on `fingerprint_identity_matches_config`. Multi-variant rewrites
+disambiguate stale variant indices by label or current build values and fail closed when
+ambiguous. This prevents a mismatched OTA response from poisoning a device's config.
+
+### Network hardening
+
++ Check-in: POST with `allow_redirects=False`, streamed body capped at 4 MiB, redirects
+  rejected outright, transient transport errors/HTTP statuses retried 1s→2s→4s
+  (`RETRYABLE_HTTP_STATUSES`, shared with zip_metadata), protobuf `DecodeError` retried.
++ Response fields are untrusted: `update_url` must be HTTPS on exactly
+  `android.googleapis.com` under `/packages/ota(/api)/` (no port/userinfo/control chars);
+  titles containing control characters are dropped (protects the line-oriented dedup file).
++ ZIP fetch: strict 206 + exact Content-Range/Content-Length matching, redirects followed
+  ≤5 hops only within `android.googleapis.com`/`*.gvt1.com` under `/packages/`, member
+  caps (1 MiB compressed/decompressed, 16 MiB central directory), bounded inflate,
+  CRC-32 verified. Central-directory framing is validated for every entry but extra-field
+  parsing/ZIP64 fixup only for the requested one.
+
+### Telegram canonicalization & fitting (`telegram.py`)
+
++ After the 5-step sanitization above, text is tokenized into balanced supported tags +
+  per-character escaped fragments (`_tokenize_telegram_html`). Entities are decoded once
+  and re-escaped canonically; entity-encoded control characters fail canonicalization.
++ Length limits are enforced on RENDERED UTF-16 units (`_rendered_length`), not raw HTML
+  length; `_fit_telegram_html` truncates at token granularity, closes open tags, appends
+  `...`, and never splits entities or tags.
++ Fail-safe ladder: uncanonicalizable markup degrades to escaped plain text
+  (`_fallback_plain_text`) rather than dropping the notification; whitespace-only content
+  fails closed.
+
 ## Known Bug Fixes (do not regress)
 
 > Refactor note: `checkota.py` was sliced into the `checkota/` package (entry →
@@ -143,10 +213,10 @@ Same two-stage approach as Telegram:
 > `paths.py`+`checkota/__init__.py`.
 
 | Issue | File | Fix |
-|-------|------|-----|
+| ------- | ------ | ----- |
 | `DESC_SECTION_RE` mismatch with OS line | `constants.py` | Trailing `\n` → optional `\n?` |
 | `OP-M1` region mis-parsed | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
-| OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, closes sessions, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
+| OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, flushes stdio, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
 | Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.10`); `cancel_futures=True` unconditional |
 | Vendor dir missing on non-editable install | `checkota.py` | Fail loud if absent; `CHECKOTA_VENDOR_DIR` env override |
 | `--update-incremental` skipped known titles | `checkota.py` | Removed early return for non-force |
@@ -166,6 +236,16 @@ Same two-stage approach as Telegram:
 | Multi-variant configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,variant) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per variant, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
 | Per-thread session pool too small | `runtime.py` | `HTTPAdapter` `pool_maxsize = max(10, --jobs)` |
 | Flat 5s retry backoff | `update_checker.py`, `metadata.py` | Exponential 1s→2s→4s instead of flat 5s×3 |
+| Watchdog deadlocked on session close | `runtime.py` | Timer callback must NOT call `ctx.stop()` (races workers); set `stop_event` → flush → `os._exit(124)` only |
+| Buffered notifications lost on interrupt/failure | `cli.py` | Drain runs whenever buffering was possible (any exit code); executor owned by `main()` and shut down once with `cancel_futures=True` |
+| Metadata waiters timed out spuriously at 15s | `processor.py` | Waiters poll the owner's completion Event (instant wake) instead of abandoning a still-valid fetch |
+| Cross-device fingerprint poisoned config/notifications | `manager.py`, `processor.py` | Identity validation gates before update/notify/title processing; ambiguous variant disambiguation fails closed |
+| YAML duplicate keys silently last-wins | `manager.py` | `_UniqueKeyLoader` raises `ConstructorError` on duplicate mapping keys |
+| Config corruption if rewrite crashes mid-write | `manager.py` | Temp file → write → fsync → chmod → reparse round-trip verification → `os.replace`; original untouched on any failure |
+| SSRF via check-in URL / OTA redirect | `update_checker.py`, `zip_metadata.py` | Exact-host HTTPS allowlists; check-in rejects redirects; ZIP fetch follows only Google delivery hosts ≤5 hops |
+| Unbounded response/decompression memory | `update_checker.py`, `zip_metadata.py` | Streamed reads capped (4 MiB check-in / 1 MiB member); inflate bounded by declared size + `unconsumed_tail` check |
+| Telegram API 400 on oversized/control-char payloads | `telegram.py` | Canonicalize entities, enforce rendered UTF-16 limit locally, plain-text fallback for uncanonicalizable markup |
+| Vendor dir missing on plain wheel install | `paths.py`, `pyproject.toml` | Wheels bundle vendor as `checkota._vendor.*` + configs as `checkota.bundled_configs`; XDG seeding keeps them self-contained |
 
 ## Running
 
