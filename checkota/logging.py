@@ -47,9 +47,9 @@ class Log:
             yield
         finally:
             if prev is None:
-                try:
+                # Thread-local state: no other thread can interleave between
+                # the check and the delete.
+                if hasattr(_thread_local, "stream"):
                     delattr(_thread_local, "stream")
-                except AttributeError:
-                    pass
             else:
                 _thread_local.stream = prev

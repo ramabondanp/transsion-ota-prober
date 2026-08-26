@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import signal
 import sys
@@ -62,20 +63,24 @@ def test_direct_fingerprint_does_not_seed_configs(monkeypatch):
 def test_nonfinite_timeout_is_rejected():
     parser = cli.build_parser()
     for value in ("nan", "inf"):
-        args = parser.parse_args([
-            "--fp",
-            "OEM/product/device:14/build/incremental:user/release-keys",
-            "--timeout",
-            value,
-        ])
+        args = parser.parse_args(
+            [
+                "--fp",
+                "OEM/product/device:14/build/incremental:user/release-keys",
+                "--timeout",
+                value,
+            ]
+        )
         with pytest.raises(SystemExit):
             cli._validate_args(parser, args)
 
-    args = parser.parse_args([
-        "--fp",
-        "OEM/product/device:14/build/incremental:user/release-keys",
-        "--timeout=-inf",
-    ])
+    args = parser.parse_args(
+        [
+            "--fp",
+            "OEM/product/device:14/build/incremental:user/release-keys",
+            "--timeout=-inf",
+        ]
+    )
     with pytest.raises(SystemExit):
         cli._validate_args(parser, args)
 
@@ -112,7 +117,7 @@ def test_wheel_configs_alias_resolves_to_seeded_directory(monkeypatch, tmp_path)
         return config_dir
 
     monkeypatch.setattr(cli, "active_config_dir", seed)
-    args = SimpleNamespace(config=None, config_dir=Path("configs/"))
+    args = argparse.Namespace(config=None, config_dir=Path("configs/"))
 
     assert cli.resolve_config_dir(Path("configs/")) == config_dir
     assert cli._collect_config_paths(cli.build_parser(), args) == [config]

@@ -7,18 +7,24 @@ import os
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
 from typing import TextIO
 
 import requests
 from requests.adapters import HTTPAdapter
 
 from checkota.constants import EMERGENCY_DRAIN_MAX_SENDS
-from checkota.fingerprints import load_processed_titles
+from checkota.fingerprints import load_processed_titles, prune_title_locks
 from checkota.logging import Log
 from checkota.models import PendingNotification
 from checkota.paths import processed_updates_path
+
+# Matches typeshed's _HANDLER so the saved SIGINT handler can be restored
+# without a type error at the call site.
+SignalHandler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
 
 
 @dataclass
@@ -132,6 +138,12 @@ def create_run_context(
         Log.i("Dry-run mode enabled: no external side effects will occur.")
 
     processed_path = processed_updates_path()
+    processed_titles = load_processed_titles(processed_path)
+    if not dry_run:
+        # Housekeeping: clear stale per-title claim locks so the state
+        # directory does not accumulate one file per title forever. Skipped
+        # in dry-run mode, which promises no external side effects.
+        prune_title_locks(processed_path, processed_titles)
     env = {
         "bot_token": os.environ.get("bot_token", ""),
         "chat_id": os.environ.get("chat_id", ""),
@@ -140,7 +152,7 @@ def create_run_context(
     return RunContext(
         env=env,
         processed_path=processed_path,
-        processed_titles=load_processed_titles(processed_path),
+        processed_titles=processed_titles,
         dry_run=dry_run,
         # Per AGENTS.md "Per-thread session pool too small" — give each thread at
         # least 10 socket slots so concurrent variant/config workers never block
@@ -151,7 +163,7 @@ def create_run_context(
     )
 
 
-def install_interrupt_handler(ctx: RunContext) -> object:
+def install_interrupt_handler(ctx: RunContext) -> SignalHandler:
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def handle_interrupt(signum, frame):
@@ -183,7 +195,8 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
             for stream in (sys.stdout, sys.stderr):
                 try:
                     stream.flush()
-                except BaseException:
+                # A closed/broken stream must not stop the hard exit below.
+                except BaseException:  # noqa: S110, BLE001
                     pass
 
         try:
@@ -194,7 +207,8 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
             # any exception raised by this optional path.
             try:
                 _emergency_drain_notifications(ctx)
-            except BaseException:
+            # Teardown must not hang or crash on this optional path.
+            except BaseException:  # noqa: S110, BLE001
                 pass
             flush_stdio()
         finally:

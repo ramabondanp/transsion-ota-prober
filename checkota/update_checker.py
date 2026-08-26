@@ -66,7 +66,7 @@ def _write_debug_file(path: str, data: str | bytes) -> None:
     target = Path(path)
     payload = data.encode("utf-8") if isinstance(data, str) else bytes(data)
     fd, tmp_name = tempfile.mkstemp(
-        dir=target.parent or Path("."), prefix=f"{target.name}.", suffix=".tmp"
+        dir=target.parent, prefix=f"{target.name}.", suffix=".tmp"
     )
     try:
         with os.fdopen(fd, "wb") as tmp:
@@ -77,6 +77,8 @@ def _write_debug_file(path: str, data: str | bytes) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+
 @dataclass
 class _AttemptOutcome:
     """Classified result of one check-in attempt.
@@ -234,7 +236,9 @@ class UpdateChecker:
 
             if outcome.result is not None:
                 return outcome.result
-            assert outcome.error is not None  # failure branches always carry it
+            if outcome.error is None:
+                # Unreachable: every failure branch carries an error.
+                raise UpdateCheckError("Update check failed without an error")
 
             if outcome.interrupted or (outcome.retryable and self._stopped()):
                 Log.w("Update check interrupted.")
@@ -318,19 +322,7 @@ class UpdateChecker:
                 has_update = info.get("found", False) and "url" in info
                 return _AttemptOutcome(result=(has_update, info))
             except Exception as exc:  # noqa: BLE001 -- classified below
-                error_content: bytes | bytearray | None = None
-                if (
-                    debug
-                    and response is not None
-                    and isinstance(exc, requests.exceptions.HTTPError)
-                ):
-                    try:
-                        error_content = self._read_response_body(response)
-                    except (
-                        requests.exceptions.RequestException,
-                        UpdateCheckError,
-                    ):
-                        error_content = None
+                error_content = self._debug_error_content(response, exc, debug)
                 return self._classify_failure(exc, response, error_content)
         finally:
             if response is not None:
@@ -338,11 +330,24 @@ class UpdateChecker:
                 if callable(close):
                     close()
 
+    def _debug_error_content(
+        self, response: requests.Response | None, exc: Exception, debug: bool
+    ) -> bytes | None:
+        """Capture a failed response's body for --debug dumps when possible."""
+        if not debug or response is None:
+            return None
+        if not isinstance(exc, requests.exceptions.HTTPError):
+            return None
+        try:
+            return self._read_response_body(response)
+        except (requests.exceptions.RequestException, UpdateCheckError):
+            return None
+
     def _classify_failure(
         self,
         exc: Exception,
         response: requests.Response | None,
-        error_content: bytes | bytearray | None,
+        error_content: bytes | None,
     ) -> _AttemptOutcome:
         """Sort a failed attempt into retryable / interrupted / fatal."""
         if isinstance(exc, (*_RETRYABLE_TRANSPORT_ERRORS, DecodeError)):
@@ -353,9 +358,7 @@ class UpdateChecker:
             if not isinstance(status, int) and response is not None:
                 status = getattr(response, "status_code", None)
             if isinstance(status, int) and status in RETRYABLE_HTTP_STATUSES:
-                return _AttemptOutcome(
-                    retryable=True, error=exc, http_status=status
-                )
+                return _AttemptOutcome(retryable=True, error=exc, http_status=status)
             return _AttemptOutcome(error=exc, error_content=error_content)
 
         # A transport error noticed after stop was requested is teardown, not
@@ -393,8 +396,7 @@ class UpdateChecker:
                     # control characters; interpolating it raw would let a
                     # hostile response forge log lines.
                     Log.w(
-                        "Ignoring update URL outside the trusted OTA origin: "
-                        f"{url!r}"
+                        f"Ignoring update URL outside the trusted OTA origin: {url!r}"
                     )
 
             try:

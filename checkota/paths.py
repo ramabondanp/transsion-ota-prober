@@ -125,9 +125,10 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
             except FileExistsError:
                 return False
             try:
-                with os.fdopen(destination_fd, "wb") as output_file, temporary.open(
-                    "rb"
-                ) as input_file:
+                with (
+                    os.fdopen(destination_fd, "wb") as output_file,
+                    temporary.open("rb") as input_file,
+                ):
                     destination_fd = -1
                     shutil.copyfileobj(input_file, output_file)
                     output_file.flush()

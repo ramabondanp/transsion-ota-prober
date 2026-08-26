@@ -1,6 +1,7 @@
 import contextlib
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
@@ -11,6 +12,11 @@ from checkota.logging import Log
 # Maximum number of entries to keep in the processed updates file.
 # Older entries are trimmed to prevent unbounded growth.
 MAX_PROCESSED_ENTRIES = 2000
+
+#: Per-title lock files older than this are pruned even when their title was
+#: never committed (e.g. a crashed run). Committed titles are pruned
+#: immediately regardless of age.
+TITLE_LOCK_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 try:
     import fcntl as _fcntl
@@ -112,6 +118,77 @@ def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+
+def _title_lock_digest(path_name: str, file_name: str) -> str | None:
+    """Return the title digest if file_name is a per-title lock of path_name."""
+    prefix = f"{path_name}."
+    if not (file_name.startswith(prefix) and file_name.endswith(".lock")):
+        return None
+    digest = file_name[len(prefix) : -len(".lock")]
+    if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+        return digest
+    return None
+
+
+def prune_title_locks(
+    path: Path, known_titles: set[str] | None = None, *, now: float | None = None
+) -> int:
+    """Best-effort removal of stale per-title lock files.
+
+    Every claimed title creates a ``<path>.<sha256(title)>.lock`` file that
+    would otherwise accumulate forever. A lock is removed when its title is
+    already committed (present in ``known_titles``) or when the file is older
+    than TITLE_LOCK_MAX_AGE_SECONDS, and only when no process currently holds
+    it (LOCK_EX|LOCK_NB probe), so a live claim is never disturbed.
+
+    Residual race (documented, accepted): a process that opened the lock file
+    just before the unlink proceeds on an unlinked inode. For committed titles
+    the claim path re-checks the processed file under the database lock and
+    harmlessly declines; for aged-out titles the worst case is a duplicate
+    notification, which the claim/commit protocol already tolerates.
+    """
+    if _fcntl is None:
+        return 0
+    committed = (
+        {sha256(title.encode("utf-8")).hexdigest() for title in known_titles}
+        if known_titles
+        else set()
+    )
+    now = time.time() if now is None else now
+    removed = 0
+    try:
+        candidates = list(path.parent.iterdir())
+    except OSError:
+        return 0
+    for entry in candidates:
+        digest = _title_lock_digest(path.name, entry.name)
+        if digest is None:
+            continue
+        if digest not in committed:
+            try:
+                age = now - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age < TITLE_LOCK_MAX_AGE_SECONDS:
+                continue
+        try:
+            handle = entry.open("a+", encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            try:
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                continue  # another process holds this claim; never prune it
+            with contextlib.suppress(OSError):
+                entry.unlink()
+                removed += 1
+        finally:
+            _close_locked(handle)
+    if removed:
+        Log.i(f"Pruned {removed} stale update-title lock file(s).")
+    return removed
 
 
 def load_processed_titles(path: Path) -> set[str]:

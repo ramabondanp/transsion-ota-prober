@@ -147,7 +147,9 @@ def get_cached_ota_metadata(
             wait_event.wait(_METADATA_WAIT_POLL_INTERVAL)
             continue
 
-        assert fetcher_event is not None
+        if fetcher_event is None:
+            # Unreachable: wait_event is None only on the fetcher branch.
+            raise RuntimeError("metadata fetcher event was not registered")
         use_proxy = ctx.zip_proxy if use_proxy_env is None else use_proxy_env
         zip_session = (
             ctx.zip_session()
@@ -309,9 +311,7 @@ def _resolve_target_metadata(
     return 0, target
 
 
-def _debug_label(
-    config_path: Path, variant_label: str | None, cfg: Config
-) -> str:
+def _debug_label(config_path: Path, variant_label: str | None, cfg: Config) -> str:
     """Build the per-(config,variant) label used for --debug artifact names."""
     label = config_path.stem
     if variant_label:
@@ -576,9 +576,7 @@ def _dispatch_or_buffer_notification(
     if args.dry_run:
         Log.i("Dry-run: would send Telegram notification with OTA details.")
         if update.is_new_update:
-            Log.i(
-                "Dry-run: would save new update title after successful notification."
-            )
+            Log.i("Dry-run: would save new update title after successful notification.")
         return 0
 
     with ctx.telegram_lock:

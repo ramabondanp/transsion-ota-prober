@@ -107,7 +107,9 @@ def test_publish_does_not_overwrite_after_link_error(monkeypatch, tmp_path):
     assert not destination.exists()
 
 
-def test_publish_falls_back_to_exclusive_create_without_hardlink_support(monkeypatch, tmp_path):
+def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
+    monkeypatch, tmp_path
+):
     source = tmp_path / "config-X6873.yml"
     source.write_bytes(b"product: X6873-OP\n")
     destination = tmp_path / "configs" / "config-X6873.yml"

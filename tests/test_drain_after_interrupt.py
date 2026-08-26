@@ -269,7 +269,14 @@ def test_watchdog_exits_even_when_stdio_flush_fails(monkeypatch):
     watchdog = runtime.start_watchdog(_Ctx(), 1)  # type: ignore[arg-type]
     watchdog.callback()  # type: ignore[union-attr,attr-defined]
 
-    assert calls == ["event_set", "flush_failed", "flush_failed", "flush_failed", "flush_failed", ("exit", 124)]
+    assert calls == [
+        "event_set",
+        "flush_failed",
+        "flush_failed",
+        "flush_failed",
+        "flush_failed",
+        ("exit", 124),
+    ]
 
 
 def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
@@ -331,9 +338,7 @@ def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
         "stderr",
         type("_S", (), {"flush": staticmethod(lambda: calls.append("flush_stderr"))})(),
     )
-    monkeypatch.setattr(
-        "checkota.processor.drain_pending_notifications", _fake_drain
-    )
+    monkeypatch.setattr("checkota.processor.drain_pending_notifications", _fake_drain)
 
     ctx = _Ctx()
     watchdog = runtime.start_watchdog(ctx, 1)  # type: ignore[arg-type]

@@ -1,3 +1,4 @@
+import contextlib
 import os
 import re
 import stat
@@ -20,6 +21,36 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
     _fcntl = None  # type: ignore[assignment]
 
 
+def _prune_config_lock(lock_path: Path) -> None:
+    """Best-effort removal of a released config lock file.
+
+    Config lock files would otherwise accumulate next to every config ever
+    rewritten. The lock is re-acquired non-blocking and the file is unlinked
+    only when no other process holds it. Residual race (documented, accepted):
+    a process that opened the file just before the unlink proceeds on an
+    unlinked inode, so two whole-file rewrites could interleave; both are
+    atomic and round-trip verified, and the loser's update is reapplied by
+    its next OTA run.
+    """
+    if _fcntl is None:
+        return
+    try:
+        handle = lock_path.open("a+", encoding="utf-8")
+    except OSError:
+        return
+    try:
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return  # another process holds the lock; keep the file
+        with contextlib.suppress(OSError):
+            lock_path.unlink()
+    finally:
+        with contextlib.suppress(OSError):
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        handle.close()
+
+
 @contextmanager
 def _config_lock(config_path: Path):
     lock_path = config_path.with_name(config_path.name + ".lock")
@@ -32,6 +63,7 @@ def _config_lock(config_path: Path):
         if _fcntl is not None:
             _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
         handle.close()
+        _prune_config_lock(lock_path)
 
 
 @dataclass
@@ -188,7 +220,13 @@ _UniqueKeyLoader.add_constructor(
 
 
 def _load_yaml(stream: Any) -> Any:
-    return yaml.load(stream, Loader=_UniqueKeyLoader)
+    # Identical to yaml.load(stream, Loader=_UniqueKeyLoader); spelled out so
+    # the SafeLoader subclass is visible at the call site (no unsafe loader).
+    loader = _UniqueKeyLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
 
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
@@ -557,9 +595,7 @@ def _rewrite_variant_block(
         lines, variant_lines, variant_index, variants_end_idx, sequence_indent
     )
     if mapping_indent is None:
-        Log.w(
-            f"Failed to locate variant block #{variant_index + 1} in {config_path}."
-        )
+        Log.w(f"Failed to locate variant block #{variant_index + 1} in {config_path}.")
         return False
 
     variant_line_idx = variant_lines[variant_index]
@@ -595,7 +631,8 @@ def _rewrite_variant_block(
         if key not in key_lines:
             lines.insert(
                 insert_idx,
-                " " * mapping_indent + f"{key}: {_quote_yaml_string(updates[key])}{newline}",
+                " " * mapping_indent
+                + f"{key}: {_quote_yaml_string(updates[key])}{newline}",
             )
             insert_idx += 1
     return True

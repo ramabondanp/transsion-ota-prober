@@ -40,18 +40,22 @@ checkota/              ← Package (import: from checkota.cli import main)
                          ZIP64-aware, absolute ranges only (Google rejects suffix ranges);
                          strict 206/Content-Range validation, gvt1-only redirect
                          allowlist, per-member size caps, bounded inflate, CRC checks
-    fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
+    fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000);
+                         per-title claim locks pruned at startup (committed or >7d stale)
     logging.py         ← Thread-safe logging with ANSI colors
-    telegram.py        ← Telegram notify + Telegraph fallback + HTML canonicalization;
-                         rendered-UTF-16 length fitting; plain-text fallback for
-                         uncanonicalizable markup
-configs/               ← YAML device configs (one per codename, 114 files)
+    validation.py      ← Untrusted-input predicates: control chars + Google HTTPS URL
+                         allowlist checks shared by update_checker and zip_metadata
+    message_text.py    ← Pure Telegram text pipeline: sanitize_html, canonicalization,
+                         rendered-UTF-16 length fitting, plain-text fallback (no I/O)
+    telegram.py        ← Telegram notify + Telegraph fallback; bot token redacted from
+                         error logs; delegates text work to message_text.py
+configs/               ← YAML device configs (one per codename, 114 files); bundled into
+                         wheels as checkota.bundled_configs and seeded to XDG on first use
 tests/                 ← pytest suite
+scripts/               ← Ad-hoc tooling (proxy-based checks: fetch_spys, check_update_proxy)
 processed_updates.txt  ← Append-only log of seen update titles (trimmed at 2000)
 pyproject.toml         ← Package metadata + deps (requests, PyYAML, protobuf)
 
-configs/               ← YAML device configs (one per codename); bundled into wheels as
-                         checkota.bundled_configs and seeded to XDG on first use
 vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION = scope/license)
   checkin/             ← Compiled protobuf modules (checkin_generator_pb2)
   proto/               ← .proto sources
@@ -215,7 +219,7 @@ ambiguous. This prevents a mismatched OTA response from poisoning a device's con
 | Issue | File | Fix |
 | ------- | ------ | ----- |
 | `DESC_SECTION_RE` mismatch with OS line | `constants.py` | Trailing `\n` → optional `\n?` |
-| `OP-M1` region mis-parsed | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
+| `OP-M1` region parsed incorrectly | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
 | OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, flushes stdio, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
 | Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.10`); `cancel_futures=True` unconditional |
 | Vendor dir missing on non-editable install | `checkota.py` | Fail loud if absent; `CHECKOTA_VENDOR_DIR` env override |
@@ -246,6 +250,10 @@ ambiguous. This prevents a mismatched OTA response from poisoning a device's con
 | Unbounded response/decompression memory | `update_checker.py`, `zip_metadata.py` | Streamed reads capped (4 MiB check-in / 1 MiB member); inflate bounded by declared size + `unconsumed_tail` check |
 | Telegram API 400 on oversized/control-char payloads | `telegram.py` | Canonicalize entities, enforce rendered UTF-16 limit locally, plain-text fallback for uncanonicalizable markup |
 | Vendor dir missing on plain wheel install | `paths.py`, `pyproject.toml` | Wheels bundle vendor as `checkota._vendor.*` + configs as `checkota.bundled_configs`; XDG seeding keeps them self-contained |
+| Bot token leaked into logs on send failure | `telegram.py` | requests includes the full URL (which embeds `bot<TOKEN>`) in HTTPError/ConnectionError messages; `_redact()` scrubs the token before logging |
+| Per-title lock files accumulated forever | `fingerprints.py`, `runtime.py` | `prune_title_locks()` at startup removes locks for committed titles or files >7d old, only when no process holds them (LOCK_EX\|LOCK_NB probe); skipped in dry-run |
+| Config lock files left beside configs | `manager.py` | `_prune_config_lock()` unlinks the released lock when no other process holds it (residual unlink race documented; rewrites are atomic + idempotent) |
+| `assert` used for control flow (stripped by `-O`) | `processor.py`, `update_checker.py` | Explicit `raise RuntimeError`/`UpdateCheckError` on the unreachable branches |
 
 ## Running
 
