@@ -72,7 +72,7 @@ def test_multi_part_region_is_not_truncated_for_update_target(tmp_path):
 def test_inconsistent_stable_region_identity_fails_closed(tmp_path):
     path = tmp_path / "config.yml"
     _write_compact_config(path)
-    cfg = replace(_configs(path)[0], variant="OP-M1")
+    cfg = replace(_configs(path)[0], region="OP-M1")
     data = {
         "oem": "Infinix",
         "product_base": "X6873",

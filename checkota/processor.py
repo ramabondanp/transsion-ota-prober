@@ -1,5 +1,5 @@
 """Core OTA processing pipeline: collect update info, apply config/notification
-actions, and orchestrate per-config / per-variant processing.
+actions, and orchestrate per-config / per-region processing.
 """
 
 import argparse
@@ -32,7 +32,7 @@ from checkota.metadata import (
     extract_incremental_from_fingerprint,
     get_ota_metadata,
 )
-from checkota.models import PendingNotification, VariantUpdate
+from checkota.models import PendingNotification, RegionUpdate
 from checkota.notifier import (
     build_notification_message,
     create_notifier,
@@ -46,7 +46,7 @@ SWEEP_TELEGRAM_DELAY = 10
 
 #: How long a failed OTA metadata fetch is remembered before another worker
 #: tries the same URL again. Prevents one persistent outage from being retried
-#: serially by every variant/config that shares the URL.
+#: serially by every region/config that shares the URL.
 METADATA_FAILURE_TTL = 300.0
 
 
@@ -66,34 +66,20 @@ def config_from_fingerprint(fingerprint: str) -> Config:
         device=parsed["device"],
         oem=parsed["oem"],
         product=parsed["product"],
-        variant=None,
-        variant_index=None,
     )
 
 
-def log_variant_header(
-    cfg: Config, variant_label: str | None
-) -> tuple[str | None, str | None]:
+def log_region_header(cfg: Config) -> tuple[str | None, str | None]:
     fingerprint = cfg.fingerprint()
     region_name = region_from_product(cfg.product)
     region_code = region_code_from_product(cfg.product)
-    normalized_variant = variant_label.strip().lower() if variant_label else None
-    normalized_region = region_name.strip().lower() if region_name else None
 
     Log.i(f"Device: {cfg.model} ({cfg.device})")
-    if variant_label and region_name and normalized_variant == normalized_region:
-        combined = variant_label
+    if region_name:
+        region_display = region_name
         if region_code:
-            combined = f"{combined} ({region_code})"
-        Log.i(f"Variant / Region: {combined}")
-    else:
-        if variant_label:
-            Log.i(f"Variant: {variant_label}")
-        if region_name:
-            region_display = region_name
-            if region_code:
-                region_display = f"{region_display} ({region_code})"
-            Log.i(f"Region: {region_display}")
+            region_display = f"{region_display} ({region_code})"
+        Log.i(f"Region: {region_display}")
     Log.i(f"Build: {fingerprint}")
     return region_name, region_code
 
@@ -311,13 +297,11 @@ def _resolve_target_metadata(
     return 0, target
 
 
-def _debug_label(config_path: Path, variant_label: str | None, cfg: Config) -> str:
-    """Build the per-(config,variant) label used for --debug artifact names."""
+def _debug_label(config_path: Path, cfg: Config) -> str:
+    """Build the per-config/region label used for --debug artifact names."""
     label = config_path.stem
-    if variant_label:
-        label = f"{label}-{variant_label}"
-    if cfg.variant_index is not None:
-        label = f"{label}-v{cfg.variant_index + 1}"
+    if cfg.region:
+        label = f"{label}-{cfg.region}"
     return label
 
 
@@ -376,12 +360,11 @@ def collect_update_info(
     cfg: Config,
     config_path: Path,
     args: argparse.Namespace,
-    variant_label: str | None = None,
-) -> tuple[int, VariantUpdate | None]:
+) -> tuple[int, RegionUpdate | None]:
     update_incremental_only = bool(getattr(args, "update_incremental", False))
 
-    region_name, _ = log_variant_header(cfg, variant_label)
-    debug_label = _debug_label(config_path, variant_label, cfg)
+    region_name, _ = log_region_header(cfg)
+    debug_label = _debug_label(config_path, cfg)
 
     status, data = _check_for_updates(ctx, cfg, args, debug_label)
     if status != 0 or data is None:
@@ -456,10 +439,9 @@ def collect_update_info(
 
     data.update(target.response_extras)
 
-    return 0, VariantUpdate(
+    return 0, RegionUpdate(
         cfg=cfg,
         config_path=config_path,
-        variant_label=variant_label,
         region_name=region_name,
         title=title,
         url=url,
@@ -475,7 +457,7 @@ def collect_update_info(
 
 
 def _log_dry_run_config_update(
-    update: VariantUpdate, parsed_target: dict[str, str] | None
+    update: RegionUpdate, parsed_target: dict[str, str] | None
 ) -> None:
     if parsed_target:
         Log.i(
@@ -490,7 +472,7 @@ def _log_dry_run_config_update(
         )
 
 
-def _apply_config_update(ctx: RunContext, update: VariantUpdate, args) -> bool:
+def _apply_config_update(ctx: RunContext, update: RegionUpdate, args) -> bool:
     """Rewrite the device config for the target build. Returns success.
 
     Every "skip" reason logs and returns True: skipping the rewrite must not
@@ -541,7 +523,7 @@ def _apply_config_update(ctx: RunContext, update: VariantUpdate, args) -> bool:
 def _dispatch_or_buffer_notification(
     ctx: RunContext,
     notifier,
-    update: VariantUpdate,
+    update: RegionUpdate,
     args: argparse.Namespace,
     claimed: bool,
 ) -> int:
@@ -601,7 +583,7 @@ def _dispatch_or_buffer_notification(
 
 
 def apply_update_actions(
-    ctx: RunContext, update: VariantUpdate, args: argparse.Namespace
+    ctx: RunContext, update: RegionUpdate, args: argparse.Namespace
 ) -> int:
     if not fingerprint_identity_matches_config(update.cfg, update.target_fp):
         Log.e(
@@ -786,23 +768,22 @@ def drain_pending_notifications(
     return 1 if failed else 0
 
 
-def process_config_variant(
+def process_region(
     ctx: RunContext,
     cfg: Config,
     config_path: Path,
     args: argparse.Namespace,
-    variant_label: str | None = None,
 ) -> int:
-    status, update = collect_update_info(ctx, cfg, config_path, args, variant_label)
+    status, update = collect_update_info(ctx, cfg, config_path, args)
     if status != 0 or update is None:
         return status
     return apply_update_actions(ctx, update, args)
 
 
-def load_config_variants(
+def load_config_regions(
     config_path: Path, args: argparse.Namespace
 ) -> tuple[int, list[Config]]:
-    """Load a config file and return its (region-filtered) variant Config list.
+    """Load a config file and return its region-filtered Config list.
 
     Returns (status, configs). status is non-zero on a load/filter error, in
     which case configs is empty. Applies the --incremental override in place.
@@ -815,7 +796,7 @@ def load_config_variants(
 
     if args.region:
         region_code = args.region.strip().upper()
-        Log.i(f"Filtering configuration variants by region code: {region_code}")
+        Log.i(f"Filtering configuration regions by region code: {region_code}")
         filtered_configs = [
             cfg
             for cfg in configs
@@ -823,7 +804,7 @@ def load_config_variants(
         ]
         if not filtered_configs:
             Log.e(
-                f"No configuration variants in {config_path} match region code {region_code}"
+                f"No configuration regions in {config_path} match region code {region_code}"
             )
             return 1, []
         configs = filtered_configs
@@ -836,31 +817,28 @@ def load_config_variants(
 
 
 def process_config(config_path: Path, args: argparse.Namespace) -> int:
-    status, configs = load_config_variants(config_path, args)
+    status, configs = load_config_regions(config_path, args)
     if status != 0:
         return status
 
     exit_code = 0
-    variants_total = len(configs)
+    regions_total = len(configs)
 
-    if variants_total > 1:
+    if regions_total > 1:
         Log.raw("")
 
     for idx, cfg in enumerate(configs, start=1):
-        variant_label = cfg.variant
-        display_label = variant_label or f"variant {idx}"
+        display_label = cfg.region or f"region {idx}"
 
-        if variants_total > 1 and idx > 1:
+        if regions_total > 1 and idx > 1:
             Log.raw("")
-        if variants_total > 1:
-            Log.i(f"Processing variant {idx}/{variants_total}: {display_label}")
+        if regions_total > 1:
+            Log.i(f"Processing region {idx}/{regions_total}: {display_label}")
 
         if args.incremental:
             Log.i(f"Override incremental: {args.incremental}")
 
-        result = process_config_variant(
-            args.run_context, cfg, config_path, args, variant_label
-        )
+        result = process_region(args.run_context, cfg, config_path, args)
         exit_code = max(exit_code, result)
 
     return exit_code

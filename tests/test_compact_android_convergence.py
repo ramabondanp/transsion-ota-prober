@@ -134,7 +134,7 @@ regions:
 """,
     )
     configs = Config.from_yaml(path)
-    fingerprints = {config.variant: config.fingerprint() for config in configs}
+    fingerprints = {config.region: config.fingerprint() for config in configs}
 
     assert update_config_from_fingerprint(path, configs[0], configs[0].fingerprint())
 
@@ -145,4 +145,4 @@ regions:
         "EU": {"build_tag": "CUSTOM.TAG", "incremental": "EU"},
     }
     normalized = Config.from_yaml(path)
-    assert {config.variant: config.fingerprint() for config in normalized} == fingerprints
+    assert {config.region: config.fingerprint() for config in normalized} == fingerprints

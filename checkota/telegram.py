@@ -92,7 +92,7 @@ class TgNotify:
         cleaned = re.sub(r"</\s*font\s*>", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"<\s*a\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</\s*a\s*>", "", cleaned, flags=re.IGNORECASE)
-        # Normalize any leftover <br> variants to newlines (defensive)
+        # Normalize any leftover <br> alternatives to newlines (defensive)
         cleaned = re.sub(r"<\s*br\s*/?\s*>", "\n", cleaned, flags=re.IGNORECASE)
 
         # Split into paragraphs by double+ newlines

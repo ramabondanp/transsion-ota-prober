@@ -7,10 +7,9 @@ from checkota.manager import Config
 
 
 @dataclass
-class VariantUpdate:
+class RegionUpdate:
     cfg: Config
     config_path: Path
-    variant_label: str | None
     region_name: str | None
     title: str
     url: str

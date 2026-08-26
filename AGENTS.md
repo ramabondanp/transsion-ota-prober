@@ -24,10 +24,9 @@ checkota/              ← Package (import: from checkota.cli import main)
                          stop_event), create_run_context, install_interrupt_handler,
                          start_watchdog (--timeout)
     processor.py       ← Pipeline: collect_update_info, apply_update_actions,
-                         process_config (per region), load_config_variants (region loader;
-                         legacy runtime name pending cleanup),
+                         process_config (per region), load_config_regions,
                          config_from_fingerprint, OTA metadata cache
-    models.py          ← VariantUpdate dataclass (runtime update result)
+    models.py          ← RegionUpdate dataclass (processor + notifier)
     description.py     ← TerminalParser (HTML→ANSI) + format_update_description
     notifier.py        ← create_notifier + build_notification_message
     constants.py       ← URLs, region codes, SDK versions, regex patterns
@@ -216,7 +215,7 @@ This prevents a mismatched OTA response from poisoning a device's config.
 > `checkota.cli.main`, `python -m checkota` via `__main__.py`).
 > Historical `checkota.py` rows map to: CLI/orchestration/watchdog → `cli.py`+`runtime.py`;
 > pipeline → `processor.py`; `TerminalParser` → `description.py`; notify → `notifier.py`;
-> `RunContext` → `runtime.py`; `VariantUpdate` → `models.py`; vendor bootstrap →
+> `RunContext` → `runtime.py`; `RegionUpdate` → `models.py`; vendor bootstrap →
 > `paths.py`+`checkota/__init__.py`.
 
 | Issue | File | Fix |
@@ -240,13 +239,13 @@ This prevents a mismatched OTA response from poisoning a device's config.
 | `processed_updates.txt` path CWD-relative | `checkota/metadata.py` | Anchored to repo root via `Path(__file__).resolve().parent.parent` |
 | 989-line monolith | `checkota/*` | Sliced into focused modules; entry → `checkota.cli.main`. Behavior-preserving |
 | `remotezip` dep for OTA metadata | `zip_metadata.py`, `metadata.py`, `pyproject.toml` | Vendored ZIP64-aware `fetch_zip_member()` w/ absolute Range requests (Google rejects suffix `bytes=-N`); probes size via `bytes=0-0`, reads EOCD→central-dir→entry. Byte-identical, one less dep |
-| Multi-variant configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,variant) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per variant, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
+| Multi-region configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,region) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per region, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
 | Per-thread session pool too small | `runtime.py` | `HTTPAdapter` `pool_maxsize = max(10, --jobs)` |
 | Flat 5s retry backoff | `update_checker.py`, `metadata.py` | Exponential 1s→2s→4s instead of flat 5s×3 |
 | Watchdog deadlocked on session close | `runtime.py` | Timer callback must NOT call `ctx.stop()` (races workers); set `stop_event` → flush → `os._exit(124)` only |
 | Buffered notifications lost on interrupt/failure | `cli.py` | Drain runs whenever buffering was possible (any exit code); executor owned by `main()` and shut down once with `cancel_futures=True` |
 | Metadata waiters timed out spuriously at 15s | `processor.py` | Waiters poll the owner's completion Event (instant wake) instead of abandoning a still-valid fetch |
-| Cross-device fingerprint poisoned config/notifications | `manager.py`, `processor.py` | Identity validation gates before update/notify/title processing; ambiguous variant disambiguation fails closed |
+| Cross-device fingerprint poisoned config/notifications | `manager.py`, `processor.py` | Identity validation gates before update/notify/title processing; exact region resolution fails closed |
 | YAML duplicate keys silently last-wins | `manager.py` | `_UniqueKeyLoader` raises `ConstructorError` on duplicate mapping keys |
 | Config corruption if rewrite crashes mid-write | `manager.py` | Temp file → write → fsync → chmod → reparse round-trip verification → `os.replace`; original untouched on any failure |
 | SSRF via check-in URL / OTA redirect | `update_checker.py`, `zip_metadata.py` | Exact-host HTTPS allowlists; check-in rejects redirects; ZIP fetch follows only Google delivery hosts ≤5 hops |

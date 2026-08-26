@@ -67,7 +67,7 @@ class RunContext:
         session = getattr(self._local, "session", None)
         if session is None:
             session = requests.Session()
-            # Size the connection pool so concurrent variant/config workers that
+            # Size the connection pool so concurrent region/config workers that
             # share this thread's session never block on a full pool.
             adapter = HTTPAdapter(
                 pool_connections=self.pool_size, pool_maxsize=self.pool_size
@@ -155,7 +155,7 @@ def create_run_context(
         processed_titles=processed_titles,
         dry_run=dry_run,
         # Per AGENTS.md "Per-thread session pool too small" — give each thread at
-        # least 10 socket slots so concurrent variant/config workers never block
+        # least 10 socket slots so concurrent region/config workers never block
         # on a full pool when --jobs overshoots the default floor. This is the
         # *capacity* of HTTPAdapter.pool_maxsize, not eagerly-opened sockets.
         pool_size=max(10, pool_size),

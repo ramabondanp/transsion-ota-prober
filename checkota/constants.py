@@ -31,7 +31,7 @@ ZIP_MEMBER_READ_TIMEOUT_SECONDS = 15.0
 TELEGRAM_API_TIMEOUT_SECONDS = 15
 TELEGRAPH_API_TIMEOUT_SECONDS = 10
 
-# CLI progress heartbeat interval while waiting on parallel variant workers.
+# CLI progress heartbeat interval while waiting on parallel region workers.
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 # Wall-clock budget granted exclusively to the end-of-run notification drain,

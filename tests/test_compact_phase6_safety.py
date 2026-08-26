@@ -62,8 +62,8 @@ def test_global_pool_region_updates_are_serialized(tmp_path):
             with active_lock:
                 active -= 1
 
-    def process_variant(_ctx, cfg, config_path, _args, _variant):
-        incremental = f"NEW-{cfg.variant}"
+    def process_region(_ctx, cfg, config_path, _args):
+        incremental = f"NEW-{cfg.region}"
         return 0 if update_config_from_fingerprint(
             config_path, cfg, _target(cfg, incremental)
         ) else 1
@@ -72,7 +72,7 @@ def test_global_pool_region_updates_are_serialized(tmp_path):
     ctx = argparse.Namespace(stop_event=threading.Event())
 
     with (
-        patch("checkota.cli.process_config_variant", side_effect=process_variant),
+        patch("checkota.cli.process_region", side_effect=process_region),
         patch(
             "checkota.manager._update_config_from_fingerprint",
             side_effect=tracked_update,
@@ -84,7 +84,7 @@ def test_global_pool_region_updates_are_serialized(tmp_path):
     assert result == 0
     assert max_active == 1
     assert {
-        config.variant: config.incremental for config in Config.from_yaml(path)
+        config.region: config.incremental for config in Config.from_yaml(path)
     } == {"OP": "NEW-OP", "IN": "NEW-IN"}
 
 
@@ -95,7 +95,7 @@ def test_stale_config_object_can_update_another_region(tmp_path):
     assert update_config_from_fingerprint(path, op, _target(op, "NEW-OP"))
     assert update_config_from_fingerprint(path, india, _target(india, "NEW-IN"))
     assert {
-        config.variant: config.incremental for config in Config.from_yaml(path)
+        config.region: config.incremental for config in Config.from_yaml(path)
     } == {"OP": "NEW-OP", "IN": "NEW-IN"}
 
 
@@ -107,7 +107,7 @@ def test_stale_config_object_can_safely_reupdate_same_region(tmp_path):
     assert update_config_from_fingerprint(path, stale_op, _target(stale_op, "SECOND"))
 
     assert {
-        config.variant: config.incremental for config in Config.from_yaml(path)
+        config.region: config.incremental for config in Config.from_yaml(path)
     } == {"OP": "SECOND", "IN": "OLD-IN"}
 
 
@@ -213,14 +213,14 @@ def test_prepublication_invariants_reject_tampered_output(tmp_path, old, new):
 def test_round_trip_preserves_all_effective_regions(tmp_path):
     path = tmp_path / "config.yml"
     cfg, other = _two_region_config(path)
-    before = {config.variant: config.fingerprint() for config in Config.from_yaml(path)}
+    before = {config.region: config.fingerprint() for config in Config.from_yaml(path)}
 
     assert update_config_from_fingerprint(path, cfg, _target(cfg, "NEW-OP"))
-    after = {config.variant: config.fingerprint() for config in Config.from_yaml(path)}
+    after = {config.region: config.fingerprint() for config in Config.from_yaml(path)}
 
     assert after["IN"] == before["IN"]
     assert after["OP"] != before["OP"]
-    assert other.variant == "IN"
+    assert other.region == "IN"
     assert yaml.safe_load(path.read_text(encoding="utf-8"))["regions"]["IN"] == (
         "OLD-IN"
     )

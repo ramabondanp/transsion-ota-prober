@@ -198,7 +198,7 @@ Rules:
 - `product` is never stored in the new schema.
 - Canonical `build_tag` values are never stored in configs.
 - Region order in YAML defines processing and output order.
-- Region codes remain the stable runtime variant identity.
+- Region codes remain the stable runtime region identity.
 
 ## Runtime model strategy
 
@@ -213,7 +213,7 @@ Each returned `Config` must still contain:
 - effective `android_version`
 - effective `build_tag`
 - `incremental`
-- a stable region label (currently carried by the runtime `Config.variant` field)
+- a stable region code carried by the runtime `Config.region` field
 
 Compatibility retained within Python:
 
@@ -222,7 +222,7 @@ Compatibility retained within Python:
 - [x] Keep `UpdateChecker` and user-agent construction unchanged.
 - [x] Keep region filtering based on `region_code_from_product()` unchanged.
 - [x] Keep notifications and metadata identity validation unchanged.
-- [x] Use the region code as `Config.variant` for logs and debug artifact names.
+- [x] Use the region code as `Config.region` for logs and debug artifact names.
 - [x] Stop relying on the old list position for update targeting.
 
 ## Implementation phases
@@ -232,7 +232,7 @@ Compatibility retained within Python:
 - [x] Run the full existing test suite on the branch before code changes.
 - [x] Export a temporary pre-migration manifest containing, in original order:
   - source config path,
-  - variant/region position,
+  - region position,
   - OEM,
   - product,
   - device,
@@ -473,12 +473,12 @@ Tasks:
 
 ### Phase 11 — Remove obsolete legacy code
 
-- [ ] Remove legacy variant-list block mapping and rewrite helpers.
-- [ ] Remove label/index disambiguation used only by the old schema.
-- [ ] Remove obsolete tests after equivalent region-schema coverage exists.
-- [ ] Search production code, tests, docs, and configs for stale `variants` references.
-- [ ] Keep the word `variant` only where it remains a runtime concept or an intentional legacy-error test.
-- [ ] Run dead-code and unused-import checks after removal.
+- [x] Remove legacy variant-list block mapping and rewrite helpers.
+- [x] Remove label/index disambiguation used only by the old schema.
+- [x] Remove obsolete tests after equivalent region-schema coverage exists.
+- [x] Search production code, tests, docs, and configs for stale `variants` references.
+- [x] Keep legacy `variants` text only in the actionable runtime rejection, migration utility, and intentional legacy-fixture tests.
+- [x] Run dead-code and unused-import checks after removal.
 
 ### Phase 12 — Final validation
 
@@ -572,3 +572,5 @@ Add dated entries as work proceeds.
 - Phase 9 complete: converted runtime test fixtures to the compact schema, removed obsolete legacy writer/disambiguation tests, and added repository identity/tag invariants.
 - Phase 9 validation: full pytest suite passed (`275 passed`). Runtime legacy rejection remains covered explicitly by parser tests; migration-tool tests retain intentional legacy fixtures.
 - Phase 10 complete: updated `AGENTS.md` and `README.md` for the compact regions format, derivation rules, special cases, manual migration, and legacy rejection behavior.
+- Phase 11 complete: removed legacy list rewrite helpers and index/label disambiguation, renamed runtime region APIs/models, and retained legacy references only for rejection/migration coverage.
+- Phase 11 validation: full pytest suite passed (`277 passed`); no obsolete writer symbols or legacy runtime field names remain.

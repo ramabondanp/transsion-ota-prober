@@ -55,7 +55,7 @@ def test_direct_fingerprint_does_not_seed_configs(monkeypatch):
     monkeypatch.setattr(cli, "start_watchdog", lambda context, timeout: None)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
     monkeypatch.setattr(cli, "config_from_fingerprint", lambda fingerprint: object())
-    monkeypatch.setattr(cli, "process_config_variant", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(cli, "process_region", lambda *args, **kwargs: 0)
 
     assert cli.main() == 0
 

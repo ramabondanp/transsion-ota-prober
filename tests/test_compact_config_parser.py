@@ -1,8 +1,10 @@
+import argparse
 from pathlib import Path
 
 import pytest
 
 from checkota.manager import Config, parse_fingerprint
+from checkota.processor import _debug_label, load_config_regions
 
 
 def _load(tmp_path: Path, content: str) -> list[Config]:
@@ -25,13 +27,65 @@ regions:
 """,
     )
 
-    assert [(cfg.variant, cfg.product, cfg.incremental) for cfg in configs] == [
+    assert [(cfg.region, cfg.product, cfg.incremental) for cfg in configs] == [
         ("OP", "X6873-OP", "201500011"),
         ("IN", "X6873-IN", "201500012"),
     ]
     assert configs[0].device == "Infinix-X6873"
     assert configs[0].build_tag == "BP2A.250605.031.A3"
-    assert configs[0].variant_index is None
+
+
+def test_region_filter_uses_full_multi_part_region_code(tmp_path):
+    path = tmp_path / "config.yml"
+    path.write_text(
+        """\
+oem: "TECNO"
+product_base: "CN7c"
+model: "Model"
+android_version: "16"
+regions:
+  OP: "OP-BUILD"
+  OP-M1: "M1-BUILD"
+""",
+        encoding="utf-8",
+    )
+
+    status, configs = load_config_regions(
+        path, argparse.Namespace(region="op-m1", incremental=None)
+    )
+
+    assert status == 0
+    assert [(config.region, config.product) for config in configs] == [
+        ("OP-M1", "CN7c-OP-M1")
+    ]
+
+
+def test_debug_labels_keep_region_and_direct_fingerprint_names():
+    region = Config(
+        oem="Infinix",
+        product="X6873-OP",
+        device="Infinix-X6873",
+        android_version="16",
+        build_tag="BP2A.250605.031.A3",
+        incremental="BUILD",
+        model="Model",
+        region="OP",
+    )
+    direct = Config(
+        oem="Infinix",
+        product="X6873-OP",
+        device="Infinix-X6873",
+        android_version="16",
+        build_tag="BP2A.250605.031.A3",
+        incremental="BUILD",
+        model="Model",
+    )
+
+    assert (
+        _debug_label(Path("configs/config-X6873.yml"), region)
+        == "config-X6873-OP"
+    )
+    assert _debug_label(Path("<fingerprint>"), direct) == "<fingerprint>"
 
 
 def test_expanded_region_can_override_android_version(tmp_path):
@@ -121,7 +175,7 @@ regions:
 """,
     )[0]
 
-    assert config.variant == "OP-M1"
+    assert config.region == "OP-M1"
     assert config.product == "CN7c-OP-M1"
     assert config.fingerprint().startswith("TECNO/CN7c-OP-M1/TECNO-CN7c:")
 

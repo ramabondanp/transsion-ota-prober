@@ -9,7 +9,7 @@ from checkota.manager import (
     fingerprint_identity_matches_config,
     update_config_from_fingerprint,
 )
-from checkota.models import VariantUpdate
+from checkota.models import RegionUpdate
 from checkota.processor import apply_update_actions
 from checkota.runtime import RunContext
 
@@ -220,7 +220,7 @@ regions:
         device="Infinix-X6873",
         oem="Infinix",
         product="X6873-OP",
-        variant="OP",
+        region="OP",
     )
 
     assert update_config_from_fingerprint(path, cfg, FP) is False
@@ -237,10 +237,9 @@ def test_processor_rejects_identity_mismatch_before_actions(tmp_path):
         oem="Infinix",
         product="X6873-OP",
     )
-    update = VariantUpdate(
+    update = RegionUpdate(
         cfg=cfg,
         config_path=tmp_path / "config.yml",
-        variant_label=None,
         region_name=None,
         title="OTA",
         url="https://example.test/ota.zip",

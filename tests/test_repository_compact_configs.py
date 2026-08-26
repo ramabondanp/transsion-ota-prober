@@ -15,8 +15,7 @@ def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
 
     assert len(paths) == 114
     assert len(configs) == 148
-    assert all(config.variant is not None for config in configs)
-    assert all(config.variant_index is None for config in configs)
+    assert all(config.region is not None for config in configs)
     assert all(list(document) == [
         "oem", "product_base", "model", "android_version", "regions"
     ] for document in documents)
@@ -48,5 +47,5 @@ def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
             )
 
     assert [
-        (config.variant, config.product, config.device) for config in configs
+        (config.region, config.product, config.device) for config in configs
     ] == expected_identities

@@ -148,8 +148,7 @@ class Config:
     device: str
     oem: str
     product: str
-    variant: str | None = None
-    variant_index: int | None = None
+    region: str | None = None
 
     @classmethod
     def from_yaml(cls, file: Path) -> list["Config"]:
@@ -296,7 +295,7 @@ class Config:
                     device=device,
                     oem=oem,
                     product=product,
-                    variant=region_code,
+                    region=region_code,
                 )
             )
 
@@ -359,11 +358,6 @@ _UPDATED_KEYS = ("android_version", "build_tag", "incremental")
 _DIRECT_KEY_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)[ \t]*:"
 )
-_SEQUENCE_KEY_RE = re.compile(
-    r"^(?P<indent>[ \t]*)-[ \t]+"
-    r"(?P<key>[A-Za-z_][A-Za-z0-9_-]*)[ \t]*:"
-)
-_SEQUENCE_ITEM_RE = re.compile(r"^(?P<indent>[ \t]*)-(?=$|[ \t])")
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -452,7 +446,7 @@ def _effective_region_values(
     except (TypeError, ValueError):
         return None
 
-    matches = [config for config in configs if config.variant == region_code]
+    matches = [config for config in configs if config.region == region_code]
     if len(matches) != 1:
         return None
     return _config_values(matches[0])
@@ -476,12 +470,6 @@ def _direct_key_line(line: str, key: str, indent: int | None = None) -> bool:
         and match.group("key") == key
         and (indent is None or len(match.group("indent")) == indent)
     )
-
-
-def _sequence_item_indent(line: str) -> int | None:
-    body, _ = _line_body_and_ending(line)
-    match = _SEQUENCE_ITEM_RE.match(body)
-    return len(match.group("indent")) if match else None
 
 
 def _comment_start(text: str) -> int | None:
@@ -524,9 +512,7 @@ def _rewrite_yaml_line(line: str, key: str, value: str) -> str:
     body, newline = _line_body_and_ending(line)
     match = _DIRECT_KEY_RE.match(body)
     if not match or match.group("key") != key:
-        match = _SEQUENCE_KEY_RE.match(body)
-        if not match or match.group("key") != key:
-            return line
+        return line
 
     comment_index = _comment_start(body)
     if comment_index is None:
@@ -567,7 +553,7 @@ def _update_config_from_fingerprint(
 ) -> bool:
     """Apply a target fingerprint to a config file (lock must be held).
 
-    Pipeline: validate target -> read/parse -> resolve the matching variant ->
+    Pipeline: validate target -> read/parse -> resolve the matching region ->
     rewrite lines -> atomic persist with round-trip verification.
     """
     parsed = parse_fingerprint(fingerprint)
@@ -624,9 +610,9 @@ def _update_config_from_fingerprint(
         Log.w(f"Could not snapshot config {config_path} before updating: {exc}")
         return False
     before_by_region = {
-        config.variant: config
+        config.region: config
         for config in before_configs
-        if config.variant is not None
+        if config.region is not None
     }
     if len(before_by_region) != len(before_configs):
         Log.w(f"Could not uniquely identify regions in {config_path}.")
@@ -678,9 +664,9 @@ def _resolve_update_target(
             f"Could not derive a region code from {cfg.product!r} for {config_path}."
         )
         return False, None
-    if cfg.variant != region_code:
+    if cfg.region != region_code:
         Log.w(
-            f"Config region identity {cfg.variant!r} does not match product region "
+            f"Config region identity {cfg.region!r} does not match product region "
             f"{region_code!r} for {config_path}; configuration was not updated."
         )
         return False, None
@@ -714,7 +700,7 @@ def _resolve_update_target(
         Log.w(f"Could not resolve region {region_code!r} in {config_path}: {exc}")
         return False, None
 
-    matches = [config for config in configs if config.variant == region_code]
+    matches = [config for config in configs if config.region == region_code]
     if len(matches) != 1:
         Log.w(
             f"Could not uniquely resolve region {region_code!r} in {config_path}; "
@@ -1006,9 +992,9 @@ def _converge_android_default(
         return True
 
     fingerprints_before = {
-        config.variant: config.fingerprint()
+        config.region: config.fingerprint()
         for config in configs
-        if config.variant is not None
+        if config.region is not None
     }
     if len(fingerprints_before) != len(configs):
         Log.w(f"Could not uniquely identify all regions in {config_path}.")
@@ -1031,13 +1017,13 @@ def _converge_android_default(
 
     projected["android_version"] = converged_version
     for config in configs:
-        if config.variant is None:
+        if config.region is None:
             Log.w(f"Resolved region has no stable identity in {config_path}.")
             return False
         if not _rewrite_compact_region(
             lines,
             projected,
-            config.variant,
+            config.region,
             _config_values(config),
             newline,
             config_path,
@@ -1052,9 +1038,9 @@ def _converge_android_default(
         Log.w(f"Could not resolve normalized config {config_path}: {exc}")
         return False
     fingerprints_after = {
-        config.variant: config.fingerprint()
+        config.region: config.fingerprint()
         for config in normalized
-        if config.variant is not None
+        if config.region is not None
     }
     if fingerprints_after != fingerprints_before:
         Log.w(
@@ -1062,167 +1048,6 @@ def _converge_android_default(
             f"{config_path}."
         )
         return False
-    return True
-
-
-def _rewrite_variant_block(
-    lines: list[str],
-    variants_count: int,
-    variant_index: int,
-    updates: dict[str, str],
-    newline: str,
-    config_path: Path,
-) -> bool:
-    """Rewrite (or insert) the target keys inside one variants-list entry."""
-    variants_line_idx = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if _direct_key_line(line, "variants", indent=0)
-        ),
-        None,
-    )
-    if variants_line_idx is None:
-        Log.w(f"Could not find variants section in {config_path}.")
-        return False
-
-    variants_indent = len(lines[variants_line_idx]) - len(
-        lines[variants_line_idx].lstrip(" ")
-    )
-
-    sequence_indent: int | None = None
-    variant_lines: list[int] = []
-    variants_end_idx = len(lines)
-    for i in range(variants_line_idx + 1, len(lines)):
-        line = lines[i]
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(" "))
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        item_indent = _sequence_item_indent(line)
-        if sequence_indent is None:
-            if item_indent is not None and item_indent >= variants_indent:
-                sequence_indent = item_indent
-                variant_lines.append(i)
-                continue
-            if indent <= variants_indent:
-                variants_end_idx = i
-                break
-            continue
-
-        if item_indent == sequence_indent:
-            variant_lines.append(i)
-            continue
-        if indent <= variants_indent:
-            variants_end_idx = i
-            break
-
-    if sequence_indent is None or len(variant_lines) != variants_count:
-        Log.w(f"Failed to map variant blocks in {config_path}.")
-        return False
-
-    mapping_indent = _variant_mapping_indent(
-        lines, variant_lines, variant_index, variants_end_idx, sequence_indent
-    )
-    if mapping_indent is None:
-        Log.w(f"Failed to locate variant block #{variant_index + 1} in {config_path}.")
-        return False
-
-    variant_line_idx = variant_lines[variant_index]
-    variant_end_idx = (
-        variant_lines[variant_index + 1]
-        if variant_index + 1 < len(variant_lines)
-        else variants_end_idx
-    )
-
-    key_lines: dict[str, int] = {}
-    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
-    for key in ("android_version", "build_tag", "incremental"):
-        marker_match = _SEQUENCE_KEY_RE.match(marker_body)
-        if marker_match is not None and marker_match.group("key") == key:
-            key_lines[key] = variant_line_idx
-            continue
-        line_idx = next(
-            (
-                i
-                for i in range(variant_line_idx + 1, variant_end_idx)
-                if _direct_key_line(lines[i], key, indent=mapping_indent)
-            ),
-            None,
-        )
-        if line_idx is not None:
-            key_lines[key] = line_idx
-
-    for key, line_idx in key_lines.items():
-        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
-
-    insert_idx = variant_line_idx + 1
-    for key in ("android_version", "build_tag", "incremental"):
-        if key not in key_lines:
-            lines.insert(
-                insert_idx,
-                " " * mapping_indent
-                + f"{key}: {_quote_yaml_string(updates[key])}{newline}",
-            )
-            insert_idx += 1
-    return True
-
-
-def _variant_mapping_indent(
-    lines: list[str],
-    variant_lines: list[int],
-    variant_index: int,
-    variants_end_idx: int,
-    sequence_indent: int,
-) -> int | None:
-    """Find the indentation of the key mappings inside one variant block."""
-    variant_line_idx = variant_lines[variant_index]
-    variant_end_idx = (
-        variant_lines[variant_index + 1]
-        if variant_index + 1 < len(variant_lines)
-        else variants_end_idx
-    )
-    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
-    marker_key_match = _SEQUENCE_KEY_RE.match(marker_body)
-    if marker_key_match is not None:
-        return marker_key_match.start("key")
-    return next(
-        (
-            len(match.group("indent"))
-            for line in lines[variant_line_idx + 1 : variant_end_idx]
-            if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
-            and len(match.group("indent")) > sequence_indent
-        ),
-        None,
-    )
-
-
-def _rewrite_top_level_keys(
-    lines: list[str], updates: dict[str, str], config_path: Path
-) -> bool:
-    """Rewrite the target keys at the top level of a single-variant config."""
-    top_level_end = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if _direct_key_line(line, "variants", indent=0)
-        ),
-        len(lines),
-    )
-    for key in ("android_version", "build_tag", "incremental"):
-        line_idx = next(
-            (
-                i
-                for i, line in enumerate(lines[:top_level_end])
-                if _direct_key_line(line, key, indent=0)
-            ),
-            None,
-        )
-        if line_idx is None:
-            Log.w(f"Could not find {key} entry in {config_path}.")
-            return False
-        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
     return True
 
 
@@ -1275,9 +1100,9 @@ def _write_updated_config(
 
         reparsed_configs = Config._from_compact_data(reparse, config_path)
         after_by_region = {
-            config.variant: config
+            config.region: config
             for config in reparsed_configs
-            if config.variant is not None
+            if config.region is not None
         }
         if len(after_by_region) != len(reparsed_configs):
             raise ValueError("Round-trip parse changed region identities")

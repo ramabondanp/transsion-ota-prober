@@ -1,6 +1,6 @@
 """Thread-safe-ish logging helpers with ANSI colors.
 
-Log.capture redirects output for the calling thread only, so parallel variant
+Log.capture redirects output for the calling thread only, so parallel region
 workers can buffer their output without interleaving with other threads.
 """
 

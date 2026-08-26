@@ -226,7 +226,7 @@ def test_cli_main_no_drain_in_direct_fp(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_validate_args", lambda p, a: None)
     monkeypatch.setattr(cli, "install_interrupt_handler", lambda ctx: signal.SIG_DFL)
     monkeypatch.setattr(cli, "start_watchdog", lambda ctx, t: None)
-    monkeypatch.setattr(cli, "process_config_variant", lambda *a, **kw: 0)
+    monkeypatch.setattr(cli, "process_region", lambda *a, **kw: 0)
     monkeypatch.setattr(cli, "drain_pending_notifications", tracker)
     from checkota.manager import Config
 
