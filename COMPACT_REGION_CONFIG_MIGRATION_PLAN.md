@@ -2,7 +2,7 @@
 
 - **Branch:** `feat/compact-region-configs`
 - **Created:** 2026-08-27
-- **Status:** Phase 1 complete
+- **Status:** Phase 2 complete
 - **Decision:** Clean break — the legacy `variants` schema will not be supported by the runtime after migration.
 
 ## Purpose
@@ -19,7 +19,7 @@ This document is the implementation checklist and progress log. Check items only
 - [x] Decide on a clean break from legacy `variants` configs.
 - [x] Confirm that `product` and `device` can be derived for all current effective configs.
 - [x] Implement constants and derivation helpers.
-- [ ] Implement the new parser and validation.
+- [x] Implement the new parser and validation.
 - [ ] Replace the legacy variant updater with a region updater.
 - [ ] Migrate all repository configs.
 - [ ] Update tests and documentation.
@@ -150,15 +150,17 @@ Allowed region mapping keys:
 
 ### Validation rules
 
-- [ ] Reject a missing or empty `regions` mapping.
-- [ ] Reject the legacy `variants` key with a clear migration error.
-- [ ] Reject unknown top-level and region-level keys to catch typos.
-- [ ] Reject non-string identity/build values rather than silently losing leading zeroes.
-- [ ] Reject empty strings and control characters in fingerprint fields.
-- [ ] Reject region keys containing `/`, `:`, control characters, or leading/trailing whitespace.
-- [ ] Preserve duplicate-key rejection through `_UniqueKeyLoader`.
-- [ ] Require an explicit `build_tag` when no canonical mapping exists for an Android version.
-- [ ] Verify that a region-specific build-tag override is a non-empty string.
+- [x] Reject a missing or empty `regions` mapping.
+- [x] Reject the legacy `variants` key with a clear migration error.
+- [x] Reject unknown top-level and region-level keys to catch typos.
+- [x] Reject non-string identity/build values rather than silently losing leading zeroes.
+- [x] Reject empty strings and control characters in fingerprint fields.
+- [x] Reject leading/trailing whitespace and fingerprint delimiter characters in resolved fields.
+- [x] Reject region keys containing `/`, `:`, control characters, or leading/trailing whitespace.
+- [x] Require uppercase region keys and product bases without `-` so region identity round-trips exactly.
+- [x] Preserve duplicate-key rejection through `_UniqueKeyLoader`.
+- [x] Require an explicit `build_tag` when no canonical mapping exists for an Android version.
+- [x] Verify that a region-specific build-tag override is a non-empty string.
 
 ## Derivation rules
 
@@ -269,31 +271,31 @@ Primary file:
 
 Tasks:
 
-- [ ] Replace `variants` list parsing with `regions` mapping parsing.
-- [ ] Support scalar incremental shorthand.
-- [ ] Support expanded region mappings.
-- [ ] Derive effective product, device, Android version, and build tag.
-- [ ] Preserve YAML insertion order when producing the `Config` list.
-- [ ] Attach stable region identity to each resolved `Config`.
-- [ ] Add strict schema validation and actionable errors that include file and region context.
-- [ ] Remove legacy variant-name aliases (`name`, `region`, `label`, and list-item `variant`).
-- [ ] Remove index/label-based ambiguity resolution from parsing and update targeting.
+- [x] Replace `variants` list parsing with `regions` mapping parsing.
+- [x] Support scalar incremental shorthand.
+- [x] Support expanded region mappings.
+- [x] Derive effective product, device, Android version, and build tag.
+- [x] Preserve YAML insertion order when producing the `Config` list.
+- [x] Attach stable region identity to each resolved `Config`.
+- [x] Add strict schema validation and actionable errors that include file and region context.
+- [x] Remove legacy variant-name aliases (`name`, `region`, `label`, and list-item `variant`).
+- [ ] Remove index/label-based ambiguity resolution from update targeting (Phase 3).
 
 Parser test cases:
 
-- [ ] Normal scalar region.
-- [ ] Expanded Android override.
-- [ ] Product-base override.
-- [ ] Build-tag override.
-- [ ] Itel device derivation.
-- [ ] `OP-M1` region preservation.
-- [ ] Empty regions mapping.
-- [ ] Duplicate region key.
-- [ ] Invalid scalar type.
-- [ ] Missing expanded `incremental`.
-- [ ] Unknown key.
-- [ ] Unknown Android version without a build tag.
-- [ ] Legacy `variants` rejection.
+- [x] Normal scalar region.
+- [x] Expanded Android override.
+- [x] Product-base override.
+- [x] Build-tag override.
+- [x] Itel device derivation.
+- [x] `OP-M1` region preservation.
+- [x] Empty regions mapping.
+- [x] Duplicate region key.
+- [x] Invalid scalar type.
+- [x] Missing expanded `incremental`.
+- [x] Unknown key.
+- [x] Unknown Android version without a build tag.
+- [x] Legacy `variants` rejection.
 
 ### Phase 3 — Replace update targeting
 
@@ -548,3 +550,6 @@ Add dated entries as work proceeds.
 - Manifest SHA-256: `50aa62e1eedd9994f1f763a5a9e92d10d7b840717ea3d7af0dab76b391639519`.
 - Phase 1 complete: added canonical build-tag and OEM device-prefix constants plus pure resolution/derivation helpers.
 - Phase 1 validation: focused tests passed (`26 passed`); full suite passed (`177 passed`).
+- Phase 2 complete: replaced runtime YAML loading with strict compact `regions` parsing and stable region identities.
+- Phase 2 is intentionally transitional: bundled legacy configs remain unloadable until the repository migration phase and this intermediate commit must not be released independently.
+- Phase 2 validation: parser/helper tests passed (`62 passed`); full suite passed (`228 passed`).

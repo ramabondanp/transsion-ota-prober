@@ -17,7 +17,29 @@ FP = "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/201350016:user/releas
 
 
 def _config(path: Path) -> Config:
-    return Config.from_yaml(path)[0]
+    return _legacy_config(path)
+
+
+def _legacy_config(path: Path, index: int = 0) -> Config:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    variants = data.get("variants")
+    if isinstance(variants, list):
+        merged = {**data, **variants[index]}
+        variant_index = index
+    else:
+        merged = data
+        variant_index = None
+    return Config(
+        build_tag=merged["build_tag"],
+        incremental=merged["incremental"],
+        android_version=merged["android_version"],
+        model=merged["model"],
+        device=merged["device"],
+        oem=merged["oem"],
+        product=merged["product"],
+        variant=merged.get("variant"),
+        variant_index=variant_index,
+    )
 
 
 def _write_single_config(path: Path) -> None:
@@ -119,7 +141,7 @@ variants:
 """,
         encoding="utf-8",
     )
-    cfg = Config.from_yaml(path)[1]
+    cfg = _legacy_config(path, 1)
     target = FP.replace("X6873-OP", "X6873-IN")
 
     assert update_config_from_fingerprint(path, cfg, target) is True
@@ -251,7 +273,7 @@ variants:
     incremental: "ALPHA-I"
 """
     path.write_text(original, encoding="utf-8")
-    cfg = Config.from_yaml(path)[1]
+    cfg = _legacy_config(path, 1)
     path.write_text(reordered, encoding="utf-8")
 
     assert update_config_from_fingerprint(path, cfg, FP) is True
@@ -291,7 +313,7 @@ variants:
     incremental: "ALPHA-I"
 """
     path.write_text(original, encoding="utf-8")
-    cfg = Config.from_yaml(path)[1]
+    cfg = _legacy_config(path, 1)
     path.write_text(reordered, encoding="utf-8")
 
     assert update_config_from_fingerprint(path, cfg, FP) is True
@@ -320,7 +342,7 @@ variants:
         encoding="utf-8",
     )
     before = path.read_bytes()
-    cfg = Config.from_yaml(path)[1]
+    cfg = _legacy_config(path, 1)
 
     assert update_config_from_fingerprint(path, cfg, FP) is False
     assert path.read_bytes() == before

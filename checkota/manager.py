@@ -4,7 +4,7 @@ import re
 import stat
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,6 +70,75 @@ def _config_lock(config_path: Path):
         _prune_config_lock(lock_path)
 
 
+_COMPACT_REQUIRED_KEYS = (
+    "oem",
+    "product_base",
+    "model",
+    "android_version",
+    "regions",
+)
+_COMPACT_TOP_LEVEL_KEYS = frozenset(_COMPACT_REQUIRED_KEYS)
+_COMPACT_REGION_KEYS = frozenset(
+    {"incremental", "product_base", "android_version", "build_tag"}
+)
+_LEGACY_SINGLE_REGION_KEYS = frozenset(
+    {"product", "device", "build_tag", "incremental"}
+)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _region_context(file: Path, region_code: Any) -> str:
+    return f"Config {file} region {region_code!r}"
+
+
+def _validated_config_string(
+    value: Any,
+    field: str,
+    file: Path,
+    region_code: Any = None,
+    forbidden_chars: str = "",
+) -> str:
+    context = (
+        _region_context(file, region_code)
+        if region_code is not None
+        else f"Config {file}"
+    )
+    if not isinstance(value, str):
+        raise TypeError(f"{context} {field} must be a string.")
+    if not value:
+        raise ValueError(f"{context} {field} must not be empty.")
+    if value != value.strip():
+        raise ValueError(
+            f"{context} {field} must not have leading or trailing whitespace."
+        )
+    if _CONTROL_CHAR_RE.search(value):
+        raise ValueError(f"{context} {field} must not contain control characters.")
+    if any(char in value for char in forbidden_chars):
+        raise ValueError(
+            f"{context} {field} must not contain any of {forbidden_chars!r}."
+        )
+    return value
+
+
+def _validate_region_code(region_code: Any, context: str) -> None:
+    if not isinstance(region_code, str):
+        raise TypeError(f"{context} key must be a string.")
+    if not region_code:
+        raise ValueError(f"{context} key must not be empty.")
+    if region_code != region_code.strip():
+        raise ValueError(
+            f"{context} key must not have leading or trailing whitespace."
+        )
+    if region_code != region_code.upper():
+        raise ValueError(f"{context} key must use uppercase characters.")
+    if (
+        "/" in region_code
+        or ":" in region_code
+        or _CONTROL_CHAR_RE.search(region_code)
+    ):
+        raise ValueError(f"{context} key contains an invalid character.")
+
+
 @dataclass
 class Config:
     build_tag: str
@@ -83,33 +152,6 @@ class Config:
     variant_index: int | None = None
 
     @classmethod
-    def _from_dict(
-        cls,
-        data: dict[str, str],
-        variant_name: str | None = None,
-        variant_index: int | None = None,
-    ) -> "Config":
-        field_names = {field.name for field in fields(cls)}
-        required_fields = field_names - {"variant", "variant_index"}
-
-        filtered: dict[str, Any] = {
-            key: value for key, value in data.items() if key in field_names
-        }
-
-        if variant_name:
-            filtered["variant"] = variant_name
-        if variant_index is not None:
-            filtered["variant_index"] = variant_index
-
-        missing = [key for key in required_fields if key not in filtered]
-        if missing:
-            raise ValueError(
-                f"Config missing required fields: {', '.join(sorted(missing))}"
-            )
-
-        return cls(**filtered)
-
-    @classmethod
     def from_yaml(cls, file: Path) -> list["Config"]:
         if not file.is_file():
             raise FileNotFoundError(f"Config file not found: {file}")
@@ -120,32 +162,143 @@ class Config:
         except (OSError, yaml.YAMLError) as exc:
             raise ValueError(f"Could not read or parse config {file}: {exc}") from exc
 
+        return cls._from_compact_data(data, file)
+
+    @classmethod
+    def _from_compact_data(cls, data: Any, file: Path) -> list["Config"]:
+        context = f"Config {file}"
         if not isinstance(data, dict):
-            raise TypeError("Config file content is not a valid dictionary.")
+            raise TypeError(f"{context} must contain a top-level mapping.")
 
-        variants = data.get("variants")
-
-        if variants is None:
-            return [cls._from_dict(data)]
-
-        if not isinstance(variants, list) or not variants:
-            raise ValueError("'variants' must be a non-empty list of dictionaries.")
-
-        base = {k: v for k, v in data.items() if k != "variants"}
-        configs = []
-        for idx, variant in enumerate(variants, start=1):
-            if not isinstance(variant, dict):
-                raise TypeError(f"Variant entry #{idx} is not a dictionary.")
-
-            merged = {**base, **variant}
-            variant_name = (
-                variant.get("variant")
-                or variant.get("name")
-                or variant.get("region")
-                or variant.get("label")
-                or variant.get("product")
+        if "variants" in data:
+            raise ValueError(
+                f"{context} uses the legacy 'variants' schema; migrate it to a "
+                "'regions' mapping."
             )
-            configs.append(cls._from_dict(merged, variant_name, idx - 1))
+        legacy_keys = [key for key in data if key in _LEGACY_SINGLE_REGION_KEYS]
+        if legacy_keys:
+            names = ", ".join(repr(key) for key in legacy_keys)
+            raise ValueError(
+                f"{context} uses the legacy single-region schema ({names}); "
+                "migrate it to 'product_base' and a 'regions' mapping."
+            )
+
+        unknown_keys = [key for key in data if key not in _COMPACT_TOP_LEVEL_KEYS]
+        if unknown_keys:
+            names = ", ".join(repr(key) for key in unknown_keys)
+            raise ValueError(f"{context} has unknown top-level key(s): {names}.")
+
+        missing_keys = [key for key in _COMPACT_REQUIRED_KEYS if key not in data]
+        if missing_keys:
+            names = ", ".join(missing_keys)
+            raise ValueError(f"{context} is missing required key(s): {names}.")
+
+        oem = _validated_config_string(data["oem"], "oem", file, forbidden_chars="/:")
+        product_base = _validated_config_string(
+            data["product_base"], "product_base", file, forbidden_chars="/:-"
+        )
+        model = _validated_config_string(data["model"], "model", file)
+        android_version = _validated_config_string(
+            data["android_version"],
+            "android_version",
+            file,
+            forbidden_chars="/:",
+        )
+
+        regions = data["regions"]
+        if not isinstance(regions, dict):
+            raise TypeError(f"{context} 'regions' must be a non-empty mapping.")
+        if not regions:
+            raise ValueError(f"{context} 'regions' must be a non-empty mapping.")
+
+        configs: list[Config] = []
+        for region_code, region_data in regions.items():
+            region_context = _region_context(file, region_code)
+            _validate_region_code(region_code, region_context)
+
+            if isinstance(region_data, str):
+                overrides: dict[str, Any] = {"incremental": region_data}
+            elif isinstance(region_data, dict):
+                unknown_region_keys = [
+                    key for key in region_data if key not in _COMPACT_REGION_KEYS
+                ]
+                if unknown_region_keys:
+                    names = ", ".join(repr(key) for key in unknown_region_keys)
+                    raise ValueError(
+                        f"{region_context} has unknown key(s): {names}."
+                    )
+                if "incremental" not in region_data:
+                    raise ValueError(
+                        f"{region_context} expanded mapping requires 'incremental'."
+                    )
+                overrides = region_data
+            else:
+                raise TypeError(
+                    f"{region_context} must be a string incremental or a mapping."
+                )
+
+            effective_product_base = _validated_config_string(
+                overrides.get("product_base", product_base),
+                "product_base",
+                file,
+                region_code,
+                forbidden_chars="/:-",
+            )
+            effective_android_version = _validated_config_string(
+                overrides.get("android_version", android_version),
+                "android_version",
+                file,
+                region_code,
+                forbidden_chars="/:",
+            )
+            explicit_build_tag = (
+                _validated_config_string(
+                    overrides["build_tag"],
+                    "build_tag",
+                    file,
+                    region_code,
+                    forbidden_chars="/:",
+                )
+                if "build_tag" in overrides
+                else None
+            )
+            canonical_build_tag = BUILD_TAG_BY_ANDROID.get(effective_android_version)
+            if (
+                explicit_build_tag is not None
+                and explicit_build_tag == canonical_build_tag
+            ):
+                raise ValueError(
+                    f"{region_context} build_tag is canonical for Android "
+                    f"{effective_android_version!r}; omit the override."
+                )
+            try:
+                effective_build_tag = resolve_build_tag(
+                    effective_android_version, explicit_build_tag
+                )
+            except ValueError as exc:
+                raise ValueError(f"{region_context}: {exc}") from exc
+            incremental = _validated_config_string(
+                overrides["incremental"],
+                "incremental",
+                file,
+                region_code,
+                forbidden_chars="/:",
+            )
+            product, device = derive_product_and_device(
+                oem, effective_product_base, region_code
+            )
+            configs.append(
+                cls(
+                    build_tag=effective_build_tag,
+                    incremental=incremental,
+                    android_version=effective_android_version,
+                    model=model,
+                    device=device,
+                    oem=oem,
+                    product=product,
+                    variant=region_code,
+                )
+            )
 
         return configs
 

@@ -33,7 +33,16 @@ def _write_config(tmp_path: Path) -> Path:
 
 
 def _cfg(p: Path) -> Config:
-    return Config.from_yaml(p)[0]
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    return Config(
+        build_tag=data["build_tag"],
+        incremental=data["incremental"],
+        android_version=data["android_version"],
+        model=data["model"],
+        device=data["device"],
+        oem=data["oem"],
+        product=data["product"],
+    )
 
 
 def test_idempotent_second_run_leaves_file_byte_equal(tmp_path):

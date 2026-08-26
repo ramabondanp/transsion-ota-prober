@@ -102,7 +102,15 @@ def test_config_lock_removed_after_update(tmp_path):
         ),
         encoding="utf-8",
     )
-    cfg = Config.from_yaml(config_path)[0]
+    cfg = Config(
+        build_tag="B",
+        incremental="I",
+        android_version="14",
+        model="Infinix GT 30 Pro",
+        device="Infinix-X6873",
+        oem="Infinix",
+        product="X6873-OP",
+    )
     target = "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/201350016:user/release-keys"
 
     assert update_config_from_fingerprint(config_path, cfg, target) is True
