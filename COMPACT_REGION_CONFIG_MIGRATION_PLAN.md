@@ -444,13 +444,13 @@ Primary tests expected to change or gain coverage:
 
 Tasks:
 
-- [ ] Convert all YAML test fixtures to the new schema unless a test intentionally verifies legacy rejection.
-- [ ] Keep direct `Config(...)` tests unchanged unless runtime metadata changes require an update.
-- [ ] Add a repository-wide test that loads all bundled configs.
-- [ ] Assert there are 114 loadable files and 148 resolved region configs at migration time.
-- [ ] Add invariant tests for derived product/device identity.
-- [ ] Add invariant tests that canonical build tags are omitted from bundled YAML.
-- [ ] Retain all prior identity mismatch, duplicate-key, atomicity, idempotence, permissions, comment, and newline tests.
+- [x] Convert all YAML test fixtures to the new schema unless a test intentionally verifies legacy rejection.
+- [x] Keep direct `Config(...)` tests unchanged unless runtime metadata changes require an update.
+- [x] Add a repository-wide test that loads all bundled configs.
+- [x] Assert there are 114 loadable files and 148 resolved region configs at migration time.
+- [x] Add invariant tests for derived product/device identity.
+- [x] Add invariant tests that canonical build tags are omitted from bundled YAML.
+- [x] Retain all prior identity mismatch, duplicate-key, atomicity, idempotence, permissions, comment, and newline tests.
 
 ### Phase 10 — Documentation and user-facing migration notice
 
@@ -569,3 +569,5 @@ Add dated entries as work proceeds.
 - Phase 7 validation: `114` files and `148` configs load; forbidden legacy keys are absent; migration manifest is byte-for-byte equivalent with SHA-256 `50aa62e1eedd9994f1f763a5a9e92d10d7b840717ea3d7af0dab76b391639519`.
 - Phase 8 complete: added `scripts/compact_manifest.py` for reproducible post-migration manifests.
 - Phase 8 validation: `python scripts/compact_manifest.py configs --output /tmp/opencode/post-migration-manifest.jsonl` plus `cmp -s /tmp/opencode/pre-migration-manifest.jsonl /tmp/opencode/post-migration-manifest.jsonl` returned `0`; `114` files, `148` entries, and the baseline SHA-256 are unchanged.
+- Phase 9 complete: converted runtime test fixtures to the compact schema, removed obsolete legacy writer/disambiguation tests, and added repository identity/tag invariants.
+- Phase 9 validation: full pytest suite passed (`275 passed`). Runtime legacy rejection remains covered explicitly by parser tests; migration-tool tests retain intentional legacy fixtures.

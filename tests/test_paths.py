@@ -82,13 +82,26 @@ def test_wheel_config_seeding_is_safe_for_concurrent_first_use(monkeypatch, tmp_
     monkeypatch.setattr(
         paths,
         "_resource_root",
-        lambda: _ResourceRoot(_Resource("config-X6873.yml", b"product: X6873-OP\n")),
+        lambda: _ResourceRoot(
+            _Resource(
+                "config-X6873.yml",
+                (
+                    b'oem: "Infinix"\nproduct_base: "X6873"\n'
+                    b'model: "Infinix GT 30 Pro"\nandroid_version: "16"\n'
+                    b'regions:\n  OP: "I"\n'
+                ),
+            ),
+        ),
     )
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(lambda _: paths.ensure_config_resources(), range(8)))
 
-    assert (config_dir / "config-X6873.yml").read_bytes() == b"product: X6873-OP\n"
+    assert (config_dir / "config-X6873.yml").read_bytes() == (
+        b'oem: "Infinix"\nproduct_base: "X6873"\n'
+        b'model: "Infinix GT 30 Pro"\nandroid_version: "16"\n'
+        b'regions:\n  OP: "I"\n'
+    )
     assert list(config_dir.glob("*.tmp")) == []
 
 
@@ -111,7 +124,11 @@ def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
     monkeypatch, tmp_path
 ):
     source = tmp_path / "config-X6873.yml"
-    source.write_bytes(b"product: X6873-OP\n")
+    source.write_bytes(
+        b'oem: "Infinix"\nproduct_base: "X6873"\n'
+        b'model: "Infinix GT 30 Pro"\nandroid_version: "16"\n'
+        b'regions:\n  OP: "I"\n'
+    )
     destination = tmp_path / "configs" / "config-X6873.yml"
 
     def link_without_hardlink_support(src, dst):
@@ -120,7 +137,11 @@ def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
     monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
 
     assert paths._publish_if_missing(source, destination, 0o644) is True
-    assert destination.read_bytes() == b"product: X6873-OP\n"
+    assert destination.read_bytes() == (
+        b'oem: "Infinix"\nproduct_base: "X6873"\n'
+        b'model: "Infinix GT 30 Pro"\nandroid_version: "16"\n'
+        b'regions:\n  OP: "I"\n'
+    )
     assert list(destination.parent.glob("*.tmp")) == []
 
 

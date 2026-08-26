@@ -92,26 +92,23 @@ def test_config_lock_removed_after_update(tmp_path):
         dedent(
             """\
             oem: "Infinix"
-            product: "X6873-OP"
-            device: "Infinix-X6873"
-            android_version: "14"
-            build_tag: "B"
-            incremental: "I"
+            product_base: "X6873"
             model: "Infinix GT 30 Pro"
+            android_version: "14"
+            regions:
+              OP:
+                build_tag: "B"
+                incremental: "I"
+              IN: "OTHER"
             """
         ),
         encoding="utf-8",
     )
-    cfg = Config(
-        build_tag="B",
-        incremental="I",
-        android_version="14",
-        model="Infinix GT 30 Pro",
-        device="Infinix-X6873",
-        oem="Infinix",
-        product="X6873-OP",
+    cfg = Config.from_yaml(config_path)[0]
+    target = (
+        "Infinix/X6873-OP/Infinix-X6873:16/"
+        "BP2A.250605.031.A3/201350016:user/release-keys"
     )
-    target = "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/201350016:user/release-keys"
 
     assert update_config_from_fingerprint(config_path, cfg, target) is True
     assert not (tmp_path / "config-X6873.yml.lock").exists()

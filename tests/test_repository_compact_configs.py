@@ -33,5 +33,20 @@ def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
     assert build_tag_overrides == ["AQ3A.250226.002", "UKQ1.240826.001"]
     assert not set(build_tag_overrides) & set(BUILD_TAG_BY_ANDROID.values())
 
-    india = next(config for config in configs if config.product == "X6857B-IN")
-    assert india.device == "Infinix-X6857B"
+    expected_identities = []
+    for document in documents:
+        for region_code, region in document["regions"].items():
+            overrides = region if isinstance(region, dict) else {}
+            product_base = overrides.get("product_base", document["product_base"])
+            device_prefix = "itel" if document["oem"] == "Itel" else document["oem"]
+            expected_identities.append(
+                (
+                    region_code,
+                    f"{product_base}-{region_code}",
+                    f"{device_prefix}-{product_base}",
+                )
+            )
+
+    assert [
+        (config.variant, config.product, config.device) for config in configs
+    ] == expected_identities

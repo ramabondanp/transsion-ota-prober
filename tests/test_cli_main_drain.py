@@ -59,9 +59,9 @@ def test_cli_main_drains_after_interrupt_sweep(monkeypatch, tmp_path):
     args = _make_args(tmp_path, config_dir_present=True)
     args.config_dir.mkdir()
     (args.config_dir / "config-X6873.yml").write_text(
-        "oem: Infinix\nproduct: X6873-OP\ndevice: Infinix-X6873\n"
-        "android_version: '14'\nbuild_tag: B1\nincremental: I1\n"
-        'model: "Infinix GT 30 Pro"\n',
+        'oem: "Infinix"\nproduct_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\nandroid_version: "14"\n'
+        'regions:\n  OP:\n    build_tag: "B1"\n    incremental: "I1"\n',
         encoding="utf-8",
     )
     ctx = args.run_context
