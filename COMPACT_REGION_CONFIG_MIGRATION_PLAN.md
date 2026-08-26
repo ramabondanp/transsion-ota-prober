@@ -424,13 +424,13 @@ Migration procedure:
 
 This phase is mandatory before considering the config migration complete.
 
-- [ ] Load every migrated config through the new parser.
-- [ ] Generate a post-migration manifest using the same fields and ordering as the baseline.
-- [ ] Compare the pre- and post-migration manifests.
-- [ ] Require exact equality for all 148 effective entries and complete fingerprints.
-- [ ] Investigate every difference; do not approve expected differences without documenting them.
-- [ ] Confirm the only structural changes are YAML representation changes.
-- [ ] Record the comparison command, result, and final checksum in the progress log.
+- [x] Load every migrated config through the new parser.
+- [x] Generate a post-migration manifest using the same fields and ordering as the baseline.
+- [x] Compare the pre- and post-migration manifests.
+- [x] Require exact equality for all 148 effective entries and complete fingerprints.
+- [x] Investigate every difference; do not approve expected differences without documenting them.
+- [x] Confirm the only structural changes are YAML representation changes.
+- [x] Record the comparison command, result, and final checksum in the progress log.
 
 ### Phase 9 — Update tests and fixtures
 
@@ -567,3 +567,5 @@ Add dated entries as work proceeds.
 - Phase 6 validation: safety, convergence, rewrite, and targeting tests passed (`40 passed`).
 - Phase 7 complete: migrated all repository configs with a deterministic independent legacy reader and compact emitter.
 - Phase 7 validation: `114` files and `148` configs load; forbidden legacy keys are absent; migration manifest is byte-for-byte equivalent with SHA-256 `50aa62e1eedd9994f1f763a5a9e92d10d7b840717ea3d7af0dab76b391639519`.
+- Phase 8 complete: added `scripts/compact_manifest.py` for reproducible post-migration manifests.
+- Phase 8 validation: `python scripts/compact_manifest.py configs --output /tmp/opencode/post-migration-manifest.jsonl` plus `cmp -s /tmp/opencode/pre-migration-manifest.jsonl /tmp/opencode/post-migration-manifest.jsonl` returned `0`; `114` files, `148` entries, and the baseline SHA-256 are unchanged.
