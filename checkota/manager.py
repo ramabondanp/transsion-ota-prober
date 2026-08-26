@@ -6,7 +6,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 from yaml.constructor import ConstructorError
@@ -432,70 +432,30 @@ def fingerprint_identity_matches_config(cfg: Config, fingerprint: str) -> bool:
     return bool(parsed and _identity_matches(parsed, cfg))
 
 
-def _effective_variant_values(
-    data: dict[str, Any], variant_index: int | None
-) -> dict[str, Any] | None:
-    if variant_index is None:
-        return data
-
-    variants = data.get("variants")
-    if not isinstance(variants, list) or not (0 <= variant_index < len(variants)):
-        return None
-    variant = variants[variant_index]
-    if not isinstance(variant, dict):
-        return None
-
+def _config_values(config: Config) -> dict[str, str]:
     return {
-        key: variant[key] if key in variant else data.get(key)
+        key: str(getattr(config, key))
         for key in (*_IMMUTABLE_IDENTITY_KEYS, *_UPDATED_KEYS)
     }
 
 
-def _matching_variant_index(data: dict[str, Any], cfg: Config) -> int | None:
-    variants = data.get("variants")
-    if not isinstance(variants, list):
+def _effective_region_values(
+    data: dict[str, Any], region_code: str, config_path: Path
+) -> dict[str, str] | None:
+    """Resolve one exact compact region from the latest on-disk YAML."""
+    regions = data.get("regions")
+    if not isinstance(regions, dict) or region_code not in regions:
         return None
 
-    identity_matches: list[int] = []
-    for index in range(len(variants)):
-        effective = _effective_variant_values(data, index)
-        if effective is not None and _identity_matches(effective, cfg):
-            identity_matches.append(index)
+    try:
+        configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError):
+        return None
 
-    if len(identity_matches) <= 1:
-        return identity_matches[0] if identity_matches else None
-
-    label_matches: list[int] = []
-    if cfg.variant is not None:
-        for index in identity_matches:
-            variant = variants[index]
-            if not isinstance(variant, dict):
-                continue
-            label = (
-                variant.get("variant")
-                or variant.get("name")
-                or variant.get("region")
-                or variant.get("label")
-                or variant.get("product")
-            )
-            if label is not None and str(label) == str(cfg.variant):
-                label_matches.append(index)
-
-    build_matches = []
-    for index in identity_matches:
-        effective = _effective_variant_values(data, index)
-        if effective is not None and all(
-            key in effective
-            and effective[key] is not None
-            and str(effective[key]) == str(getattr(cfg, key))
-            for key in _UPDATED_KEYS
-        ):
-            build_matches.append(index)
-
-    unique_evidence = {
-        matches[0] for matches in (label_matches, build_matches) if len(matches) == 1
-    }
-    return unique_evidence.pop() if len(unique_evidence) == 1 else None
+    matches = [config for config in configs if config.variant == region_code]
+    if len(matches) != 1:
+        return None
+    return _config_values(matches[0])
 
 
 def _line_body_and_ending(line: str) -> tuple[str, str]:
@@ -643,11 +603,15 @@ def _update_config_from_fingerprint(
         Log.w(f"Config {config_path} did not parse as a dictionary.")
         return False
 
-    proceed, match_idx = _resolve_update_target(data, cfg, config_path)
+    proceed, region_code = _resolve_update_target(data, cfg, config_path)
     if not proceed:
         return False
 
-    effective = _effective_variant_values(data, match_idx)
+    if region_code is None:
+        Log.w(f"Could not resolve update region in {config_path}.")
+        return False
+
+    effective = _effective_region_values(data, region_code, config_path)
     if effective is None or not _identity_matches(effective, cfg):
         Log.w(
             f"Effective config identity does not match {config_path}; "
@@ -664,20 +628,11 @@ def _update_config_from_fingerprint(
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
-    lines = raw_text.splitlines(keepends=True)
-    newline = _detect_newline(raw_text)
-
-    variants = data.get("variants")
-    if isinstance(variants, list):
-        variant_index = cast(int, match_idx)
-        if not _rewrite_variant_block(
-            lines, len(variants), variant_index, updates, newline, config_path
-        ):
-            return False
-    elif not _rewrite_top_level_keys(lines, updates, config_path):
-        return False
-
-    return _write_updated_config(config_path, lines, raw_text, cfg, match_idx, updates)
+    Log.w(
+        f"Compact region update for {config_path} requires the Phase 4 "
+        "region YAML rewriter; configuration was not updated."
+    )
+    return False
 
 
 def _detect_newline(raw_text: str) -> str:
@@ -690,31 +645,64 @@ def _detect_newline(raw_text: str) -> str:
 
 def _resolve_update_target(
     data: dict[str, Any], cfg: Config, config_path: Path
-) -> tuple[bool, int | None]:
-    """Locate which part of the parsed config the target applies to.
-
-    Returns (proceed, variant_index). variant_index is None for single-variant
-    configs; proceed=False means the reason was already logged.
-    """
-    variants = data.get("variants")
-    if isinstance(variants, list):
-        match_idx = _matching_variant_index(data, cfg)
-        if match_idx is None:
-            Log.w(
-                f"Could not locate matching variant in {config_path} when updating incremental."
-            )
-            return False, None
-        return True, match_idx
-    if "variants" in data:
-        Log.w(f"Config {config_path} has an invalid variants section.")
-        return False, None
-    if not _identity_matches(data, cfg):
+) -> tuple[bool, str | None]:
+    """Locate the exact compact region targeted by a current Config."""
+    region_code = region_code_from_product(cfg.product)
+    if region_code is None:
         Log.w(
-            f"Config identity changed before updating {config_path}; "
+            f"Could not derive a region code from {cfg.product!r} for {config_path}."
+        )
+        return False, None
+    if cfg.variant != region_code:
+        Log.w(
+            f"Config region identity {cfg.variant!r} does not match product region "
+            f"{region_code!r} for {config_path}; configuration was not updated."
+        )
+        return False, None
+
+    regions = data.get("regions")
+    if not isinstance(regions, dict):
+        Log.w(f"Config {config_path} has no valid 'regions' mapping.")
+        return False, None
+    if region_code not in regions:
+        Log.w(
+            f"Could not locate region {region_code!r} in {config_path}; "
             "configuration was not updated."
         )
         return False, None
-    return True, None
+
+    equivalent_region_keys = [
+        key
+        for key in regions
+        if isinstance(key, str) and key.upper() == region_code
+    ]
+    if len(equivalent_region_keys) != 1 or equivalent_region_keys[0] != region_code:
+        Log.w(
+            f"Region {region_code!r} is duplicated or not an exact mapping key in "
+            f"{config_path}; configuration was not updated."
+        )
+        return False, None
+
+    try:
+        configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError) as exc:
+        Log.w(f"Could not resolve region {region_code!r} in {config_path}: {exc}")
+        return False, None
+
+    matches = [config for config in configs if config.variant == region_code]
+    if len(matches) != 1:
+        Log.w(
+            f"Could not uniquely resolve region {region_code!r} in {config_path}; "
+            "configuration was not updated."
+        )
+        return False, None
+    if not _identity_matches(_config_values(matches[0]), cfg):
+        Log.w(
+            f"Effective config identity changed before updating {config_path}; "
+            "configuration was not updated."
+        )
+        return False, None
+    return True, region_code
 
 
 def _rewrite_variant_block(
@@ -883,7 +871,7 @@ def _write_updated_config(
     lines: list[str],
     raw_text: str,
     cfg: Config,
-    match_idx: int | None,
+    region_code: str | None,
     updates: dict[str, str],
 ) -> bool:
     """Persist rewritten lines atomically after a round-trip verification."""
@@ -917,12 +905,11 @@ def _write_updated_config(
         if not isinstance(reparse, dict):
             raise TypeError(f"Round-trip parse yielded {type(reparse).__name__}")
 
-        if isinstance(reparse.get("variants"), list):
-            reparsed_effective = _effective_variant_values(reparse, match_idx)
-        elif "variants" not in reparse and match_idx is None:
-            reparsed_effective = reparse
-        else:
-            reparsed_effective = None
+        reparsed_effective = (
+            _effective_region_values(reparse, region_code, config_path)
+            if isinstance(reparse, dict) and region_code is not None
+            else None
+        )
         if reparsed_effective is None or not _identity_matches(reparsed_effective, cfg):
             raise ValueError("Round-trip parse changed the effective config identity")
         if not all(

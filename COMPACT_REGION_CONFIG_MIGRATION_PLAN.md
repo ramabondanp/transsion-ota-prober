@@ -20,7 +20,7 @@ This document is the implementation checklist and progress log. Check items only
 - [x] Confirm that `product` and `device` can be derived for all current effective configs.
 - [x] Implement constants and derivation helpers.
 - [x] Implement the new parser and validation.
-- [ ] Replace the legacy variant updater with a region updater.
+- [x] Replace the legacy variant updater with a region updater.
 - [ ] Migrate all repository configs.
 - [ ] Update tests and documentation.
 - [ ] Complete full validation and migration-equivalence checks.
@@ -279,7 +279,7 @@ Tasks:
 - [x] Attach stable region identity to each resolved `Config`.
 - [x] Add strict schema validation and actionable errors that include file and region context.
 - [x] Remove legacy variant-name aliases (`name`, `region`, `label`, and list-item `variant`).
-- [ ] Remove index/label-based ambiguity resolution from update targeting (Phase 3).
+- [x] Remove index/label-based ambiguity resolution from update targeting (Phase 3).
 
 Parser test cases:
 
@@ -307,14 +307,14 @@ The current updater has a high blast radius and participates in config processin
 
 Tasks:
 
-- [ ] Derive the target region code from `cfg.product` using `split("-", 1)[1]` behavior.
-- [ ] Locate the on-disk region by exact mapping key.
-- [ ] Resolve the current effective region from the latest on-disk YAML.
-- [ ] Verify the on-disk effective immutable identity still matches `cfg`.
-- [ ] Verify the target fingerprint identity matches `cfg` before any write.
-- [ ] Fail closed if the region was removed, renamed, duplicated, or changed incompatibly.
-- [ ] Remove legacy `_matching_variant_index()` behavior.
-- [ ] Ensure concurrent region workers continue to serialize through the config lock.
+- [x] Derive the target region code from `cfg.product` using `split("-", 1)[1]` behavior.
+- [x] Locate the on-disk region by exact mapping key.
+- [x] Resolve the current effective region from the latest on-disk YAML.
+- [x] Verify the on-disk effective immutable identity still matches `cfg`.
+- [x] Verify the target fingerprint identity matches `cfg` before any write.
+- [x] Fail closed if the region was removed, renamed, duplicated, or changed incompatibly.
+- [x] Remove legacy `_matching_variant_index()` behavior.
+- [x] Ensure concurrent region workers continue to serialize through the config lock.
 
 ### Phase 4 — Implement compact in-place YAML rewriting
 
@@ -553,3 +553,6 @@ Add dated entries as work proceeds.
 - Phase 2 complete: replaced runtime YAML loading with strict compact `regions` parsing and stable region identities.
 - Phase 2 is intentionally transitional: bundled legacy configs remain unloadable until the repository migration phase and this intermediate commit must not be released independently.
 - Phase 2 validation: parser/helper tests passed (`62 passed`); full suite passed (`228 passed`).
+- Phase 3 complete: replaced index/label-based update targeting with exact compact region resolution and fail-closed identity checks.
+- Phase 3 review: update targeting now also rejects a `Config` whose stable region identity disagrees with its derived product region, and compact no-op behavior has regression coverage.
+- Phase 3 validation: compact targeting tests passed (`10 passed`). Compact YAML rewriting remains Phase 4 work.
