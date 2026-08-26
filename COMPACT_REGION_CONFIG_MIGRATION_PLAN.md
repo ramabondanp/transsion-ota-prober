@@ -354,19 +354,19 @@ EU:
 
 Tasks:
 
-- [ ] Map region blocks safely for both scalar and expanded entries.
-- [ ] Rewrite scalar incrementals without reserializing the whole file.
-- [ ] Promote scalar entries to mappings when required.
-- [ ] Rewrite or insert `android_version`, `build_tag`, and `incremental` in expanded entries.
-- [ ] Remove `android_version` when it equals the top-level default.
-- [ ] Remove `build_tag` when it equals the canonical tag for the effective Android version.
-- [ ] Collapse an expanded entry to scalar when no overrides remain.
-- [ ] Preserve region-specific `product_base` overrides.
-- [ ] Preserve inline comments where possible when promoting or collapsing entries.
-- [ ] Preserve quote safety for `#`, `:`, and other YAML-significant characters.
-- [ ] Preserve LF/CRLF style and final-newline behavior.
-- [ ] Keep temp-file, fsync, chmod, round-trip parse, and atomic `os.replace()` behavior.
-- [ ] Keep original files byte-identical on every rejected or failed update.
+- [x] Map region blocks safely for both scalar and expanded entries.
+- [x] Rewrite scalar incrementals without reserializing the whole file.
+- [x] Promote scalar entries to mappings when required.
+- [x] Rewrite or insert `android_version`, `build_tag`, and `incremental` in expanded entries.
+- [x] Remove `android_version` when it equals the top-level default.
+- [x] Remove `build_tag` when it equals the canonical tag for the effective Android version.
+- [x] Collapse an expanded entry to scalar when no overrides remain.
+- [x] Preserve region-specific `product_base` overrides.
+- [x] Preserve inline comments where possible when promoting or collapsing entries.
+- [x] Preserve quote safety for `#`, `:`, and other YAML-significant characters.
+- [x] Preserve LF/CRLF style and final-newline behavior.
+- [x] Keep temp-file, fsync, chmod, round-trip parse, and atomic `os.replace()` behavior.
+- [x] Keep original files byte-identical on every rejected or failed update.
 
 ### Phase 5 — Default Android convergence
 
@@ -556,3 +556,6 @@ Add dated entries as work proceeds.
 - Phase 3 complete: replaced index/label-based update targeting with exact compact region resolution and fail-closed identity checks.
 - Phase 3 review: update targeting now also rejects a `Config` whose stable region identity disagrees with its derived product region, and compact no-op behavior has regression coverage.
 - Phase 3 validation: compact targeting tests passed (`10 passed`). Compact YAML rewriting remains Phase 4 work.
+- Phase 4 complete: implemented compact scalar/mapping rewrites with atomic round-trip publication.
+- Phase 4 review: preserved missing final newlines when expanded regions are normalized or collapsed, and added atomic-failure regression coverage.
+- Phase 4 validation: rewrite and targeting tests passed (`22 passed`).

@@ -628,11 +628,14 @@ def _update_config_from_fingerprint(
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
-    Log.w(
-        f"Compact region update for {config_path} requires the Phase 4 "
-        "region YAML rewriter; configuration was not updated."
-    )
-    return False
+    lines = raw_text.splitlines(keepends=True)
+    newline = _detect_newline(raw_text)
+    if not _rewrite_compact_region(
+        lines, data, region_code, updates, newline, config_path
+    ):
+        return False
+
+    return _write_updated_config(config_path, lines, raw_text, cfg, region_code, updates)
 
 
 def _detect_newline(raw_text: str) -> str:
@@ -703,6 +706,263 @@ def _resolve_update_target(
         )
         return False, None
     return True, region_code
+
+
+def _region_block_span(
+    lines: list[str], region_code: str, config_path: Path
+) -> tuple[int, int, int, int] | None:
+    """Locate a compact region block as (start, end, key indent, child indent)."""
+    regions_line_idx = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if _direct_key_line(line, "regions", indent=0)
+        ),
+        None,
+    )
+    if regions_line_idx is None:
+        Log.w(f"Could not find 'regions' section in {config_path}.")
+        return None
+
+    regions_indent = len(
+        _DIRECT_KEY_RE.match(_line_body_and_ending(lines[regions_line_idx])[0]).group(
+            "indent"
+        )
+    )
+    region_indent: int | None = None
+    region_lines: dict[str, int] = {}
+    regions_end = len(lines)
+
+    for index in range(regions_line_idx + 1, len(lines)):
+        body, _ = _line_body_and_ending(lines[index])
+        if not body.strip() or body.lstrip().startswith("#"):
+            continue
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None:
+            continue
+        indent = len(match.group("indent"))
+        if indent <= regions_indent:
+            regions_end = index
+            break
+        if region_indent is None:
+            region_indent = indent
+        if indent == region_indent:
+            region_lines[match.group("key")] = index
+
+    start = region_lines.get(region_code)
+    if region_indent is None or start is None:
+        Log.w(f"Could not map region {region_code!r} in {config_path}.")
+        return None
+
+    end = regions_end
+    for index in region_lines.values():
+        if start < index < end:
+            end = index
+
+    child_indent = region_indent + 2
+    for index in range(start + 1, end):
+        body, _ = _line_body_and_ending(lines[index])
+        match = _DIRECT_KEY_RE.match(body)
+        if match is not None and len(match.group("indent")) > region_indent:
+            child_indent = len(match.group("indent"))
+            break
+
+    return start, end, region_indent, child_indent
+
+
+def _line_value_is_scalar(line: str) -> bool:
+    body, _ = _line_body_and_ending(line)
+    match = _DIRECT_KEY_RE.match(body)
+    if match is None:
+        return False
+    value = body[match.end() :]
+    comment_index = _comment_start(value)
+    if comment_index is not None:
+        value = value[:comment_index]
+    return bool(value.strip())
+
+
+def _inline_comment(line: str) -> str | None:
+    body, _ = _line_body_and_ending(line)
+    index = _comment_start(body)
+    return body[index:] if index is not None else None
+
+
+def _comment_line(line: str, indent: int) -> str | None:
+    comment = _inline_comment(line)
+    if comment is None:
+        return None
+    _, newline = _line_body_and_ending(line)
+    return " " * indent + comment + newline
+
+
+def _desired_region_values(
+    data: dict[str, Any], region_code: str, updates: dict[str, str]
+) -> dict[str, str] | None:
+    regions = data.get("regions")
+    if not isinstance(regions, dict) or region_code not in regions:
+        return None
+
+    region_data = regions[region_code]
+    if isinstance(region_data, str):
+        product_base = data["product_base"]
+    elif isinstance(region_data, dict):
+        product_base = region_data.get("product_base", data["product_base"])
+    else:
+        return None
+
+    desired: dict[str, str] = {}
+    if product_base != data["product_base"]:
+        desired["product_base"] = str(product_base)
+    if updates["android_version"] != data["android_version"]:
+        desired["android_version"] = updates["android_version"]
+
+    try:
+        canonical_build_tag = resolve_build_tag(updates["android_version"])
+    except ValueError:
+        canonical_build_tag = None
+    if canonical_build_tag is None or updates["build_tag"] != canonical_build_tag:
+        desired["build_tag"] = updates["build_tag"]
+    desired["incremental"] = updates["incremental"]
+    return {
+        key: desired[key]
+        for key in ("product_base", "android_version", "build_tag", "incremental")
+        if key in desired
+    }
+
+
+def _rewrite_region_mapping(
+    block: list[str],
+    region_indent: int,
+    child_indent: int,
+    desired: dict[str, str],
+    newline: str,
+) -> list[str]:
+    """Update an expanded region while retaining surrounding comments/blanks."""
+    had_final_newline = bool(_line_body_and_ending(block[-1])[1])
+    present: set[str] = set()
+    rewritten: list[str] = [block[0]]
+    for line in block[1:]:
+        body, _ = _line_body_and_ending(line)
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None or len(match.group("indent")) != child_indent:
+            rewritten.append(line)
+            continue
+
+        key = match.group("key")
+        if key in desired:
+            rewritten.append(_rewrite_yaml_line(line, key, desired[key]))
+            present.add(key)
+            continue
+
+        comment_line = _comment_line(line, child_indent)
+        if comment_line is not None:
+            rewritten.append(comment_line)
+
+    missing = [key for key in desired if key not in present]
+    if missing:
+        insert_at = 1
+        inserted = [
+            " " * child_indent
+            + f"{key}: {_quote_yaml_string(desired[key])}{newline}"
+            for key in missing
+        ]
+        rewritten[insert_at:insert_at] = inserted
+    if not had_final_newline:
+        final_body, _ = _line_body_and_ending(rewritten[-1])
+        rewritten[-1] = final_body
+    return rewritten
+
+
+def _collapse_region_mapping(
+    block: list[str], region_code: str, region_indent: int, incremental: str
+) -> list[str]:
+    """Collapse an expanded region to scalar incremental form."""
+    had_final_newline = bool(_line_body_and_ending(block[-1])[1])
+    region_line = block[0]
+    body, line_ending = _line_body_and_ending(region_line)
+    comment = _inline_comment(region_line)
+    scalar_line = _rewrite_yaml_line(
+        f"{' ' * region_indent}{region_code}: {line_ending}",
+        region_code,
+        incremental,
+    )
+    scalar_body, _ = _line_body_and_ending(scalar_line)
+    if comment is not None:
+        scalar_body = f"{scalar_body.rstrip()} {comment}"
+    scalar_line = scalar_body + line_ending
+
+    collapsed = [scalar_line]
+    for line in block[1:]:
+        body, _ = _line_body_and_ending(line)
+        if not body.strip() or body.lstrip().startswith("#"):
+            collapsed.append(line)
+            continue
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None or len(match.group("indent")) <= region_indent:
+            collapsed.append(line)
+            continue
+        comment_line = _comment_line(line, len(match.group("indent")))
+        if comment_line is not None:
+            collapsed.append(comment_line)
+    if not had_final_newline:
+        final_body, _ = _line_body_and_ending(collapsed[-1])
+        collapsed[-1] = final_body
+    return collapsed
+
+
+def _rewrite_compact_region(
+    lines: list[str],
+    data: dict[str, Any],
+    region_code: str,
+    updates: dict[str, str],
+    newline: str,
+    config_path: Path,
+) -> bool:
+    """Rewrite one compact region without reserializing unrelated YAML."""
+    span = _region_block_span(lines, region_code, config_path)
+    desired = _desired_region_values(data, region_code, updates)
+    if span is None or desired is None:
+        return False
+
+    start, end, region_indent, child_indent = span
+    block = lines[start:end]
+    if _line_value_is_scalar(block[0]):
+        if tuple(desired) == ("incremental",):
+            lines[start] = _rewrite_yaml_line(
+                block[0], region_code, desired["incremental"]
+            )
+            return True
+
+        body, line_ending = _line_body_and_ending(block[0])
+        comment = _inline_comment(block[0])
+        region_match = _DIRECT_KEY_RE.match(body)
+        if region_match is None:
+            Log.w(f"Could not parse region {region_code!r} in {config_path}.")
+            return False
+        region_line = body[: region_match.end()].rstrip()
+        if comment:
+            region_line += f" {comment}"
+        region_line += line_ending or newline
+        inserted = [
+            " " * child_indent
+            + f"{key}: {_quote_yaml_string(desired[key])}{newline}"
+            for key in desired
+        ]
+        if line_ending == "":
+            inserted[-1] = inserted[-1][:-len(newline)]
+        lines[start:end] = [region_line, *inserted, *block[1:]]
+        return True
+
+    if tuple(desired) == ("incremental",):
+        lines[start:end] = _collapse_region_mapping(
+            block, region_code, region_indent, desired["incremental"]
+        )
+    else:
+        lines[start:end] = _rewrite_region_mapping(
+            block, region_indent, child_indent, desired, newline
+        )
+    return True
 
 
 def _rewrite_variant_block(

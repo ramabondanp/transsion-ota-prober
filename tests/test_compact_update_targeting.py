@@ -168,7 +168,7 @@ def test_matching_compact_fingerprint_is_a_successful_noop(tmp_path):
     assert path.read_bytes() == before
 
 
-def test_non_noop_compact_update_does_not_write_before_phase_4(tmp_path):
+def test_non_noop_compact_update_writes_target_region(tmp_path):
     path = tmp_path / "config.yml"
     _write_compact_config(path)
     cfg = _configs(path)[0]
@@ -178,5 +178,9 @@ def test_non_noop_compact_update_does_not_write_before_phase_4(tmp_path):
         "CUSTOM.TAG/201500099:user/release-keys"
     )
 
-    assert update_config_from_fingerprint(path, cfg, target) is False
-    assert path.read_bytes() == before
+    assert update_config_from_fingerprint(path, cfg, target) is True
+    assert path.read_bytes() != before
+    updated = Config.from_yaml(path)[0]
+    assert updated.android_version == "17"
+    assert updated.build_tag == "CUSTOM.TAG"
+    assert updated.incremental == "201500099"
