@@ -3,6 +3,7 @@ top-level run orchestration (sequential and parallel)."""
 
 import argparse
 import io
+import math
 import signal
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -152,8 +153,8 @@ def resolve_config_dir(value: Path) -> Path:
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     args.zip_proxy = getattr(args, "fetch_zip_proxy", False)
-    if args.timeout < 0:
-        parser.error("--timeout must be >= 0")
+    if not math.isfinite(args.timeout) or args.timeout < 0:
+        parser.error("--timeout must be a finite number >= 0")
     if args.update_incremental:
         args.skip_telegram = True
     if args.gen_fp:

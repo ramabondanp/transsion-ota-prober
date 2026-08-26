@@ -59,6 +59,27 @@ def test_direct_fingerprint_does_not_seed_configs(monkeypatch):
     assert cli.main() == 0
 
 
+def test_nonfinite_timeout_is_rejected():
+    parser = cli.build_parser()
+    for value in ("nan", "inf"):
+        args = parser.parse_args([
+            "--fp",
+            "OEM/product/device:14/build/incremental:user/release-keys",
+            "--timeout",
+            value,
+        ])
+        with pytest.raises(SystemExit):
+            cli._validate_args(parser, args)
+
+    args = parser.parse_args([
+        "--fp",
+        "OEM/product/device:14/build/incremental:user/release-keys",
+        "--timeout=-inf",
+    ])
+    with pytest.raises(SystemExit):
+        cli._validate_args(parser, args)
+
+
 def test_existing_config_file_wins_without_seeding(monkeypatch, tmp_path):
     config = tmp_path / "custom.yml"
     config.touch()

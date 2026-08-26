@@ -23,6 +23,11 @@ def _title_lock_path(path: Path, title: str) -> Path:
     return path.with_name(f"{path.name}.{digest}.lock")
 
 
+def _database_lock_path(path: Path) -> Path:
+    """Return the stable lock inode used across processed-file replacements."""
+    return path.with_name(f"{path.name}.db.lock")
+
+
 def _open_locked(path: Path, mode: str) -> TextIO:
     handle = cast(TextIO, path.open(mode, encoding="utf-8"))
     try:
@@ -44,17 +49,24 @@ def _close_locked(handle: TextIO) -> None:
 
 @contextmanager
 def _locked_file(path: Path, mode: str = "a+"):
-    """Open a file and hold an advisory exclusive lock for its whole context.
+    """Open a file under a stable lock that survives atomic replacement.
 
-    On POSIX systems this serializes checkota processes that update the shared
-    processed-updates file. On platforms without fcntl it degrades to an
-    unlocked file handle.
+    The data file is replaced when the title history is trimmed, so locking
+    the data inode alone is insufficient: a second process can open the new
+    inode after os.replace() and bypass the first lock. The separate database
+    lock inode remains stable across replacements and is held for the entire
+    read/append/trim transaction. On platforms without fcntl this degrades to
+    unlocked file handles.
     """
-    handle = _open_locked(path, mode)
+    database_lock = _open_locked(_database_lock_path(path), "a+")
     try:
-        yield handle
+        handle = _open_locked(path, mode)
+        try:
+            yield handle
+        finally:
+            _close_locked(handle)
     finally:
-        _close_locked(handle)
+        _close_locked(database_lock)
 
 
 def _read_titles(handle: TextIO) -> tuple[list[str], set[str]]:
@@ -80,8 +92,9 @@ def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
     Truncating the locked handle in place is not crash-safe: a power loss
     mid-truncate loses the whole dedup history and causes duplicate
     notifications. A temp-file swap keeps either the old or the new content,
-    never nothing. The lock held on the old inode stays effective for this
-    critical section because the swap happens last.
+    never nothing. The stable database lock remains held across the swap, so
+    another process cannot read or replace the path until the new inode is
+    fully published.
     """
     path = Path(name)
     fd, tmp_name = tempfile.mkstemp(
@@ -102,9 +115,10 @@ def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
 
 
 def load_processed_titles(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
     try:
+        # Acquire the stable lock before checking/opening the data file so a
+        # concurrent first writer or trim cannot change the path between the
+        # existence check and the read.
         with _locked_file(path, "r") as handle:
             return {line.strip() for line in handle if line.strip()}
     except FileNotFoundError:

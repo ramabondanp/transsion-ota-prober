@@ -233,6 +233,45 @@ def test_watchdog_only_signals_and_hard_exits(monkeypatch):
     ]
 
 
+def test_watchdog_exits_even_when_stdio_flush_fails(monkeypatch):
+    from checkota import runtime
+
+    calls = []
+
+    class _Event:
+        def set(self):
+            calls.append("event_set")
+
+    class _Ctx:
+        stop_event = _Event()
+        pending_notifications: typing.ClassVar[list[object]] = []
+        pending_lock = threading.Lock()
+        cli_args = None
+        drain_lock = threading.Lock()
+
+    class _Timer:
+        def __init__(self, timeout, callback):
+            self.callback = callback
+
+        def start(self):
+            pass
+
+    class _BrokenStream:
+        def flush(self):
+            calls.append("flush_failed")
+            raise BrokenPipeError("closed pipe")
+
+    monkeypatch.setattr(runtime.threading, "Timer", _Timer)
+    monkeypatch.setattr(runtime.os, "_exit", lambda code: calls.append(("exit", code)))
+    monkeypatch.setattr(runtime.sys, "stdout", _BrokenStream())
+    monkeypatch.setattr(runtime.sys, "stderr", _BrokenStream())
+
+    watchdog = runtime.start_watchdog(_Ctx(), 1)  # type: ignore[arg-type]
+    watchdog.callback()  # type: ignore[union-attr,attr-defined]
+
+    assert calls == ["event_set", "flush_failed", "flush_failed", "flush_failed", "flush_failed", ("exit", 124)]
+
+
 def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
     """Timeout mid-sweep must flush buffered notifications, not discard them.
 

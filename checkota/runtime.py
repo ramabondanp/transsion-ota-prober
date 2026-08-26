@@ -175,20 +175,33 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
 
     def _on_timeout() -> None:
         ctx.stop_event.set()
-        # Flush buffered stdio: os._exit skips interpreter shutdown, so piped
-        # (block-buffered) output would otherwise be lost.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        # Best-effort flush of buffered Telegram notifications before the hard
-        # exit; a one-shot cron run would otherwise lose every update found by
-        # this sweep. Bounded and fully guarded -- teardown must not hang or
-        # crash because of it.
-        _emergency_drain_notifications(ctx)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
-        # the stop_event mid-call, so force termination after the budget.
-        os._exit(124)
+
+        def flush_stdio() -> None:
+            # os._exit skips interpreter shutdown, so piped (block-buffered)
+            # output would otherwise be lost. A closed pipe or custom stream
+            # must not prevent the hard exit below.
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except BaseException:
+                    pass
+
+        try:
+            flush_stdio()
+            # Best-effort flush of buffered Telegram notifications before the
+            # hard exit; a one-shot cron run would otherwise lose every update
+            # found by this sweep. Teardown must not hang or crash because of
+            # any exception raised by this optional path.
+            try:
+                _emergency_drain_notifications(ctx)
+            except BaseException:
+                pass
+            flush_stdio()
+        finally:
+            # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
+            # stop_event mid-call, so force termination after the budget even
+            # when output flushing or emergency draining fails.
+            os._exit(124)
 
     watchdog = threading.Timer(timeout, _on_timeout)
     watchdog.daemon = True
