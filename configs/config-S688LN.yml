@@ -1,7 +1,6 @@
 oem: "itel"
-product: "S688LN-OP"
-device: "itel-S688LN"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "185001"
+product_base: "S688LN"
 model: "itel Super 26 Ultra"
+android_version: "15"
+regions:
+  OP: "185001"

@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6886-OP"
-device: "Infinix-X6886"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301400011"
+product_base: "X6886"
 model: "Infinix HOT 60 Pro+"
+android_version: "16"
+regions:
+  OP: "301400011"

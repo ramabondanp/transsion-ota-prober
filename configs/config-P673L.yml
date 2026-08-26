@@ -1,7 +1,6 @@
 oem: "Itel"
-product: "P673L-OP"
-device: "itel-P673L"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260706V1567"
+product_base: "P673L"
 model: "itel P70"
+android_version: "14"
+regions:
+  OP: "260706V1567"

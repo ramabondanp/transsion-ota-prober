@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "AD11-GL"
-device: "TECNO-AD11"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "135021"
+product_base: "AD11"
 model: "TECNO PHANTOM V Flip 5G"
+android_version: "15"
+regions:
+  GL: "135021"

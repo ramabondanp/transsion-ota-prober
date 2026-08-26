@@ -1,28 +1,11 @@
 oem: "Infinix"
-device: "Infinix-X6856"
+product_base: "X6856"
 model: "Infinix NOTE 50 Pro+ 5G"
-
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6856-OP"
-    incremental: "201500012"
-
-  - variant: "Europe"
+android_version: "16"
+regions:
+  OP: "201500012"
+  EU:
     android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "X6856-EU"
     incremental: "123030"
-
-  - variant: "Turkey"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6856-TR"
-    incremental: "201500012"
-
-  - variant: "Russia"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6856-RU"
-    incremental: "201500012"
+  TR: "201500012"
+  RU: "201500012"

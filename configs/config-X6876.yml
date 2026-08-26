@@ -1,22 +1,8 @@
 oem: "Infinix"
-device: "Infinix-X6876"
+product_base: "X6876"
 model: "Infinix GT 30"
-
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6876-OP"
-    incremental: "201500013"
-
-  - variant: "India"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6876-IN"
-    incremental: "201500013"
-
-  - variant: "Russia"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6876-RU"
-    incremental: "201500013"
+android_version: "16"
+regions:
+  OP: "201500013"
+  IN: "201500013"
+  RU: "201500013"

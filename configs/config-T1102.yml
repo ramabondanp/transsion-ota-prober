@@ -1,7 +1,8 @@
 oem: "TECNO"
-product: "T1102-OP"
-device: "TECNO-T1102"
-android_version: "15"
-build_tag: "AQ3A.250226.002"
-incremental: "251231V152"
+product_base: "T1102"
 model: "TECNO MEGAPAD SE (SD685)"
+android_version: "15"
+regions:
+  OP:
+    build_tag: "AQ3A.250226.002"
+    incremental: "251231V152"

@@ -396,29 +396,29 @@ To prevent duplication after staggered regional upgrades:
 
 Migration procedure:
 
-- [ ] Write or run a deterministic one-time migration utility that reads the legacy schema independently of the new runtime parser.
-- [ ] For each file, preserve original region order.
-- [ ] Select the most common effective product base as top-level `product_base`; use original order as the tie-breaker.
-- [ ] Select the most common effective Android version as top-level `android_version`; use original order as the tie-breaker.
-- [ ] Emit scalar region entries when product base and Android match defaults and the tag is canonical.
-- [ ] Emit expanded entries containing only necessary overrides.
-- [ ] Omit all canonical build tags.
-- [ ] Preserve the X6857B India product-base override.
-- [ ] Preserve the X1301 and T1102 build-tag exceptions.
-- [ ] Quote every scalar fingerprint value.
-- [ ] Use a deterministic key order:
+- [x] Write or run a deterministic one-time migration utility that reads the legacy schema independently of the new runtime parser.
+- [x] For each file, preserve original region order.
+- [x] Select the most common effective product base as top-level `product_base`; use original order as the tie-breaker.
+- [x] Select the most common effective Android version as top-level `android_version`; use original order as the tie-breaker.
+- [x] Emit scalar region entries when product base and Android match defaults and the tag is canonical.
+- [x] Emit expanded entries containing only necessary overrides.
+- [x] Omit all canonical build tags.
+- [x] Preserve the X6857B India product-base override.
+- [x] Preserve the X1301 and T1102 build-tag exceptions.
+- [x] Quote every scalar fingerprint value.
+- [x] Use a deterministic key order:
   1. `oem`
   2. `product_base`
   3. `model`
   4. `android_version`
   5. `regions`
-- [ ] Use deterministic expanded-region key order:
+- [x] Use deterministic expanded-region key order:
   1. `product_base`
   2. `android_version`
   3. `build_tag`
   4. `incremental`
-- [ ] Ensure all 114 files use the new schema.
-- [ ] Ensure no tracked config contains `variants:`, `product:`, `device:`, or a canonical `build_tag:` after migration.
+- [x] Ensure all 114 files use the new schema.
+- [x] Ensure no tracked config contains `variants:`, `product:`, `device:`, or a canonical `build_tag:` after migration.
 
 ### Phase 8 — Prove migration equivalence
 
@@ -565,3 +565,5 @@ Add dated entries as work proceeds.
 - Phase 6 complete: added full pre/post region invariants, concurrent/stale-config coverage, and atomic failure tests.
 - Phase 6 review: the existing global worker pool now has deterministic lock-serialization coverage; target, non-target, identity, region-set, stale-object, and exact temporary-parse invariants are exercised before publication. Failed `fdopen` setup also closes the owned temporary descriptor.
 - Phase 6 validation: safety, convergence, rewrite, and targeting tests passed (`40 passed`).
+- Phase 7 complete: migrated all repository configs with a deterministic independent legacy reader and compact emitter.
+- Phase 7 validation: `114` files and `148` configs load; forbidden legacy keys are absent; migration manifest is byte-for-byte equivalent with SHA-256 `50aa62e1eedd9994f1f763a5a9e92d10d7b840717ea3d7af0dab76b391639519`.

@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "T1101-OP"
-device: "TECNO-T1101"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260625V1051"
+product_base: "T1101"
 model: "TECNO MEGAPAD 11"
+android_version: "14"
+regions:
+  OP: "260625V1051"

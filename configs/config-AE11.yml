@@ -1,30 +1,9 @@
 oem: "TECNO"
-device: "TECNO-AE11"
-android_version: "14"
-build_tag: "UP1A.231005.007"
+product_base: "AE11"
 model: "TECNO PHANTOM V Flip2 5G"
-
-variants:
-  - variant: "Global"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "AE11-OP"
-    incremental: "135001"
-
-  - variant: "Turkey"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "AE11-TR"
-    incremental: "135003"
-
-  - variant: "Russia"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "AE11-RU"
-    incremental: "135003"
-
-  - variant: "India"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "AE11-IN"
-    incremental: "135003"
+android_version: "15"
+regions:
+  OP: "135001"
+  TR: "135003"
+  RU: "135003"
+  IN: "135003"

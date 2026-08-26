@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6882-OP"
-device: "Infinix-X6882"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260710V1603"
+product_base: "X6882"
 model: "Infinix HOT 50 4G"
+android_version: "14"
+regions:
+  OP: "260710V1603"

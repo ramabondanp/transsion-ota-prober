@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6861-OP"
-device: "Infinix-X6861"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "180005"
+product_base: "X6861"
 model: "Infinix ZERO 40 5G"
+android_version: "15"
+regions:
+  OP: "180005"

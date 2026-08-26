@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CM8-OP"
-device: "TECNO-CM8"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "201500015"
+product_base: "CM8"
 model: "TECNO CAMON 40 Premier 5G"
+android_version: "16"
+regions:
+  OP: "201500015"

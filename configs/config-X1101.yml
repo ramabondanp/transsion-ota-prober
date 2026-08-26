@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X1101-OP"
-device: "Infinix-X1101"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "250616V1026"
+product_base: "X1101"
 model: "Infinix XPAD"
+android_version: "14"
+regions:
+  OP: "250616V1026"

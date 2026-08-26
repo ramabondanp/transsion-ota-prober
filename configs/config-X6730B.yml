@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6730B-OP"
-device: "Infinix-X6730B"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "185002"
+product_base: "X6730B"
 model: "Infinix HOT 60i 5G"
+android_version: "15"
+regions:
+  OP: "185002"

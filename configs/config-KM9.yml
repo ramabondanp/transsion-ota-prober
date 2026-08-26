@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KM9-OP"
-device: "TECNO-KM9"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301450032"
+product_base: "KM9"
 model: "TECNO POVA Slim 5G"
+android_version: "16"
+regions:
+  OP: "301450032"

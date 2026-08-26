@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "T1201-OP"
-device: "TECNO-T1201"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "260120V1317"
+product_base: "T1201"
 model: "TECNO MegaPad Pro"
+android_version: "15"
+regions:
+  OP: "260120V1317"

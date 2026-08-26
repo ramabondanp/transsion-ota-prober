@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6531-OP"
-device: "Infinix-X6531"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260713V3301"
+product_base: "X6531"
 model: "Infinix HOT 50i"
+android_version: "14"
+regions:
+  OP: "260713V3301"

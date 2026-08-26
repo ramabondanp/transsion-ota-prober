@@ -1,19 +1,9 @@
 oem: "Infinix"
-device: "Infinix-X6857"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
+product_base: "X6857"
 model: "Infinix NOTE 50X 5G"
-
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6857-OP"
-    incremental: "201500013"
-
-  - variant: "India"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6857B-IN"
-    device: "Infinix-X6857B"
+android_version: "16"
+regions:
+  OP: "201500013"
+  IN:
+    product_base: "X6857B"
     incremental: "201500018"

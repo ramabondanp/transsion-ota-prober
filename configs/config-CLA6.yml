@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CLA6-OP"
-device: "TECNO-CLA6"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301400008"
+product_base: "CLA6"
 model: "TECNO CAMON 30S Pro"
+android_version: "16"
+regions:
+  OP: "301400008"
