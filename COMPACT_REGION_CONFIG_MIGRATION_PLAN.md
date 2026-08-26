@@ -2,7 +2,7 @@
 
 - **Branch:** `feat/compact-region-configs`
 - **Created:** 2026-08-27
-- **Status:** Phase 2 complete
+- **Status:** Phase 6 complete; Phase 7 not started
 - **Decision:** Clean break — the legacy `variants` schema will not be supported by the runtime after migration.
 
 ## Purpose
@@ -382,15 +382,15 @@ To prevent duplication after staggered regional upgrades:
 
 ### Phase 6 — Round-trip and concurrency safety
 
-- [ ] Reparse the temporary output with `_UniqueKeyLoader` before publication.
-- [ ] Resolve every region before and after the rewrite.
-- [ ] Verify the target region matches all target fingerprint values.
-- [ ] Verify every non-target region keeps the same complete effective fingerprint.
-- [ ] Verify immutable identity for every region remains unchanged.
-- [ ] Keep lock cleanup behavior intact.
-- [ ] Test two region updates against one config under the existing global pool.
-- [ ] Test stale in-memory `Config` objects after another region updates the same file.
-- [ ] Test write, parse, chmod, fsync, and replace failures leave the original untouched.
+- [x] Reparse the temporary output with `_UniqueKeyLoader` before publication.
+- [x] Resolve every region before and after the rewrite.
+- [x] Verify the target region matches all target fingerprint values.
+- [x] Verify every non-target region keeps the same complete effective fingerprint.
+- [x] Verify immutable identity for every region remains unchanged.
+- [x] Keep lock cleanup behavior intact.
+- [x] Test two region updates against one config under the existing global pool.
+- [x] Test stale in-memory `Config` objects after another region updates the same file.
+- [x] Test write, parse, chmod, fsync, and replace failures leave the original untouched.
 
 ### Phase 7 — Migrate all repository configs
 
@@ -562,3 +562,6 @@ Add dated entries as work proceeds.
 - Phase 5 complete: added all-region Android default convergence with majority and noncanonical-tag safeguards.
 - Phase 5 review: convergence now runs for already-current targets and verifies every effective region fingerprint before publication.
 - Phase 5 validation: convergence, rewrite, and targeting tests passed (`26 passed`).
+- Phase 6 complete: added full pre/post region invariants, concurrent/stale-config coverage, and atomic failure tests.
+- Phase 6 review: the existing global worker pool now has deterministic lock-serialization coverage; target, non-target, identity, region-set, stale-object, and exact temporary-parse invariants are exercised before publication. Failed `fdopen` setup also closes the owned temporary descriptor.
+- Phase 6 validation: safety, convergence, rewrite, and targeting tests passed (`40 passed`).

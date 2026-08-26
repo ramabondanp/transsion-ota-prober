@@ -618,6 +618,19 @@ def _update_config_from_fingerprint(
             "configuration was not updated."
         )
         return False
+    try:
+        before_configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError) as exc:
+        Log.w(f"Could not snapshot config {config_path} before updating: {exc}")
+        return False
+    before_by_region = {
+        config.variant: config
+        for config in before_configs
+        if config.variant is not None
+    }
+    if len(before_by_region) != len(before_configs):
+        Log.w(f"Could not uniquely identify regions in {config_path}.")
+        return False
 
     already_matches = all(
         key in effective
@@ -637,7 +650,13 @@ def _update_config_from_fingerprint(
         return False
 
     return _write_updated_config(
-        config_path, lines, raw_text, cfg, region_code, updates
+        config_path,
+        lines,
+        raw_text,
+        cfg,
+        region_code,
+        updates,
+        before_by_region,
     )
 
 
@@ -1214,6 +1233,7 @@ def _write_updated_config(
     cfg: Config,
     region_code: str | None,
     updates: dict[str, str],
+    before_by_region: dict[str, Config],
 ) -> bool:
     """Persist rewritten lines atomically after a round-trip verification."""
     new_text = "".join(lines)
@@ -1237,7 +1257,14 @@ def _write_updated_config(
             prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
         )
         tmp_path = Path(tmp_name)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except BaseException:
+            # fdopen takes ownership only when it succeeds. Avoid leaking the
+            # mkstemp descriptor on setup failures, including cancellation.
+            os.close(fd)
+            raise
+        with handle:
             handle.write(new_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -1246,22 +1273,49 @@ def _write_updated_config(
         if not isinstance(reparse, dict):
             raise TypeError(f"Round-trip parse yielded {type(reparse).__name__}")
 
-        reparsed_effective = (
-            _effective_region_values(reparse, region_code, config_path)
-            if isinstance(reparse, dict) and region_code is not None
-            else None
-        )
-        if reparsed_effective is None or not _identity_matches(reparsed_effective, cfg):
+        reparsed_configs = Config._from_compact_data(reparse, config_path)
+        after_by_region = {
+            config.variant: config
+            for config in reparsed_configs
+            if config.variant is not None
+        }
+        if len(after_by_region) != len(reparsed_configs):
+            raise ValueError("Round-trip parse changed region identities")
+        if set(after_by_region) != set(before_by_region):
+            raise ValueError("Round-trip parse changed the region set")
+
+        for current_region, before in before_by_region.items():
+            after = after_by_region[current_region]
+            if (
+                after.oem,
+                after.product,
+                after.device,
+            ) != (before.oem, before.product, before.device):
+                raise ValueError(
+                    f"Round-trip parse changed immutable identity for region "
+                    f"{current_region!r}"
+                )
+
+        if region_code is None or region_code not in after_by_region:
+            raise ValueError("Round-trip parse lost the target region")
+        target = after_by_region[region_code]
+        if not _identity_matches(_config_values(target), cfg):
             raise ValueError("Round-trip parse changed the effective config identity")
         if not all(
-            key in reparsed_effective
-            and reparsed_effective[key] is not None
-            and str(reparsed_effective[key]) == str(value)
+            str(getattr(target, key)) == str(value)
             for key, value in updates.items()
         ):
             raise ValueError(
                 "Round-trip parse did not preserve target fingerprint values"
             )
+        for current_region, before in before_by_region.items():
+            if current_region != region_code:
+                after = after_by_region[current_region]
+                if after.fingerprint() != before.fingerprint():
+                    raise ValueError(
+                        f"Round-trip parse changed non-target region "
+                        f"{current_region!r}"
+                    )
 
         os.replace(tmp_path, config_path)
         tmp_path = None
