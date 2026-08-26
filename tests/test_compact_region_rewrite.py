@@ -206,9 +206,9 @@ def test_rewrite_preserves_crlf_and_missing_final_newline(tmp_path):
     assert b"\r\n" in updated
     assert b"\n" not in updated.replace(b"\r\n", b"")
     assert not updated.endswith(b"\n")
-    assert yaml.safe_load(updated.decode("utf-8"))["regions"]["EU"]["incremental"] == (
-        "NEW"
-    )
+    parsed = yaml.safe_load(updated.decode("utf-8"))
+    assert parsed["android_version"] == "15"
+    assert parsed["regions"]["EU"] == "NEW"
 
 
 def test_redundant_key_comments_are_retained_as_comments(tmp_path):

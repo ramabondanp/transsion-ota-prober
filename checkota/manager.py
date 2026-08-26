@@ -619,23 +619,26 @@ def _update_config_from_fingerprint(
         )
         return False
 
-    if all(
+    already_matches = all(
         key in effective
         and effective[key] is not None
         and str(effective[key]) == str(value)
         for key, value in updates.items()
-    ):
-        Log.i(f"{config_path} already matches target fingerprint values.")
-        return True
+    )
 
     lines = raw_text.splitlines(keepends=True)
     newline = _detect_newline(raw_text)
-    if not _rewrite_compact_region(
-        lines, data, region_code, updates, newline, config_path
-    ):
+    if not already_matches:
+        if not _rewrite_compact_region(
+            lines, data, region_code, updates, newline, config_path
+        ):
+            return False
+    if not _converge_android_default(lines, config_path, newline):
         return False
 
-    return _write_updated_config(config_path, lines, raw_text, cfg, region_code, updates)
+    return _write_updated_config(
+        config_path, lines, raw_text, cfg, region_code, updates
+    )
 
 
 def _detect_newline(raw_text: str) -> str:
@@ -962,6 +965,84 @@ def _rewrite_compact_region(
         lines[start:end] = _rewrite_region_mapping(
             block, region_indent, child_indent, desired, newline
         )
+    return True
+
+
+def _converge_android_default(
+    lines: list[str], config_path: Path, newline: str
+) -> bool:
+    """Promote one Android version only after all regions converge on it."""
+    try:
+        projected = _load_yaml("".join(lines))
+        configs = Config._from_compact_data(projected, config_path)
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not resolve rewritten config {config_path}: {exc}")
+        return False
+
+    versions = {config.android_version for config in configs}
+    if len(versions) != 1:
+        return True
+    converged_version = next(iter(versions))
+    if projected["android_version"] == converged_version:
+        return True
+
+    fingerprints_before = {
+        config.variant: config.fingerprint()
+        for config in configs
+        if config.variant is not None
+    }
+    if len(fingerprints_before) != len(configs):
+        Log.w(f"Could not uniquely identify all regions in {config_path}.")
+        return False
+
+    version_line = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if _direct_key_line(line, "android_version", indent=0)
+        ),
+        None,
+    )
+    if version_line is None:
+        Log.w(f"Could not find top-level android_version in {config_path}.")
+        return False
+    lines[version_line] = _rewrite_yaml_line(
+        lines[version_line], "android_version", converged_version
+    )
+
+    projected["android_version"] = converged_version
+    for config in configs:
+        if config.variant is None:
+            Log.w(f"Resolved region has no stable identity in {config_path}.")
+            return False
+        if not _rewrite_compact_region(
+            lines,
+            projected,
+            config.variant,
+            _config_values(config),
+            newline,
+            config_path,
+        ):
+            return False
+
+    try:
+        normalized = Config._from_compact_data(
+            _load_yaml("".join(lines)), config_path
+        )
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not resolve normalized config {config_path}: {exc}")
+        return False
+    fingerprints_after = {
+        config.variant: config.fingerprint()
+        for config in normalized
+        if config.variant is not None
+    }
+    if fingerprints_after != fingerprints_before:
+        Log.w(
+            "Android default promotion changed an effective region fingerprint in "
+            f"{config_path}."
+        )
+        return False
     return True
 
 

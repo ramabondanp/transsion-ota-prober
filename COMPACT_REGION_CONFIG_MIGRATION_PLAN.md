@@ -372,13 +372,13 @@ Tasks:
 
 To prevent duplication after staggered regional upgrades:
 
-- [ ] After applying an update, compute every region's effective Android version.
-- [ ] If all regions now use one Android version, promote that value to top-level `android_version`.
-- [ ] Remove now-redundant per-region Android overrides.
-- [ ] Recompute canonical tags after promotion.
-- [ ] Preserve only genuinely noncanonical per-region build-tag overrides.
-- [ ] Do not change the top-level default merely because a temporary majority changed; promote only when all regions converge.
-- [ ] Verify that convergence does not alter any effective non-target region fingerprint.
+- [x] After applying an update, compute every region's effective Android version.
+- [x] If all regions now use one Android version, promote that value to top-level `android_version`.
+- [x] Remove now-redundant per-region Android overrides.
+- [x] Recompute canonical tags after promotion.
+- [x] Preserve only genuinely noncanonical per-region build-tag overrides.
+- [x] Do not change the top-level default merely because a temporary majority changed; promote only when all regions converge.
+- [x] Verify that convergence does not alter any effective non-target region fingerprint.
 
 ### Phase 6 — Round-trip and concurrency safety
 
@@ -559,3 +559,6 @@ Add dated entries as work proceeds.
 - Phase 4 complete: implemented compact scalar/mapping rewrites with atomic round-trip publication.
 - Phase 4 review: preserved missing final newlines when expanded regions are normalized or collapsed, and added atomic-failure regression coverage.
 - Phase 4 validation: rewrite and targeting tests passed (`22 passed`).
+- Phase 5 complete: added all-region Android default convergence with majority and noncanonical-tag safeguards.
+- Phase 5 review: convergence now runs for already-current targets and verifies every effective region fingerprint before publication.
+- Phase 5 validation: convergence, rewrite, and targeting tests passed (`26 passed`).
