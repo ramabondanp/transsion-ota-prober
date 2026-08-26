@@ -56,6 +56,19 @@ REGION_CODE_MAP = {
     "COCL": "Columbia - COCL Market",
 }
 
+# Canonical Android build tags used when a compact config omits a tag.
+BUILD_TAG_BY_ANDROID = {
+    "13": "TP1A.220624.014",
+    "14": "UP1A.231005.007",
+    "15": "AP3A.240905.015.A2",
+    "16": "BP2A.250605.031.A3",
+}
+
+# Some OEMs use a device prefix whose casing differs from the OEM field.
+DEVICE_PREFIX_BY_OEM = {
+    "Itel": "itel",
+}
+
 SDK_TO_ANDROID = {
     33: "Android 13",
     34: "Android 14",

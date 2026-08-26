@@ -12,7 +12,11 @@ import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
-from checkota.constants import REGION_CODE_MAP
+from checkota.constants import (
+    BUILD_TAG_BY_ANDROID,
+    DEVICE_PREFIX_BY_OEM,
+    REGION_CODE_MAP,
+)
 from checkota.logging import Log
 
 try:
@@ -164,6 +168,32 @@ def region_from_product(product: str) -> str | None:
     """Get human-readable region name from product name."""
     code = region_code_from_product(product)
     return REGION_CODE_MAP.get(code) if code else None
+
+
+def resolve_build_tag(
+    android_version: str, explicit_build_tag: str | None = None
+) -> str:
+    """Resolve a canonical build tag, or use an explicit override."""
+    if explicit_build_tag is not None:
+        return explicit_build_tag
+
+    try:
+        return BUILD_TAG_BY_ANDROID[android_version]
+    except KeyError as exc:
+        raise ValueError(
+            f"No canonical build tag is known for Android {android_version!r}; "
+            "provide an explicit build_tag."
+        ) from exc
+
+
+def derive_product_and_device(
+    oem: str, product_base: str, region_code: str
+) -> tuple[str, str]:
+    """Derive the product and device identity for one region."""
+    product = f"{product_base}-{region_code}"
+    device_prefix = DEVICE_PREFIX_BY_OEM.get(oem, oem)
+    device = f"{device_prefix}-{product_base}"
+    return product, device
 
 
 _FINGERPRINT_RE = re.compile(
