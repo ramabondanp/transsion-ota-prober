@@ -2,8 +2,8 @@
 
 - **Branch:** `feat/compact-region-configs`
 - **Created:** 2026-08-27
-- **Status:** Phase 6 complete; Phase 7 not started
-- **Decision:** Clean break — the legacy `variants` schema will not be supported by the runtime after migration.
+- **Status:** Phase 10 complete; Phase 11 not started
+- **Decision:** Clean break — the runtime supports only the compact `regions` schema; legacy `variants` input is rejected.
 
 ## Purpose
 
@@ -21,9 +21,9 @@ This document is the implementation checklist and progress log. Check items only
 - [x] Implement constants and derivation helpers.
 - [x] Implement the new parser and validation.
 - [x] Replace the legacy variant updater with a region updater.
-- [ ] Migrate all repository configs.
-- [ ] Update tests and documentation.
-- [ ] Complete full validation and migration-equivalence checks.
+- [x] Migrate all repository configs.
+- [x] Update tests and documentation through Phase 10.
+- [x] Complete migration-equivalence checks; final Phase 12 validation remains.
 
 ## Current inventory and verified assumptions
 
@@ -102,15 +102,15 @@ regions:
 ### Noncanonical build-tag override
 
 ```yaml
-oem: "Itel"
+oem: "TECNO"
 product_base: "T1102"
-model: "..."
+model: "TECNO MEGAPAD SE (SD685)"
 android_version: "15"
 
 regions:
   OP:
     build_tag: "AQ3A.250226.002"
-    incremental: "..."
+    incremental: "251231V152"
 ```
 
 ## Schema contract
@@ -213,17 +213,17 @@ Each returned `Config` must still contain:
 - effective `android_version`
 - effective `build_tag`
 - `incremental`
-- a stable region/variant label
+- a stable region label (currently carried by the runtime `Config.variant` field)
 
-Planned compatibility within Python:
+Compatibility retained within Python:
 
-- [ ] Keep `Config.fingerprint()` behavior unchanged.
-- [ ] Keep direct-fingerprint mode (`--fp`) unchanged.
-- [ ] Keep `UpdateChecker` and user-agent construction unchanged.
-- [ ] Keep region filtering based on `region_code_from_product()` unchanged.
-- [ ] Keep notifications and metadata identity validation unchanged.
-- [ ] Use the region code as `Config.variant` for logs and debug artifact names.
-- [ ] Stop relying on the old list position for update targeting.
+- [x] Keep `Config.fingerprint()` behavior unchanged.
+- [x] Keep direct-fingerprint mode (`--fp`) unchanged.
+- [x] Keep `UpdateChecker` and user-agent construction unchanged.
+- [x] Keep region filtering based on `region_code_from_product()` unchanged.
+- [x] Keep notifications and metadata identity validation unchanged.
+- [x] Use the region code as `Config.variant` for logs and debug artifact names.
+- [x] Stop relying on the old list position for update targeting.
 
 ## Implementation phases
 
@@ -462,14 +462,14 @@ Files:
 
 Tasks:
 
-- [ ] Replace the legacy config-format section in `AGENTS.md`.
-- [ ] Update architecture and data-flow references from variants to regions.
-- [ ] Document product, device, and build-tag derivation.
-- [ ] Document Itel casing and product-base overrides.
-- [ ] Add a concise config-format section to `README.md`.
-- [ ] State clearly that existing wheel/XDG configs using `variants` are not automatically overwritten and must be manually migrated.
-- [ ] Provide before/after migration examples.
-- [ ] Document the error users receive when a legacy config is loaded.
+- [x] Replace the legacy config-format section in `AGENTS.md`.
+- [x] Update architecture and data-flow references from variants to regions.
+- [x] Document product, device, and build-tag derivation.
+- [x] Document Itel casing and product-base overrides.
+- [x] Add a concise config-format section to `README.md`.
+- [x] State clearly that existing wheel/XDG configs using `variants` are not automatically overwritten and must be manually migrated.
+- [x] Provide before/after migration examples.
+- [x] Document the error users receive when a legacy config is loaded.
 
 ### Phase 11 — Remove obsolete legacy code
 
@@ -571,3 +571,4 @@ Add dated entries as work proceeds.
 - Phase 8 validation: `python scripts/compact_manifest.py configs --output /tmp/opencode/post-migration-manifest.jsonl` plus `cmp -s /tmp/opencode/pre-migration-manifest.jsonl /tmp/opencode/post-migration-manifest.jsonl` returned `0`; `114` files, `148` entries, and the baseline SHA-256 are unchanged.
 - Phase 9 complete: converted runtime test fixtures to the compact schema, removed obsolete legacy writer/disambiguation tests, and added repository identity/tag invariants.
 - Phase 9 validation: full pytest suite passed (`275 passed`). Runtime legacy rejection remains covered explicitly by parser tests; migration-tool tests retain intentional legacy fixtures.
+- Phase 10 complete: updated `AGENTS.md` and `README.md` for the compact regions format, derivation rules, special cases, manual migration, and legacy rejection behavior.

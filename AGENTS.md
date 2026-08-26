@@ -19,14 +19,15 @@ checkota/              ← Package (import: from checkota.cli import main)
                          CHECKOTA_VENDOR_DIR override; ensure_vendor_on_path() fails loud
                          if missing. processed_updates_path() lives here.
     cli.py             ← argparse, arg validation, config-path resolution; orchestration:
-                         _run_sequential (--jobs 1), _run_global_pool ((config,variant) pool)
+                         _run_sequential (--jobs 1), _run_global_pool ((config,region) pool)
     runtime.py         ← RunContext (per-thread sessions w/ tuned HTTPAdapter pool, locks,
                          stop_event), create_run_context, install_interrupt_handler,
                          start_watchdog (--timeout)
     processor.py       ← Pipeline: collect_update_info, apply_update_actions,
-                         process_config(_variant), load_config_variants,
+                         process_config (per region), load_config_variants (region loader;
+                         legacy runtime name pending cleanup),
                          config_from_fingerprint, OTA metadata cache
-    models.py          ← VariantUpdate dataclass (processor + notifier)
+    models.py          ← VariantUpdate dataclass (runtime update result)
     description.py     ← TerminalParser (HTML→ANSI) + format_update_description
     notifier.py        ← create_notifier + build_notification_message
     constants.py       ← URLs, region codes, SDK versions, regex patterns
@@ -69,8 +70,9 @@ pyproject [tool.pyright] extraPaths teaches static analysis the same trick.
 
 ## Data Flow
 
-1. **Read config** — YAML defines fingerprint fields (`oem`, `product`, `device`,
-   `android_version`, `build_tag`, `incremental`). Multiple variants via `variants:` list.
+1. **Read config** — YAML defines shared identity/default fields (`oem`, `product_base`,
+   `model`, `android_version`) and a `regions` mapping. Product, device, and canonical
+   build tags are derived for each region; expanded regions contain only overrides.
 2. **Build request** — `UpdateChecker` builds protobuf `AndroidCheckinRequest` (fingerprint
    + generated IMEI/serial/MAC/digest), gzips, POSTs to `https://android.googleapis.com/checkin`.
 3. **Parse response** — `AndroidCheckinResponse` protobuf; scan `setting` entries for
@@ -101,36 +103,37 @@ Examples: `KL8-OP`→`OP`, `X6852-IN`→`IN`, `CN7c-OP-M1`→`OP-M1`.
 
 ### Config file format
 
-Single variant — all fields top level:
-
-```yaml
-oem: "TECNO"
-product: "KL8-OP"
-device: "TECNO-KL8"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260412V1712"
-model: "TECNO SPARK 30 5G"
-```
-
-Multiple variants — shared fields top level, list overrides:
+Every config uses the compact `regions` schema. Shared values are top level; each region
+is either a quoted incremental or an expanded mapping:
 
 ```yaml
 oem: "Infinix"
-device: "Infinix-X6873"
+product_base: "X6873"
 model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6873-OP"
-    incremental: "201350016"
-  - variant: "India"
-    product: "X6873-IN"
-    incremental: "201350016"
+android_version: "16"
+regions:
+  OP: "201500011"
+  EU:
+    android_version: "15"
+    incremental: "131015"
 ```
 
+Product is `{effective_product_base}-{region}`. Device is
+`{device_prefix}-{effective_product_base}`, where `device_prefix` is normally the exact
+`oem`; the exact OEM value `"Itel"` is the exception and maps to lowercase `itel`. A
+region may override `product_base` (the `IN` region in `config-X6857.yml` uses `X6857B`)
+or provide a noncanonical `build_tag` (currently X1301 and T1102). Canonical Android
+build tags come from `BUILD_TAG_BY_ANDROID` and must not be written in YAML.
+
 Fingerprint: `{oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys`
+
+The runtime accepts only this compact schema. A config containing `variants` fails with
+`uses the legacy 'variants' schema; migrate it to a 'regions' mapping`; a legacy
+single-region config containing `product` or `device` similarly directs the user to
+`product_base` and `regions`. From a repository checkout, migrate a legacy directory with
+`python scripts/migrate_compact_configs.py --write <config-dir>`. Bundled repository
+defaults are migrated, but existing wheel/XDG configs are never overwritten automatically
+and require this manual migration.
 
 ### Telegram HTML sanitization (`_sanitize_html`, 5 ordered steps)
 
@@ -177,9 +180,9 @@ Same two-stage approach as Telegram:
 
 A target fingerprint's immutable identity (`oem`, `product`, `device`) must match the
 config before any action: dry-run printing, config update, notification, and title
-processing all gate on `fingerprint_identity_matches_config`. Multi-variant rewrites
-disambiguate stale variant indices by label or current build values and fail closed when
-ambiguous. This prevents a mismatched OTA response from poisoning a device's config.
+processing all gate on `fingerprint_identity_matches_config`. Region updates resolve the
+exact region code and fail closed if the in-memory identity disagrees with the latest YAML.
+This prevents a mismatched OTA response from poisoning a device's config.
 
 ### Network hardening
 
