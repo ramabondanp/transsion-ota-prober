@@ -16,6 +16,7 @@ import yaml
 from yaml.constructor import ConstructorError
 
 from checkota.constants import BUILD_TAG_BY_ANDROID, DEVICE_PREFIX_BY_OEM
+from checkota.manager import Config
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -209,20 +210,21 @@ def migrate_file(path: Path, write: bool = False) -> str:
     if write:
         staged = _stage_output(path, output)
         try:
+            Config.from_yaml(staged)
             os.replace(staged, path)
         finally:
             staged.unlink(missing_ok=True)
     return output
 
 
-def _stage_output(path: Path, output: str) -> Path:
+def _stage_bytes(path: Path, content: bytes) -> Path:
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         os.fchmod(fd, stat.S_IMODE(path.stat().st_mode))
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+        with os.fdopen(fd, "wb") as stream:
             fd = -1
-            stream.write(output)
+            stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         return temporary
@@ -233,13 +235,18 @@ def _stage_output(path: Path, output: str) -> Path:
         raise
 
 
+def _stage_output(path: Path, output: str) -> Path:
+    return _stage_bytes(path, output.encode("utf-8"))
+
+
 def config_paths(config_dir: Path) -> list[Path]:
     return sorted(
-        {
+        (
             path
-            for pattern in ("config-*.yml", "config-*.yaml")
-            for path in config_dir.glob(pattern)
-        }
+            for path in config_dir.iterdir()
+            if path.is_file() and path.suffix in (".yml", ".yaml")
+        ),
+        key=lambda path: path.name.lower(),
     )
 
 
@@ -251,14 +258,44 @@ def migrate_directory(config_dir: Path, write: bool = False) -> dict[Path, str]:
     outputs = {path: migrate_file(path) for path in paths}
     if write:
         staged: dict[Path, Path] = {}
+        backups: dict[Path, Path] = {}
+        replaced: list[Path] = []
+        preserved_backups: set[Path] = set()
         try:
             for path, output in outputs.items():
-                staged[path] = _stage_output(path, output)
+                temporary = _stage_output(path, output)
+                staged[path] = temporary
+                Config.from_yaml(temporary)
+            for path in paths:
+                backups[path] = _stage_bytes(path, path.read_bytes())
             for path, temporary in staged.items():
                 os.replace(temporary, path)
+                replaced.append(path)
+        except BaseException as publication_error:
+            rollback_errors: list[tuple[Path, Path, BaseException]] = []
+            for path in reversed(replaced):
+                backup = backups[path]
+                try:
+                    os.replace(backup, path)
+                except BaseException as rollback_error:
+                    preserved_backups.add(backup)
+                    rollback_errors.append((path, backup, rollback_error))
+            if rollback_errors:
+                details = "; ".join(
+                    f"{path}: {error!r}; original retained at {backup}"
+                    for path, backup, error in rollback_errors
+                )
+                raise RuntimeError(
+                    f"migration publication failed with {publication_error!r}; "
+                    f"rollback also failed for {details}"
+                ) from publication_error
+            raise
         finally:
             for temporary in staged.values():
                 temporary.unlink(missing_ok=True)
+            for backup in backups.values():
+                if backup not in preserved_backups:
+                    backup.unlink(missing_ok=True)
     return outputs
 
 

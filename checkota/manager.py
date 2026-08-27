@@ -356,7 +356,11 @@ _FINGERPRINT_RE = re.compile(
 _IMMUTABLE_IDENTITY_KEYS = ("oem", "product", "device")
 _UPDATED_KEYS = ("android_version", "build_tag", "incremental")
 _DIRECT_KEY_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)[ \t]*:"
+    r"^(?P<indent>[ \t]*)(?P<key>"
+    r"[A-Za-z_][A-Za-z0-9_-]*"
+    r"|'(?:[^']|'')*'"
+    r'|"(?:[^"\\]|\\.)*"'
+    r")[ \t]*:"
 )
 
 
@@ -462,12 +466,20 @@ def _line_body_and_ending(line: str) -> tuple[str, str]:
     return line, ""
 
 
+def _decoded_direct_key(match: re.Match[str]) -> str | None:
+    try:
+        key = yaml.safe_load(match.group("key"))
+    except yaml.YAMLError:
+        return None
+    return key if isinstance(key, str) else None
+
+
 def _direct_key_line(line: str, key: str, indent: int | None = None) -> bool:
     body, _ = _line_body_and_ending(line)
     match = _DIRECT_KEY_RE.match(body)
     return bool(
         match
-        and match.group("key") == key
+        and _decoded_direct_key(match) == key
         and (indent is None or len(match.group("indent")) == indent)
     )
 
@@ -511,7 +523,7 @@ def _quote_yaml_string(value: str) -> str:
 def _rewrite_yaml_line(line: str, key: str, value: str) -> str:
     body, newline = _line_body_and_ending(line)
     match = _DIRECT_KEY_RE.match(body)
-    if not match or match.group("key") != key:
+    if not match or _decoded_direct_key(match) != key:
         return line
 
     comment_index = _comment_start(body)
@@ -756,7 +768,9 @@ def _region_block_span(
         if region_indent is None:
             region_indent = indent
         if indent == region_indent:
-            region_lines[match.group("key")] = index
+            key = _decoded_direct_key(match)
+            if key is not None:
+                region_lines[key] = index
 
     start = region_lines.get(region_code)
     if region_indent is None or start is None:
@@ -858,8 +872,8 @@ def _rewrite_region_mapping(
             rewritten.append(line)
             continue
 
-        key = match.group("key")
-        if key in desired:
+        key = _decoded_direct_key(match)
+        if key is not None and key in desired:
             rewritten.append(_rewrite_yaml_line(line, key, desired[key]))
             present.add(key)
             continue
@@ -891,10 +905,11 @@ def _collapse_region_mapping(
     region_line = block[0]
     body, line_ending = _line_body_and_ending(region_line)
     comment = _inline_comment(region_line)
+    match = _DIRECT_KEY_RE.match(body)
+    if match is None:  # pragma: no cover - mapped by _region_block_span
+        return block
     scalar_line = _rewrite_yaml_line(
-        f"{' ' * region_indent}{region_code}: {line_ending}",
-        region_code,
-        incremental,
+        f"{body[: match.end()]} {line_ending}", region_code, incremental
     )
     scalar_body, _ = _line_body_and_ending(scalar_line)
     if comment is not None:

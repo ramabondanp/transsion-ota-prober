@@ -1,13 +1,31 @@
+import os
 import runpy
+import stat
 
 import pytest
 import yaml
 
 _MIGRATOR = runpy.run_path("scripts/migrate_compact_configs.py")
 LegacyRegion = _MIGRATOR["LegacyRegion"]
+config_paths = _MIGRATOR["config_paths"]
 load_legacy_regions = _MIGRATOR["load_legacy_regions"]
 migrate_text = _MIGRATOR["migrate_text"]
 migrate_directory = _MIGRATOR["migrate_directory"]
+
+
+def _legacy_config(
+    region: str = "OP", incremental: str = "1", newline: str = "\n"
+) -> bytes:
+    text = f"""\
+oem: "TECNO"
+product: "T1-{region}"
+device: "TECNO-T1"
+model: "Example"
+android_version: "15"
+build_tag: "AP3A.240905.015.A2"
+incremental: "{incremental}"
+"""
+    return text.replace("\n", newline).encode()
 
 
 def test_legacy_variants_are_merged_and_region_order_is_preserved(tmp_path):
@@ -211,3 +229,110 @@ incremental: "1"
         migrate_directory(tmp_path, write=True)
 
     assert valid.read_text(encoding="utf-8") == valid_text
+
+
+def test_config_paths_discovers_custom_yaml_names_in_cli_order(tmp_path):
+    alpha = tmp_path / "Alpha-device.yaml"
+    zulu = tmp_path / "zulu-device.yml"
+    alpha.write_text("", encoding="utf-8")
+    zulu.write_text("", encoding="utf-8")
+    (tmp_path / "ignored.YML").write_text("", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("", encoding="utf-8")
+    (tmp_path / "directory.yml").mkdir()
+
+    assert config_paths(tmp_path) == [alpha, zulu]
+
+
+def test_runtime_validation_happens_before_publication(tmp_path):
+    path = tmp_path / "custom-device.yaml"
+    original = _legacy_config(region="op", newline="\r\n")
+    path.write_bytes(original)
+    path.chmod(0o640)
+    original_mode = stat.S_IMODE(path.stat().st_mode)
+
+    with pytest.raises(ValueError, match="uppercase"):
+        migrate_directory(tmp_path, write=True)
+
+    assert path.read_bytes() == original
+    assert stat.S_IMODE(path.stat().st_mode) == original_mode
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_later_replace_failure_rolls_back_and_allows_rerun(tmp_path, monkeypatch):
+    first = tmp_path / "A-first.yaml"
+    second = tmp_path / "b-second.yml"
+    originals = {
+        first: _legacy_config(incremental="first", newline="\r\n"),
+        second: _legacy_config(region="EU", incremental="second"),
+    }
+    modes = {first: 0o640, second: 0o600}
+    for path, content in originals.items():
+        path.write_bytes(content)
+        path.chmod(modes[path])
+
+    real_replace = os.replace
+    replace_calls = 0
+
+    def fail_second_replace(source, destination):
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("simulated later replacement failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(_MIGRATOR["os"], "replace", fail_second_replace)
+
+    with pytest.raises(OSError, match="simulated later replacement failure"):
+        migrate_directory(tmp_path, write=True)
+
+    for path, content in originals.items():
+        assert path.read_bytes() == content
+        assert stat.S_IMODE(path.stat().st_mode) == modes[path]
+    assert set(tmp_path.iterdir()) == set(originals)
+
+    outputs = migrate_directory(tmp_path, write=True)
+
+    assert list(outputs) == [first, second]
+    for path, output in outputs.items():
+        assert path.read_bytes() == output.encode()
+        assert stat.S_IMODE(path.stat().st_mode) == modes[path]
+    assert set(tmp_path.iterdir()) == set(originals)
+
+
+def test_publication_and_rollback_failures_are_both_reported(tmp_path, monkeypatch):
+    first = tmp_path / "first.yml"
+    second = tmp_path / "second.yaml"
+    first.write_bytes(_legacy_config(incremental="first"))
+    second.write_bytes(_legacy_config(region="EU", incremental="second"))
+
+    real_replace = os.replace
+    replace_calls = 0
+
+    def fail_publication_and_rollback(source, destination):
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("publication exploded")
+        if replace_calls == 3:
+            raise PermissionError("rollback exploded")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(
+        _MIGRATOR["os"], "replace", fail_publication_and_rollback
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        migrate_directory(tmp_path, write=True)
+
+    assert "publication exploded" in str(error.value)
+    assert "rollback exploded" in str(error.value)
+    assert isinstance(error.value.__cause__, OSError)
+
+    remaining = set(tmp_path.iterdir())
+    retained = remaining - {first, second}
+    assert len(retained) == 1
+    backup = retained.pop()
+    assert str(backup) in str(error.value)
+    assert backup.read_bytes() == _legacy_config(incremental="first")
+    assert stat.S_IMODE(backup.stat().st_mode) == stat.S_IMODE(first.stat().st_mode)
+    assert second.read_bytes() == _legacy_config(region="EU", incremental="second")

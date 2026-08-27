@@ -58,6 +58,68 @@ regions:
     }
 
 
+def test_quoted_top_level_keys_are_rewritten_in_place(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+"android_version": "16" # retain version comment
+"regions": # retain section comment
+  OP: "OLD"
+""",
+    )
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "15", "AP3A.240905.015.A2", "NEW"),
+    )
+
+    assert path.read_text(encoding="utf-8") == (
+        'oem: "Infinix"\n'
+        'product_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\n'
+        '"android_version": "15" # retain version comment\n'
+        '"regions": # retain section comment\n'
+        '  OP: "NEW"\n'
+    )
+
+
+def test_quoted_region_key_is_rewritten_without_changing_its_spelling(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  "NO": "OLD" # retain quoted region
+""",
+    )
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "15", "AP3A.240905.015.A2", "NEW"),
+    )
+
+    assert path.read_text(encoding="utf-8") == (
+        'oem: "Infinix"\n'
+        'product_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\n'
+        'android_version: "15"\n'
+        'regions:\n'
+        '  "NO": "NEW" # retain quoted region\n'
+    )
+
+
 def test_scalar_region_is_promoted_for_android_override(tmp_path):
     path = tmp_path / "config.yml"
     _write(
