@@ -235,10 +235,20 @@ regions: {regions}
 
 @pytest.mark.parametrize(
     "regions",
-    ['{OP: "I"}', '{ "OP": "I" }'],
+    [
+        # Flow-style `regions` container.
+        '{OP: "I"}',
+        '{ "OP": "I" }',
+        # Flow-style region value. The line-oriented updater cannot express
+        # these, so accepting them at load time would produce a config that
+        # reads fine but can never be updated.
+        '\n  OP: {incremental: "I"}',
+        '\n  OP: {incremental: "I", android_version: "16"}',
+        '\n  OP: {\n    incremental: "I"\n  }',
+    ],
 )
-def test_flow_style_regions_mapping_is_rejected(tmp_path, regions):
-    with pytest.raises(ValueError, match="flow-style.*regions"):
+def test_flow_style_collections_are_rejected(tmp_path, regions):
+    with pytest.raises(ValueError, match="flow-style"):
         _load(
             tmp_path,
             f'''\
@@ -249,6 +259,33 @@ android_version: "16"
 regions: {regions}
 ''',
         )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        # Multi-line quoted scalar anywhere in the file: its continuation lines
+        # are indistinguishable from keys to the line-oriented updater, which
+        # would otherwise mis-target the block it rewrites.
+        (
+            'oem: "Infinix"\nproduct_base: "X1"\n'
+            'model: "Line one\nregions:\n  ZZ: nope"\n'
+            'android_version: "16"\nregions:\n  OP: "I"\n'
+        ),
+        (
+            'oem: "Infinix"\nproduct_base: "X1"\nmodel: "Model"\n'
+            'android_version: "16"\nregions:\n  OP: "I\n    continued"\n'
+        ),
+        # Multi-line plain scalar.
+        (
+            'oem: "Infinix"\nproduct_base: "X1"\nmodel: Model\n  continued\n'
+            'android_version: "16"\nregions:\n  OP: "I"\n'
+        ),
+    ],
+)
+def test_multi_line_scalars_are_rejected(tmp_path, config):
+    with pytest.raises(ValueError, match="multi-line scalar"):
+        _load(tmp_path, config)
 
 
 @pytest.mark.parametrize(
@@ -535,7 +572,23 @@ regions:
 
 @pytest.mark.parametrize(
     "region_key",
-    ['""', '" OP"', '"OP "', '"OP/IN"', '"OP:IN"', '"OP\\u0007"', "1"],
+    [
+        '""',
+        '" OP"',
+        '"OP "',
+        '"OP/IN"',
+        '"OP:IN"',
+        '"OP\\u0007"',
+        "1",
+        # The region code is concatenated into `product` and from there into the
+        # check-in fingerprint, so it is restricted to `[A-Z0-9-]`.
+        '"OP M1"',
+        '"OP#1"',
+        '"OP.1"',
+        '"OP_1"',
+        '"OPÄ"',
+        '"-OP"',
+    ],
 )
 def test_invalid_region_keys_are_rejected(tmp_path, region_key):
     with pytest.raises((TypeError, ValueError), match="region .* key"):

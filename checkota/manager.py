@@ -85,6 +85,10 @@ _LEGACY_SINGLE_REGION_KEYS = frozenset(
     {"product", "device", "build_tag", "incremental"}
 )
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Region codes become part of `product` (`{product_base}-{REGION}`) and thus of
+# the check-in fingerprint, so they are restricted to the uppercase
+# alphanumeric/hyphen vocabulary the convention actually uses (e.g. "OP-M1").
+_REGION_CODE_RE = re.compile(r"[A-Z0-9][A-Z0-9-]*")
 
 
 def _region_context(file: Path, region_code: Any) -> str:
@@ -131,11 +135,8 @@ def _validate_region_code(region_code: Any, context: str) -> None:
         )
     if region_code != region_code.upper():
         raise ValueError(f"{context} key must use uppercase characters.")
-    if (
-        "/" in region_code
-        or ":" in region_code
-        or _CONTROL_CHAR_RE.search(region_code)
-    ):
+    # The region code is structural (see _REGION_CODE_RE).
+    if not _REGION_CODE_RE.fullmatch(region_code):
         raise ValueError(f"{context} key contains an invalid character.")
 
 
@@ -166,10 +167,11 @@ class Config:
         except yaml.YAMLError as exc:
             raise ValueError(f"Could not parse config {file}: {exc}") from exc
 
-        _validate_no_block_scalar_styles(raw_text, file)
-        configs = cls._from_compact_data(data, file)
+        # Layout is validated before the schema so an unrewritable source is
+        # rejected even when its data would resolve: a config that loads must
+        # also be updatable.
         _validate_compact_source_layout(raw_text, file)
-        return configs
+        return cls._from_compact_data(data, file)
 
     @classmethod
     def _from_compact_data(cls, data: Any, file: Path) -> list["Config"]:
@@ -409,76 +411,65 @@ def _load_yaml(stream: Any) -> Any:
         loader.dispose()
 
 
-def _reject_block_scalar_style(event: yaml.events.ScalarEvent, file: Path) -> None:
-    if event.style in ("|", ">"):
-        raise ValueError(
-            f"Config {file} uses a literal/folded block scalar; use a quoted "
-            "or plain scalar so updates can preserve the source layout."
-        )
-
-
-def _validate_no_block_scalar_styles(source: str, file: Path) -> None:
-    """Reject scalar styles the line-preserving updater cannot rewrite safely."""
-    for event in yaml.parse(source):
-        if isinstance(event, yaml.events.ScalarEvent):
-            _reject_block_scalar_style(event, file)
-
-
 def _validate_compact_source_layout(source: str, file: Path) -> None:
-    """Reject YAML layouts that the line-preserving updater cannot rewrite safely."""
-    stack: list[list[Any]] = []
-    expecting_regions_value = False
+    """Reject YAML layouts that the line-preserving updater cannot rewrite safely.
 
-    for event in yaml.parse(source):
-        if isinstance(event, yaml.events.AliasEvent):
-            raise ValueError(
-                f"Config {file} uses YAML alias '*{event.anchor}'; anchors and "
-                "aliases are not supported because updates could leave dangling "
-                "aliases."
-            )
+    The updater edits the source line by line, so every construct it may touch
+    has to occupy exactly one line and must not be shared through an anchor.
+    Anything the parser would accept but the rewriter cannot express is rejected
+    here, at load time and again before every update, so a config can never be
+    readable-but-unupdatable.
+    """
+    events = list(yaml.parse(source))
+    for index, event in enumerate(events):
+        # AliasEvent and every *StartEvent carry `.anchor`; keeping this check
+        # out of an isinstance guard also keeps the raise honest (a shared node
+        # is a layout problem, not a type problem).
         anchor = getattr(event, "anchor", None)
         if anchor is not None:
+            reference = (
+                f"alias '*{anchor}'"
+                if isinstance(event, yaml.events.AliasEvent)
+                else f"anchor '&{anchor}'"
+            )
             raise ValueError(
-                f"Config {file} uses YAML anchor '&{anchor}'; anchors and aliases "
-                "are not supported because updates could leave dangling aliases."
+                f"Config {file} uses YAML {reference}; anchors and aliases are "
+                "not supported because updates could leave dangling aliases."
             )
 
         if isinstance(event, yaml.events.ScalarEvent):
-            _reject_block_scalar_style(event, file)
-            if stack and stack[-1][0] == "mapping" and stack[-1][1]:
-                expecting_regions_value = (
-                    len(stack) == 1 and event.value == "regions"
-                )
-                stack[-1][1] = False
-            else:
-                expecting_regions_value = False
-                if stack and stack[-1][0] == "mapping":
-                    stack[-1][1] = True
-            continue
-
-        if isinstance(event, yaml.events.MappingStartEvent):
-            if expecting_regions_value and event.flow_style:
+            if event.style in ("|", ">"):
                 raise ValueError(
-                    f"Config {file} uses a flow-style 'regions' mapping; use "
-                    "block style so updates can preserve the source layout."
+                    f"Config {file} uses a literal/folded block scalar; use a "
+                    "quoted or plain scalar so updates can preserve the source "
+                    "layout."
                 )
-            expecting_regions_value = False
-            if stack and stack[-1][0] == "mapping":
-                stack[-1][1] = True
-            stack.append(["mapping", True])
+            if event.start_mark.line != event.end_mark.line:
+                raise ValueError(
+                    f"Config {file} uses a multi-line scalar; keep every value "
+                    "on one line so updates can preserve the source layout."
+                )
             continue
 
-        if isinstance(event, yaml.events.SequenceStartEvent):
-            expecting_regions_value = False
-            if stack and stack[-1][0] == "mapping":
-                stack[-1][1] = True
-            stack.append(["sequence", False])
-            continue
-
-        if isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
-            if stack:
-                stack.pop()
-            expecting_regions_value = False
+        if (
+            isinstance(
+                event,
+                (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent),
+            )
+            and event.flow_style
+            # An empty `{}`/`[]` holds nothing to rewrite. Let it through so the
+            # schema check can report the real problem (regions must be a
+            # non-empty mapping) instead of a layout complaint.
+            and not isinstance(
+                events[index + 1],
+                (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent),
+            )
+        ):
+            raise ValueError(
+                f"Config {file} uses a flow-style collection; use block style "
+                "for 'regions' and every region value so updates can preserve "
+                "the source layout."
+            )
 
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
@@ -707,16 +698,21 @@ def _update_config_from_fingerprint(
         Log.w(f"Could not uniquely identify regions in {config_path}.")
         return False
 
-    already_matches = all(
+    if all(
         key in effective
         and effective[key] is not None
         and str(effective[key]) == str(value)
         for key, value in updates.items()
-    )
+    ):
+        # Nothing changed for the target region. Default-Android convergence is
+        # a side effect of applying an update, not a normalization pass we run
+        # on read: a check that finds no new build must leave the file alone.
+        Log.i(f"{config_path} already matches target fingerprint values.")
+        return True
 
     lines = raw_text.splitlines(keepends=True)
     newline = _detect_newline(raw_text)
-    if not already_matches and not _rewrite_compact_region(
+    if not _rewrite_compact_region(
         lines, data, region_code, updates, newline, config_path
     ):
         return False
@@ -933,7 +929,6 @@ def _desired_region_values(
 
 def _rewrite_region_mapping(
     block: list[str],
-    region_indent: int,
     child_indent: int,
     desired: dict[str, str],
     newline: str,
@@ -977,7 +972,13 @@ def _rewrite_region_mapping(
 def _collapse_region_mapping(
     block: list[str], region_code: str, region_indent: int, incremental: str
 ) -> list[str]:
-    """Collapse an expanded region to scalar incremental form."""
+    """Collapse an expanded region to scalar incremental form.
+
+    The child keys disappear, so any comment that annotated them would be left
+    dangling at an indentation level that no longer exists. Retained comments
+    are re-indented to the region key and hoisted above it, where they still
+    read as notes about this region; blank lines stay below as separators.
+    """
     had_final_newline = bool(_line_body_and_ending(block[-1])[1])
     region_line = block[0]
     body, line_ending = _line_body_and_ending(region_line)
@@ -993,19 +994,18 @@ def _collapse_region_mapping(
         scalar_body = f"{scalar_body.rstrip()} {comment}"
     scalar_line = scalar_body + line_ending
 
-    collapsed = [scalar_line]
+    comments: list[str] = []
+    trailing: list[str] = []
     for line in block[1:]:
         body, _ = _line_body_and_ending(line)
-        if not body.strip() or body.lstrip().startswith("#"):
-            collapsed.append(line)
+        if not body.strip():
+            trailing.append(line)
             continue
-        match = _DIRECT_KEY_RE.match(body)
-        if match is None or len(match.group("indent")) <= region_indent:
-            collapsed.append(line)
-            continue
-        comment_line = _comment_line(line, len(match.group("indent")))
+        comment_line = _comment_line(line, region_indent)
         if comment_line is not None:
-            collapsed.append(comment_line)
+            comments.append(comment_line)
+
+    collapsed = [*comments, scalar_line, *trailing]
     if not had_final_newline:
         final_body, _ = _line_body_and_ending(collapsed[-1])
         collapsed[-1] = final_body
@@ -1061,7 +1061,7 @@ def _rewrite_compact_region(
         )
     else:
         lines[start:end] = _rewrite_region_mapping(
-            block, region_indent, child_indent, desired, newline
+            block, child_indent, desired, newline
         )
     return True
 

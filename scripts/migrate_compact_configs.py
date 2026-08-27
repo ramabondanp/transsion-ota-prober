@@ -294,7 +294,7 @@ def migrate_directory(config_dir: Path, write: bool = False) -> dict[Path, str]:
                     backup = backups[path]
                     try:
                         os.replace(backup, path)
-                    except BaseException as rollback_error:
+                    except BaseException as rollback_error:  # noqa: BLE001 -- a failed restore must never abort the remaining rollbacks
                         preserved_backups.add(backup)
                         rollback_errors.append((path, backup, rollback_error))
                 if rollback_errors:

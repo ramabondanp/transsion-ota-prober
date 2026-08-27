@@ -229,7 +229,18 @@ regions:
     incremental: "131015"
 ```
 
-For in-place updates, keep `regions` in block style as shown above. YAML anchors and aliases are not supported in compact configs because the updater preserves the surrounding source text and cannot safely rewrite aliased values.
+Updates rewrite the file line by line to preserve comments, quoting, and newline style, so
+a config must stay expressible that way. Loading rejects anything the updater could not
+rewrite — flow-style collections (`regions: {OP: "1"}`, `OP: {incremental: "1"}`),
+multi-line scalars, literal/folded block scalars (`|`, `>`), and YAML anchors or aliases —
+rather than accepting a config that reads fine but can never be updated. Region codes are
+restricted to `[A-Z0-9-]` (uppercase, no leading hyphen) because the code is concatenated
+into `product` and from there into the check-in fingerprint.
+
+A check that finds no new build never touches the file. When an update does land and every
+region has converged on the same Android version, the top-level `android_version` default
+is promoted and the now-redundant per-region overrides are dropped; comments attached to
+removed keys are re-indented to the region key and kept above it.
 
 For example, this former `variants` representation is legacy input and is no longer
 accepted:

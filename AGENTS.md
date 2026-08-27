@@ -122,7 +122,16 @@ Product is `{effective_product_base}-{region}`. Device is
 `oem`; the exact OEM value `"Itel"` is the exception and maps to lowercase `itel`. A
 region may override `product_base` (the `IN` region in `config-X6857.yml` uses `X6857B`)
 or provide a noncanonical `build_tag` (currently X1301 and T1102). Canonical Android
-build tags come from `BUILD_TAG_BY_ANDROID` and must not be written in YAML.
+build tags come from `BUILD_TAG_BY_ANDROID` and must not be written in YAML. Region codes
+must match `[A-Z0-9][A-Z0-9-]*` — the code is concatenated into `product` and thus into
+the fingerprint, so it gets the same allowlist treatment as every other field.
+
+**Loadable implies updatable.** `_validate_compact_source_layout` runs on every load *and*
+again before every update, rejecting whatever the line-oriented rewriter cannot express:
+flow-style collections (except empty `{}`/`[]`, left to the schema check for a better
+message), multi-line scalars, `|`/`>` block scalars, and anchors/aliases. Without this a
+config would parse fine yet fail every update, and `apply_update_actions` treats a failed
+config rewrite as fatal — it releases the title claim and drops the notification.
 
 Fingerprint: `{oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys`
 
@@ -182,6 +191,19 @@ config before any action: dry-run printing, config update, notification, and tit
 processing all gate on `fingerprint_identity_matches_config`. Region updates resolve the
 exact region code and fail closed if the in-memory identity disagrees with the latest YAML.
 This prevents a mismatched OTA response from poisoning a device's config.
+
+### Android default convergence (`_converge_android_default`)
+
+After a region is rewritten, if all effective regions now agree on one Android version the
+top-level `android_version` is promoted and redundant per-region overrides collapse (an
+expanded region reduces to a scalar incremental). Every region's fingerprint is compared
+before and after; a promotion that would change any of them is rejected.
+
+Convergence runs **only on a real update**. A check whose target values already match the
+YAML returns early and leaves the file byte-identical — normalization is a side effect of
+applying an update, not something a no-op sweep across 114 configs may trigger. Because
+collapsing removes child keys, comments attached to them are re-indented to the region key
+and hoisted above it rather than left at a dead indentation level.
 
 ### Network hardening
 
@@ -256,6 +278,10 @@ This prevents a mismatched OTA response from poisoning a device's config.
 | Per-title lock files accumulated forever | `fingerprints.py`, `runtime.py` | `prune_title_locks()` at startup removes locks for committed titles or files >7d old, only when no process holds them (LOCK_EX\|LOCK_NB probe); skipped in dry-run |
 | Config lock files left beside configs | `manager.py` | `_prune_config_lock()` unlinks the released lock when no other process holds it (residual unlink race documented; rewrites are atomic + idempotent) |
 | `assert` used for control flow (stripped by `-O`) | `processor.py`, `update_checker.py` | Explicit `raise RuntimeError`/`UpdateCheckError` on the unreachable branches |
+| Loadable configs the updater could not rewrite | `manager.py` | Flow-style collections, multi-line scalars, block scalars, and anchors/aliases rejected on load *and* pre-update; previously they parsed, then failed every update (claim released, notification dropped) |
+| No-op check rewrote the file via convergence | `manager.py` | Early return when target values already match: `_converge_android_default` no longer runs on a check that found nothing new |
+| Collapse orphaned comments at a dead indent | `manager.py` | `_collapse_region_mapping()` re-indents retained comments to the region key and hoists them above it |
+| Region code accepted spaces/`#`/`.`/non-ASCII | `manager.py` | `_REGION_CODE_RE` (`[A-Z0-9][A-Z0-9-]*`); the code is structural — it builds `product` and thus the fingerprint |
 
 ## Running
 

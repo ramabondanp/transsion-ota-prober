@@ -152,6 +152,13 @@ regions:
         'regions: {OP: "OLD"}',
         "regions:\n  OP: &base \"OLD\"",
         "regions:\n  OP: *base",
+        # Flow-style region value: single-line and multi-line both reject, so a
+        # loadable config is never one the updater has to bail out of.
+        'regions:\n  OP: {incremental: "OLD"}',
+        'regions:\n  OP: {\n    incremental: "OLD"\n  }',
+        # Multi-line scalar: continuation lines are indistinguishable from keys
+        # to the line-oriented rewriter.
+        'regions:\n  OP: "OLD\n    continued"',
     ],
 )
 def test_unsafe_layout_is_rejected_without_rewrite(tmp_path, replacement):
@@ -340,10 +347,12 @@ product_base: "X6873"
 model: "Infinix GT 30 Pro"
 android_version: "16"
 regions:
-  EU:
+  EU: # mapping note
     android_version: "15" # old version note
     build_tag: "OLD.TAG" # old tag note
     incremental: "OLD"
+
+  OP: "UNCHANGED"
 """,
     )
     cfg = _config(path)
@@ -355,8 +364,21 @@ regions:
     )
 
     text = path.read_text(encoding="utf-8")
-    assert "# old version note" in text
-    assert "# old tag note" in text
+    # The child keys are gone, so their comments are re-indented to the region
+    # key and hoisted above it rather than left dangling at an indentation level
+    # that no longer exists. Blank lines stay below as separators.
+    assert text == (
+        'oem: "Infinix"\n'
+        'product_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\n'
+        'android_version: "16"\n'
+        "regions:\n"
+        "  # old version note\n"
+        "  # old tag note\n"
+        '  EU: "NEW" # mapping note\n'
+        "\n"
+        '  OP: "UNCHANGED"\n'
+    )
     assert yaml.safe_load(text)["regions"]["EU"] == "NEW"
 
 

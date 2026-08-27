@@ -111,13 +111,15 @@ regions:
     }
 
 
-def test_already_current_regions_are_normalized_without_changing_fingerprints(
-    tmp_path,
-):
+def test_already_current_region_leaves_the_file_byte_identical(tmp_path):
+    """A check that finds no new build must not rewrite the config.
+
+    The top-level default lags the (already converged) regions here, so a
+    normalization pass would promote it. Convergence is a side effect of
+    applying an update, not something a no-op check is allowed to trigger.
+    """
     path = tmp_path / "config.yml"
-    _write(
-        path,
-        """\
+    content = """\
 oem: "Infinix"
 product_base: "X6873"
 model: "Infinix GT 30 Pro"
@@ -131,18 +133,13 @@ regions:
     android_version: "16"
     build_tag: "CUSTOM.TAG"
     incremental: "EU"
-""",
-    )
+"""
+    _write(path, content)
     configs = Config.from_yaml(path)
     fingerprints = {config.region: config.fingerprint() for config in configs}
 
     assert update_config_from_fingerprint(path, configs[0], configs[0].fingerprint())
 
-    parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert parsed["android_version"] == "16"
-    assert parsed["regions"] == {
-        "OP": {"product_base": "X6873B", "incremental": "OP"},
-        "EU": {"build_tag": "CUSTOM.TAG", "incremental": "EU"},
-    }
+    assert path.read_text(encoding="utf-8") == content
     normalized = Config.from_yaml(path)
     assert {config.region: config.fingerprint() for config in normalized} == fingerprints
