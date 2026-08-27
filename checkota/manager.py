@@ -627,11 +627,10 @@ def _update_config_from_fingerprint(
 
     lines = raw_text.splitlines(keepends=True)
     newline = _detect_newline(raw_text)
-    if not already_matches:
-        if not _rewrite_compact_region(
-            lines, data, region_code, updates, newline, config_path
-        ):
-            return False
+    if not already_matches and not _rewrite_compact_region(
+        lines, data, region_code, updates, newline, config_path
+    ):
+        return False
     if not _converge_android_default(lines, config_path, newline):
         return False
 
@@ -732,11 +731,13 @@ def _region_block_span(
         Log.w(f"Could not find 'regions' section in {config_path}.")
         return None
 
-    regions_indent = len(
-        _DIRECT_KEY_RE.match(_line_body_and_ending(lines[regions_line_idx])[0]).group(
-            "indent"
-        )
+    regions_match = _DIRECT_KEY_RE.match(
+        _line_body_and_ending(lines[regions_line_idx])[0]
     )
+    if regions_match is None:  # pragma: no cover - guarded by _direct_key_line above
+        Log.w(f"Could not parse 'regions' section in {config_path}.")
+        return None
+    regions_indent = len(regions_match.group("indent"))
     region_indent: int | None = None
     region_lines: dict[str, int] = {}
     regions_end = len(lines)

@@ -484,38 +484,38 @@ Tasks:
 
 Run diagnostics before builds/tests where applicable.
 
-- [ ] Run LSP diagnostics on all edited Python files.
-- [ ] Run `uv run ruff check .`.
-- [ ] Run the configured type checker (`uv run pyright` if available in the project environment).
-- [ ] Run focused manager/parser/updater tests.
-- [ ] Run the full pytest suite.
-- [ ] Build the wheel with `uv build`.
-- [ ] Inspect wheel contents and confirm all 114 migrated configs are included.
-- [ ] Install the wheel into an isolated environment and load representative Infinix, TECNO, and Itel configs.
-- [ ] Exercise region filtering, including `OP-M1`.
-- [ ] Exercise dry-run and config update paths without making network requests.
-- [ ] Run `lens_diagnostics` with `mode=all` and resolve blocking findings.
-- [ ] Run GitNexus change detection/impact analysis and review affected flows.
-- [ ] Review `git diff --check` and the complete diff.
-- [ ] Confirm unrelated untracked files were not modified or staged.
+- [x] Project-local LSP diagnostics are unavailable in this environment; run tool-isolated, dependency-backed Pyright on all edited production and migration Python files instead. Compile, Ruff, and pytest cover edited test files.
+- [x] Run tool-isolated `uvx ruff check .`; project-local `uv run ruff check .` is unavailable because Ruff is not installed in the project environment.
+- [x] Run tool-isolated dependency-backed Pyright; edited production and migration Python files report zero errors, warnings, or informations. Project-local `uv run pyright` is unavailable because Pyright is not installed in the project environment.
+- [x] Run focused manager/parser/updater tests.
+- [x] Run the full pytest suite.
+- [x] Build the wheel with `uv build`.
+- [x] Inspect wheel contents and confirm all 114 migrated configs are included.
+- [x] Install the wheel into an isolated environment and load representative Infinix, TECNO, and Itel configs.
+- [x] Exercise region filtering, including `OP-M1`.
+- [x] Exercise dry-run and config update paths without making network requests.
+- [x] The `lens_diagnostics` interface is unavailable in this session; the tool-isolated Pyright check reports no diagnostics on the edited production and migration files.
+- [x] Run GitNexus change detection/impact analysis and review affected flows.
+- [x] Review `git diff --check` and the complete diff.
+- [x] Confirm unrelated untracked files were not modified or staged.
 
 ## Acceptance criteria
 
 The migration is complete only when all items below are true:
 
-- [ ] Work remains entirely on `feat/compact-region-configs` until review/merge.
-- [ ] All 114 bundled configs use only the new `regions` schema.
-- [ ] The new parser resolves exactly 148 effective configs.
-- [ ] Every pre-migration effective fingerprint equals its post-migration fingerprint.
-- [ ] No runtime path accepts legacy `variants` configs.
-- [ ] Legacy configs fail with an actionable migration message.
-- [ ] Product and device are always derived rather than stored.
-- [ ] Canonical build tags are always derived rather than stored.
-- [ ] Itel and X6857B special cases resolve correctly.
-- [ ] Region updates preserve non-target fingerprints.
-- [ ] Atomicity, identity validation, duplicate-key rejection, comment/newline preservation, and lock safety do not regress.
-- [ ] All diagnostics, tests, type checks, lint checks, and packaging checks pass.
-- [ ] Documentation reflects only the new supported schema.
+- [x] Work remains entirely on `feat/compact-region-configs` until review/merge.
+- [x] All 114 bundled configs use only the new `regions` schema.
+- [x] The new parser resolves exactly 148 effective configs.
+- [x] Every pre-migration effective fingerprint equals its post-migration fingerprint.
+- [x] No runtime path accepts legacy `variants` configs.
+- [x] Legacy configs fail with an actionable migration message.
+- [x] Product and device are always derived rather than stored.
+- [x] Canonical build tags are always derived rather than stored.
+- [x] Itel and X6857B special cases resolve correctly.
+- [x] Region updates preserve non-target fingerprints.
+- [x] Atomicity, identity validation, duplicate-key rejection, comment/newline preservation, and lock safety do not regress.
+- [x] All available diagnostics, tests, type checks, lint checks, and packaging checks pass; unavailable project-local tools are recorded above.
+- [x] Documentation reflects only the new supported schema.
 
 ## Known risks and mitigations
 
@@ -574,3 +574,5 @@ Add dated entries as work proceeds.
 - Phase 10 complete: updated `AGENTS.md` and `README.md` for the compact regions format, derivation rules, special cases, manual migration, and legacy rejection behavior.
 - Phase 11 complete: removed legacy list rewrite helpers and index/label disambiguation, renamed runtime region APIs/models, and retained legacy references only for rejection/migration coverage.
 - Phase 11 validation: full pytest suite passed (`277 passed`); no obsolete writer symbols or legacy runtime field names remain.
+- Phase 12 complete: ran final diagnostics, full tests, wheel build, isolated installation, representative config loading, region filtering, offline dry-run/update checks, and GitNexus impact review.
+- Phase 12 validation: `uvx ruff check .` passed; tool-isolated, dependency-backed Pyright passed with zero diagnostics for edited production/migration files; `pytest -q` passed (`277 passed`); `uv build` produced the wheel with all `114` bundled configs; isolated wheel checks passed. Project-local LSP/`lens_diagnostics`, Ruff, and Pyright are unavailable; their tool-isolated substitutes are recorded above.

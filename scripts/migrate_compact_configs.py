@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import stat
 import tempfile
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -98,7 +98,7 @@ def load_legacy_regions(path: Path) -> list[LegacyRegion]:
     """Read the old schema without using the new runtime parser."""
     data = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
     if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a mapping")
+        raise TypeError(f"{path} must contain a mapping")
 
     variants = data.get("variants")
     if variants is None:
@@ -113,7 +113,7 @@ def load_legacy_regions(path: Path) -> list[LegacyRegion]:
     regions: list[LegacyRegion] = []
     for index, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
-            raise ValueError(f"{path} legacy entry #{index} must be a mapping")
+            raise TypeError(f"{path} legacy entry #{index} must be a mapping")
         effective = {**base, **entry} if variants is not None else dict(entry)
         product = _required_string(effective, "product", path, index)
         if "-" not in product:

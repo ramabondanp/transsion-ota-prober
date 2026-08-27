@@ -2,7 +2,6 @@ import hashlib
 import runpy
 from pathlib import Path
 
-
 _ROOT = Path(__file__).resolve().parents[1]
 _MANIFEST = runpy.run_path(str(_ROOT / "scripts" / "compact_manifest.py"))
 config_paths = _MANIFEST["config_paths"]
@@ -46,7 +45,7 @@ regions:
         '"build_tag":"BP2A.250605.031.A3","incremental":"INC",'
         '"model":"Exämple","fingerprint":"Infinix/X1-OP/Infinix-X1:16/'
         'BP2A.250605.031.A3/INC:user/release-keys"}\n'
-    ).encode("utf-8")
+    ).encode()
     assert manifest_bytes(tmp_path) == expected
 
 

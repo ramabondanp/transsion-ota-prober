@@ -1,9 +1,7 @@
 import runpy
-from pathlib import Path
 
 import pytest
 import yaml
-
 
 _MIGRATOR = runpy.run_path("scripts/migrate_compact_configs.py")
 LegacyRegion = _MIGRATOR["LegacyRegion"]
@@ -117,17 +115,17 @@ def test_migrated_scalar_values_are_quoted():
 
 
 def test_migration_rejects_unrepresentable_identity_and_duplicate_regions():
-    base = dict(
-        oem="Infinix",
-        product="X1-OP",
-        product_base="X1",
-        region="OP",
-        device="wrong-X1",
-        model="Example",
-        android_version="15",
-        build_tag="AP3A.240905.015.A2",
-        incremental="1",
-    )
+    base = {
+        "oem": "Infinix",
+        "product": "X1-OP",
+        "product_base": "X1",
+        "region": "OP",
+        "device": "wrong-X1",
+        "model": "Example",
+        "android_version": "15",
+        "build_tag": "AP3A.240905.015.A2",
+        "incremental": "1",
+    }
 
     with pytest.raises(ValueError, match="cannot be derived"):
         migrate_text([LegacyRegion(**base)])
