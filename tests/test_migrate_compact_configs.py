@@ -1,6 +1,7 @@
 import os
 import runpy
 import stat
+from contextlib import contextmanager
 
 import pytest
 import yaml
@@ -10,6 +11,7 @@ LegacyRegion = _MIGRATOR["LegacyRegion"]
 config_paths = _MIGRATOR["config_paths"]
 load_legacy_regions = _MIGRATOR["load_legacy_regions"]
 migrate_text = _MIGRATOR["migrate_text"]
+migrate_file = _MIGRATOR["migrate_file"]
 migrate_directory = _MIGRATOR["migrate_directory"]
 
 
@@ -229,6 +231,119 @@ incremental: "1"
         migrate_directory(tmp_path, write=True)
 
     assert valid.read_text(encoding="utf-8") == valid_text
+
+
+def test_single_file_migration_locks_final_read_and_publication(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "config.yml"
+    path.write_bytes(_legacy_config(incremental="before-lock"))
+    events = []
+
+    @contextmanager
+    def recording_lock(locked_path):
+        events.append("acquire")
+        path.write_bytes(_legacy_config(incremental="after-lock"))
+        try:
+            yield
+        finally:
+            events.append("release")
+
+    migration_globals = migrate_file.__globals__
+    real_load = migration_globals["load_legacy_regions"]
+    real_replace = migration_globals["os"].replace
+
+    def recording_load(source_path):
+        events.append("read")
+        return real_load(source_path)
+
+    def recording_replace(source, destination):
+        events.append("publish")
+        return real_replace(source, destination)
+
+    monkeypatch.setitem(migration_globals, "_config_lock", recording_lock)
+    monkeypatch.setitem(migration_globals, "load_legacy_regions", recording_load)
+    monkeypatch.setattr(migration_globals["os"], "replace", recording_replace)
+
+    output = migrate_file(path, write=True)
+
+    assert events == ["acquire", "read", "publish", "release"]
+    assert yaml.safe_load(output)["regions"]["OP"] == "after-lock"
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["regions"]["OP"] == (
+        "after-lock"
+    )
+
+
+def test_batch_migration_locks_before_final_read_and_publication(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "A-first.yaml"
+    second = tmp_path / "b-second.yml"
+    first.write_bytes(_legacy_config(incremental="first"))
+    second.write_bytes(_legacy_config(region="EU", incremental="second"))
+
+    events = []
+
+    lock_count = 0
+
+    @contextmanager
+    def recording_lock(path):
+        nonlocal lock_count
+        events.append(("acquire", path.name))
+        lock_count += 1
+        if lock_count == 1:
+            first.write_bytes(_legacy_config(incremental="runtime-update"))
+        try:
+            yield
+        finally:
+            events.append(("release", path.name))
+
+    real_load = _MIGRATOR["load_legacy_regions"]
+
+    def recording_load(path):
+        events.append(("read", path.name))
+        return real_load(path)
+
+    migration_os = _MIGRATOR["os"]
+    real_replace = migration_os.replace
+
+    def recording_replace(source, destination):
+        events.append(("publish", destination.name))
+        return real_replace(source, destination)
+
+    migration_globals = migrate_directory.__globals__
+    monkeypatch.setitem(migration_globals, "_config_lock", recording_lock)
+    monkeypatch.setitem(migration_globals, "load_legacy_regions", recording_load)
+    monkeypatch.setattr(migration_os, "replace", recording_replace)
+
+    migrate_directory(tmp_path, write=True)
+
+    parsed_first = yaml.safe_load(first.read_text(encoding="utf-8"))
+    assert parsed_first["regions"]["OP"] == "runtime-update"
+    acquisitions = [name for kind, name in events if kind == "acquire"]
+    assert acquisitions == [first.name, second.name]
+    last_acquire = max(
+        index for index, (kind, _) in enumerate(events) if kind == "acquire"
+    )
+    final_reads = [
+        index
+        for index, (kind, _) in enumerate(events)
+        if kind == "read" and index > last_acquire
+    ]
+    publications = [
+        index for index, (kind, _) in enumerate(events) if kind == "publish"
+    ]
+    releases = [
+        (index, name)
+        for index, (kind, name) in enumerate(events)
+        if kind == "release"
+    ]
+
+    assert len(final_reads) == 2
+    assert publications
+    assert max(final_reads) < min(publications)
+    assert max(publications) < min(index for index, _ in releases)
+    assert [name for _, name in releases] == [second.name, first.name]
 
 
 def test_config_paths_discovers_custom_yaml_names_in_cli_order(tmp_path):

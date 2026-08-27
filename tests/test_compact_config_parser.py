@@ -646,11 +646,27 @@ regions:
     assert config.build_tag == "CUSTOM.TAG"
 
 
-def test_canonical_region_build_tag_must_be_omitted(tmp_path):
-    with pytest.raises(ValueError, match="build_tag is canonical.*omit"):
+@pytest.mark.parametrize("style", ["|", ">"])
+def test_block_scalar_region_values_are_rejected(tmp_path, style):
+    with pytest.raises(ValueError, match="literal/folded block scalar"):
         _load(
             tmp_path,
-            """\
+            f'''\
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+regions:
+  OP: {style}
+    I
+''',
+        )
+
+
+def test_canonical_region_build_tag_is_accepted(tmp_path):
+    config = _load(
+        tmp_path,
+        """\
 oem: "Infinix"
 product_base: "X1"
 model: "Model"
@@ -660,7 +676,9 @@ regions:
     build_tag: "BP2A.250605.031.A3"
     incremental: "I"
 """,
-        )
+    )[0]
+
+    assert config.build_tag == "BP2A.250605.031.A3"
 
 
 def test_legacy_variants_schema_is_rejected_with_migration_error(tmp_path):

@@ -8,6 +8,7 @@ import os
 import stat
 import tempfile
 from collections import Counter
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ import yaml
 from yaml.constructor import ConstructorError
 
 from checkota.constants import BUILD_TAG_BY_ANDROID, DEVICE_PREFIX_BY_OEM
-from checkota.manager import Config
+from checkota.manager import Config, _config_lock
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -206,8 +207,11 @@ def migrate_text(regions: list[LegacyRegion]) -> str:
 
 
 def migrate_file(path: Path, write: bool = False) -> str:
-    output = migrate_text(load_legacy_regions(path))
-    if write:
+    if not write:
+        return migrate_text(load_legacy_regions(path))
+
+    with _config_lock(path):
+        output = migrate_text(load_legacy_regions(path))
         staged = _stage_output(path, output)
         try:
             Config.from_yaml(staged)
@@ -246,7 +250,7 @@ def config_paths(config_dir: Path) -> list[Path]:
             for path in config_dir.iterdir()
             if path.is_file() and path.suffix in (".yml", ".yaml")
         ),
-        key=lambda path: path.name.lower(),
+        key=lambda path: (path.name.casefold(), path.name),
     )
 
 
@@ -261,41 +265,54 @@ def migrate_directory(config_dir: Path, write: bool = False) -> dict[Path, str]:
         backups: dict[Path, Path] = {}
         replaced: list[Path] = []
         preserved_backups: set[Path] = set()
-        try:
-            for path, output in outputs.items():
-                temporary = _stage_output(path, output)
-                staged[path] = temporary
-                Config.from_yaml(temporary)
+        # Every config lock is held until all staged files have been validated,
+        # backups have been captured, and publication (or rollback) completes.
+        # Acquiring them in the same order as config_paths prevents deadlocks
+        # when another batch migrator is operating on an overlapping directory.
+        with ExitStack() as lock_stack:
             for path in paths:
-                backups[path] = _stage_bytes(path, path.read_bytes())
-            for path, temporary in staged.items():
-                os.replace(temporary, path)
-                replaced.append(path)
-        except BaseException as publication_error:
-            rollback_errors: list[tuple[Path, Path, BaseException]] = []
-            for path in reversed(replaced):
-                backup = backups[path]
-                try:
-                    os.replace(backup, path)
-                except BaseException as rollback_error:
-                    preserved_backups.add(backup)
-                    rollback_errors.append((path, backup, rollback_error))
-            if rollback_errors:
-                details = "; ".join(
-                    f"{path}: {error!r}; original retained at {backup}"
-                    for path, backup, error in rollback_errors
-                )
-                raise RuntimeError(
-                    f"migration publication failed with {publication_error!r}; "
-                    f"rollback also failed for {details}"
-                ) from publication_error
-            raise
-        finally:
-            for temporary in staged.values():
-                temporary.unlink(missing_ok=True)
-            for backup in backups.values():
-                if backup not in preserved_backups:
-                    backup.unlink(missing_ok=True)
+                lock_stack.enter_context(_config_lock(path))
+            try:
+                # The unlocked pass above is only preflight. Re-read every
+                # source after acquiring all locks so a concurrent runtime
+                # update is included in the published migration output.
+                outputs = {
+                    path: migrate_text(load_legacy_regions(path)) for path in paths
+                }
+                for path, output in outputs.items():
+                    temporary = _stage_output(path, output)
+                    staged[path] = temporary
+                    Config.from_yaml(temporary)
+                for path in paths:
+                    backups[path] = _stage_bytes(path, path.read_bytes())
+                for path, temporary in staged.items():
+                    os.replace(temporary, path)
+                    replaced.append(path)
+            except BaseException as publication_error:
+                rollback_errors: list[tuple[Path, Path, BaseException]] = []
+                for path in reversed(replaced):
+                    backup = backups[path]
+                    try:
+                        os.replace(backup, path)
+                    except BaseException as rollback_error:
+                        preserved_backups.add(backup)
+                        rollback_errors.append((path, backup, rollback_error))
+                if rollback_errors:
+                    details = "; ".join(
+                        f"{path}: {error!r}; original retained at {backup}"
+                        for path, backup, error in rollback_errors
+                    )
+                    raise RuntimeError(
+                        f"migration publication failed with {publication_error!r}; "
+                        f"rollback also failed for {details}"
+                    ) from publication_error
+                raise
+            finally:
+                for temporary in staged.values():
+                    temporary.unlink(missing_ok=True)
+                for backup in backups.values():
+                    if backup not in preserved_backups:
+                        backup.unlink(missing_ok=True)
     return outputs
 
 

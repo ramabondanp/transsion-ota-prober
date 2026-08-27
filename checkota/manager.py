@@ -166,6 +166,7 @@ class Config:
         except yaml.YAMLError as exc:
             raise ValueError(f"Could not parse config {file}: {exc}") from exc
 
+        _validate_no_block_scalar_styles(raw_text, file)
         configs = cls._from_compact_data(data, file)
         _validate_compact_source_layout(raw_text, file)
         return configs
@@ -268,15 +269,6 @@ class Config:
                 if "build_tag" in overrides
                 else None
             )
-            canonical_build_tag = BUILD_TAG_BY_ANDROID.get(effective_android_version)
-            if (
-                explicit_build_tag is not None
-                and explicit_build_tag == canonical_build_tag
-            ):
-                raise ValueError(
-                    f"{region_context} build_tag is canonical for Android "
-                    f"{effective_android_version!r}; omit the override."
-                )
             try:
                 effective_build_tag = resolve_build_tag(
                     effective_android_version, explicit_build_tag
@@ -417,6 +409,21 @@ def _load_yaml(stream: Any) -> Any:
         loader.dispose()
 
 
+def _reject_block_scalar_style(event: yaml.events.ScalarEvent, file: Path) -> None:
+    if event.style in ("|", ">"):
+        raise ValueError(
+            f"Config {file} uses a literal/folded block scalar; use a quoted "
+            "or plain scalar so updates can preserve the source layout."
+        )
+
+
+def _validate_no_block_scalar_styles(source: str, file: Path) -> None:
+    """Reject scalar styles the line-preserving updater cannot rewrite safely."""
+    for event in yaml.parse(source):
+        if isinstance(event, yaml.events.ScalarEvent):
+            _reject_block_scalar_style(event, file)
+
+
 def _validate_compact_source_layout(source: str, file: Path) -> None:
     """Reject YAML layouts that the line-preserving updater cannot rewrite safely."""
     stack: list[list[Any]] = []
@@ -437,6 +444,7 @@ def _validate_compact_source_layout(source: str, file: Path) -> None:
             )
 
         if isinstance(event, yaml.events.ScalarEvent):
+            _reject_block_scalar_style(event, file)
             if stack and stack[-1][0] == "mapping" and stack[-1][1]:
                 expecting_regions_value = (
                     len(stack) == 1 and event.value == "regions"
