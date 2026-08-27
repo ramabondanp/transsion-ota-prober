@@ -229,12 +229,7 @@ regions:
     incremental: "131015"
 ```
 
-For each entry, products are `{effective_product_base}-{region}` and devices are
-`{device_prefix}-{effective_product_base}`. The device prefix normally preserves `oem`
-exactly; `oem: "Itel"` is the exception and uses lowercase `itel`. A region can override
-`product_base`; the `IN` region in `config-X6857.yml` uses `X6857B`. Build tags are derived
-from the effective `android_version` through the canonical mapping. Canonical tags must be
-omitted from YAML; the only current noncanonical overrides are X1301 and T1102.
+For in-place updates, keep `regions` in block style as shown above. YAML anchors and aliases are not supported in compact configs because the updater preserves the surrounding source text and cannot safely rewrite aliased values.
 
 For example, this former `variants` representation is legacy input and is no longer
 accepted:

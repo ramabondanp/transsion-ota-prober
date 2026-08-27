@@ -156,12 +156,19 @@ class Config:
             raise FileNotFoundError(f"Config file not found: {file}")
 
         try:
-            with open(file, encoding="utf-8") as handle:
-                data = _load_yaml(handle)
-        except (OSError, yaml.YAMLError) as exc:
-            raise ValueError(f"Could not read or parse config {file}: {exc}") from exc
+            with open(file, encoding="utf-8", newline="") as handle:
+                raw_text = handle.read()
+        except OSError as exc:
+            raise ValueError(f"Could not read config {file}: {exc}") from exc
 
-        return cls._from_compact_data(data, file)
+        try:
+            data = _load_yaml(raw_text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Could not parse config {file}: {exc}") from exc
+
+        configs = cls._from_compact_data(data, file)
+        _validate_compact_source_layout(raw_text, file)
+        return configs
 
     @classmethod
     def _from_compact_data(cls, data: Any, file: Path) -> list["Config"]:
@@ -357,7 +364,7 @@ _IMMUTABLE_IDENTITY_KEYS = ("oem", "product", "device")
 _UPDATED_KEYS = ("android_version", "build_tag", "incremental")
 _DIRECT_KEY_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<key>"
-    r"[A-Za-z_][A-Za-z0-9_-]*"
+    r"[A-Za-z0-9_?-][A-Za-z0-9_-]*"
     r"|'(?:[^']|'')*'"
     r'|"(?:[^"\\]|\\.)*"'
     r")[ \t]*:"
@@ -408,6 +415,62 @@ def _load_yaml(stream: Any) -> Any:
         return loader.get_single_data()
     finally:
         loader.dispose()
+
+
+def _validate_compact_source_layout(source: str, file: Path) -> None:
+    """Reject YAML layouts that the line-preserving updater cannot rewrite safely."""
+    stack: list[list[Any]] = []
+    expecting_regions_value = False
+
+    for event in yaml.parse(source):
+        if isinstance(event, yaml.events.AliasEvent):
+            raise ValueError(
+                f"Config {file} uses YAML alias '*{event.anchor}'; anchors and "
+                "aliases are not supported because updates could leave dangling "
+                "aliases."
+            )
+        anchor = getattr(event, "anchor", None)
+        if anchor is not None:
+            raise ValueError(
+                f"Config {file} uses YAML anchor '&{anchor}'; anchors and aliases "
+                "are not supported because updates could leave dangling aliases."
+            )
+
+        if isinstance(event, yaml.events.ScalarEvent):
+            if stack and stack[-1][0] == "mapping" and stack[-1][1]:
+                expecting_regions_value = (
+                    len(stack) == 1 and event.value == "regions"
+                )
+                stack[-1][1] = False
+            else:
+                expecting_regions_value = False
+                if stack and stack[-1][0] == "mapping":
+                    stack[-1][1] = True
+            continue
+
+        if isinstance(event, yaml.events.MappingStartEvent):
+            if expecting_regions_value and event.flow_style:
+                raise ValueError(
+                    f"Config {file} uses a flow-style 'regions' mapping; use "
+                    "block style so updates can preserve the source layout."
+                )
+            expecting_regions_value = False
+            if stack and stack[-1][0] == "mapping":
+                stack[-1][1] = True
+            stack.append(["mapping", True])
+            continue
+
+        if isinstance(event, yaml.events.SequenceStartEvent):
+            expecting_regions_value = False
+            if stack and stack[-1][0] == "mapping":
+                stack[-1][1] = True
+            stack.append(["sequence", False])
+            continue
+
+        if isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
+            if stack:
+                stack.pop()
+            expecting_regions_value = False
 
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
@@ -590,6 +653,12 @@ def _update_config_from_fingerprint(
             raw_text = handle.read()
     except OSError as exc:
         Log.w(f"Failed to read config file {config_path}: {exc}")
+        return False
+
+    try:
+        _validate_compact_source_layout(raw_text, config_path)
+    except (ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not validate config {config_path} before updating: {exc}")
         return False
 
     try:

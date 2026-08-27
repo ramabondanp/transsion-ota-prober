@@ -233,6 +233,43 @@ regions: {regions}
         )
 
 
+@pytest.mark.parametrize(
+    "regions",
+    ['{OP: "I"}', '{ "OP": "I" }'],
+)
+def test_flow_style_regions_mapping_is_rejected(tmp_path, regions):
+    with pytest.raises(ValueError, match="flow-style.*regions"):
+        _load(
+            tmp_path,
+            f'''\
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+regions: {regions}
+''',
+        )
+
+
+@pytest.mark.parametrize(
+    ("region_value", "message"),
+    [("&base \"I\"", "anchor"), ("*base", "alias")],
+)
+def test_yaml_anchors_and_aliases_are_rejected(tmp_path, region_value, message):
+    with pytest.raises(ValueError, match=message):
+        _load(
+            tmp_path,
+            f'''\
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+regions:
+  OP: {region_value}
+''',
+        )
+
+
 def test_missing_regions_mapping_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="missing required key.*regions"):
         _load(

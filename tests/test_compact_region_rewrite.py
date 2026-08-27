@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from checkota import manager
@@ -118,6 +119,62 @@ regions:
         'regions:\n'
         '  "NO": "NEW" # retain quoted region\n'
     )
+
+
+def test_numeric_leading_region_key_is_rewritten_in_place(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  5G: "OLD"
+""",
+    )
+    cfg = _config(path)
+
+    assert cfg.region == "5G"
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+
+    assert '  5G: "NEW"' in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        'regions: {OP: "OLD"}',
+        "regions:\n  OP: &base \"OLD\"",
+        "regions:\n  OP: *base",
+    ],
+)
+def test_unsafe_layout_is_rejected_without_rewrite(tmp_path, replacement):
+    path = tmp_path / "config.yml"
+    base = """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  OP: "OLD"
+"""
+    _write(path, base)
+    cfg = _config(path)
+    _write(path, base.replace('regions:\n  OP: "OLD"', replacement))
+    before = path.read_bytes()
+
+    assert not update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+    assert path.read_bytes() == before
 
 
 def test_scalar_region_is_promoted_for_android_override(tmp_path):
