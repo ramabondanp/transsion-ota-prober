@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from checkota.manager import Config, parse_fingerprint
-from checkota.processor import _debug_label, load_config_regions
+from checkota.processor import _debug_label, load_config_regions, log_region_header
 
 
 def _load(tmp_path: Path, content: str) -> list[Config]:
@@ -58,6 +58,42 @@ regions:
     assert [(config.region, config.product) for config in configs] == [
         ("OP-M1", "CN7c-OP-M1")
     ]
+
+
+def test_region_header_displays_unmapped_region_code(capsys):
+    config = Config(
+        oem="Infinix",
+        product="X1-5G",
+        device="Infinix-X1",
+        android_version="16",
+        build_tag="BP2A.250605.031.A3",
+        incremental="BUILD",
+        model="Model",
+        region="5G",
+    )
+
+    log_region_header(config)
+
+    output = capsys.readouterr().out
+    assert "Region: 5G\n" in output
+
+
+def test_region_header_keeps_friendly_known_region_display(capsys):
+    config = Config(
+        oem="Infinix",
+        product="X1-OP",
+        device="Infinix-X1",
+        android_version="16",
+        build_tag="BP2A.250605.031.A3",
+        incremental="BUILD",
+        model="Model",
+        region="OP",
+    )
+
+    log_region_header(config)
+
+    output = capsys.readouterr().out
+    assert "Region: Global - OP Market (OP)\n" in output
 
 
 def test_debug_labels_keep_region_and_direct_fingerprint_names():
@@ -286,6 +322,22 @@ regions: {regions}
 def test_multi_line_scalars_are_rejected(tmp_path, config):
     with pytest.raises(ValueError, match="multi-line scalar"):
         _load(tmp_path, config)
+
+
+def test_next_line_scalar_value_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="unsupported scalar value source layout"):
+        _load(
+            tmp_path,
+            '''\
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+regions:
+  OP:
+    "I"
+''',
+        )
 
 
 @pytest.mark.parametrize(

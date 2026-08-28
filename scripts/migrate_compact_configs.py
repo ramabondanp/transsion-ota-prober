@@ -225,8 +225,7 @@ def migrate_file(path: Path, write: bool = False) -> str:
         output, needs_publication = _migration_output(path)
         if not needs_publication:
             return output
-        with _validated_stage(path, output):
-            pass
+        _validate_output(output)
         return output
 
     with _config_lock(path):
@@ -236,6 +235,14 @@ def migrate_file(path: Path, write: bool = False) -> str:
         with _validated_stage(path, output) as staged:
             os.replace(staged, path)
     return output
+
+
+def _validate_output(output: str) -> None:
+    """Validate generated output without writing beside the source config."""
+    with tempfile.TemporaryDirectory(prefix="transsion-compact-config-") as directory:
+        candidate = Path(directory) / "config.yml"
+        candidate.write_bytes(output.encode("utf-8"))
+        Config.from_yaml(candidate)
 
 
 def _stage_validated(path: Path, output: str) -> Path:

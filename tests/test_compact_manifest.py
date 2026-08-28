@@ -1,6 +1,10 @@
 import hashlib
 import runpy
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _MANIFEST = runpy.run_path(str(_ROOT / "scripts" / "compact_manifest.py"))
@@ -47,6 +51,59 @@ regions:
         'BP2A.250605.031.A3/INC:user/release-keys"}\n'
     ).encode()
     assert manifest_bytes(tmp_path) == expected
+
+
+@pytest.mark.parametrize("input_kind", ["missing", "empty", "wrong"])
+def test_cli_rejects_inputs_without_configs_before_stdout_payload(
+    tmp_path, input_kind
+):
+    config_dir = tmp_path / input_kind
+    if input_kind != "missing":
+        config_dir.mkdir()
+    if input_kind == "wrong":
+        (config_dir / "unrelated.yml").write_text(
+            "not: a compact config\n", encoding="utf-8"
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "scripts" / "compact_manifest.py"),
+            str(config_dir),
+        ],
+        cwd=_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert b"no matching config-*.yml or config-*.yaml files found" in result.stderr
+
+
+def test_cli_rejects_empty_input_without_touching_output(tmp_path):
+    config_dir = tmp_path / "empty"
+    config_dir.mkdir()
+    output = tmp_path / "manifest.jsonl"
+    sentinel = b"existing manifest sentinel\x00\xff"
+    output.write_bytes(sentinel)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "scripts" / "compact_manifest.py"),
+            str(config_dir),
+            "--output",
+            str(output),
+        ],
+        cwd=_ROOT,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert output.read_bytes() == sentinel
 
 
 def test_repository_manifest_matches_preserved_baseline(monkeypatch):

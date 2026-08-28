@@ -66,6 +66,11 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = config_paths(args.config_dir)
+    if not paths:
+        parser.error(
+            "no matching config-*.yml or config-*.yaml files found in "
+            f"input directory: {args.config_dir}"
+        )
     rows = rows_for_paths(paths)
     payload = serialize_manifest(rows)
     if args.output is None:

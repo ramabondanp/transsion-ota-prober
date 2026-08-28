@@ -414,15 +414,21 @@ def _load_yaml(stream: Any) -> Any:
 def _validate_mapping_key_source_forms(
     events: list[yaml.events.Event], source: str, file: Path
 ) -> None:
-    """Require every mapping key to use syntax understood by the updater."""
+    """Require mapping source forms understood by the line-oriented updater."""
     source_lines = source.splitlines()
     # Each frame is [is_mapping, mapping_expects_key]. Collection nodes only
     # complete in their parent when their corresponding end event is reached.
     frames: list[list[bool]] = []
+    # For mapping frames, remember the source line of the current key until its
+    # value completes. A scalar value on a later line cannot be rewritten safely
+    # by the line-oriented updater.
+    mapping_key_lines: list[int | None] = []
 
     def complete_node() -> None:
         if frames and frames[-1][0]:
             frames[-1][1] = not frames[-1][1]
+            if frames[-1][1]:
+                mapping_key_lines[-1] = None
 
     for event in events:
         if isinstance(
@@ -437,12 +443,14 @@ def _validate_mapping_key_source_forms(
             frames.append(
                 [isinstance(event, yaml.events.MappingStartEvent), True]
             )
+            mapping_key_lines.append(None)
             continue
 
         if isinstance(
             event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)
         ):
             frames.pop()
+            mapping_key_lines.pop()
             complete_node()
             continue
 
@@ -467,6 +475,19 @@ def _validate_mapping_key_source_forms(
                     "use a plain or quoted scalar key followed by ':' on the same "
                     "line so updates can locate it."
                 )
+            mapping_key_lines[-1] = event.end_mark.line
+        elif (
+            isinstance(event, yaml.events.ScalarEvent)
+            and frames
+            and frames[-1][0]
+            and mapping_key_lines[-1] is not None
+            and event.start_mark.line != mapping_key_lines[-1]
+        ):
+            raise ValueError(
+                f"Config {file} uses an unsupported scalar value source layout; "
+                "put each scalar value on the same line as its mapping key so "
+                "updates can locate it."
+            )
         complete_node()
 
 
@@ -985,18 +1006,6 @@ def _dominant_child_indent(
     return max(counts, key=lambda indent: (counts[indent], indent))
 
 
-def _line_value_is_scalar(line: str) -> bool:
-    body, _ = _line_body_and_ending(line)
-    match = _DIRECT_KEY_RE.match(body)
-    if match is None:
-        return False
-    value = body[match.end() :]
-    comment_index = _comment_start(value)
-    if comment_index is not None:
-        value = value[:comment_index]
-    return bool(value.strip())
-
-
 def _inline_comment(line: str) -> str | None:
     body, _ = _line_body_and_ending(line)
     index = _comment_start(body)
@@ -1138,7 +1147,10 @@ def _collapse_region_mapping(
             continue
         comment_line = _comment_line(line, region_indent)
         if comment_line is not None:
-            comments.append(comment_line)
+            comment_body, comment_ending = _line_body_and_ending(comment_line)
+            comments.append(
+                comment_line if comment_ending else comment_body + line_ending
+            )
 
     collapsed = [
         *comments,
@@ -1168,7 +1180,8 @@ def _rewrite_compact_region(
 
     start, end, region_indent, child_indent = span
     block = lines[start:end]
-    if _line_value_is_scalar(block[0]):
+    region_data = data["regions"][region_code]
+    if isinstance(region_data, str):
         if tuple(desired) == ("incremental",):
             lines[start] = _rewrite_yaml_line(
                 block[0], region_code, desired["incremental"]

@@ -75,9 +75,9 @@ def log_region_header(cfg: Config) -> tuple[str | None, str | None]:
     region_code = region_code_from_product(cfg.product)
 
     Log.i(f"Device: {cfg.model} ({cfg.device})")
-    if region_name:
-        region_display = region_name
-        if region_code:
+    if region_name or region_code:
+        region_display = region_name or region_code
+        if region_name and region_code:
             region_display = f"{region_display} ({region_code})"
         Log.i(f"Region: {region_display}")
     Log.i(f"Build: {fingerprint}")

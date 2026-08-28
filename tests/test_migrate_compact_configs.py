@@ -297,6 +297,35 @@ def test_legacy_dry_run_returns_validated_output_without_publication(tmp_path):
     assert list(tmp_path.iterdir()) == [path]
 
 
+def test_legacy_dry_run_in_read_only_directory_has_no_source_artifacts(
+    tmp_path, monkeypatch
+):
+    source_dir = tmp_path / "configs"
+    source_dir.mkdir()
+    path = source_dir / "legacy.yml"
+    original = _legacy_config(incremental="read-only", newline="\r\n")
+    path.write_bytes(original)
+    path.chmod(0o400)
+    source_dir.chmod(0o500)
+
+    def reject_source_stage(*_args):
+        raise AssertionError("dry-run migration staged output beside the source")
+
+    monkeypatch.setitem(migrate_file.__globals__, "_stage_output", reject_source_stage)
+
+    try:
+        output = migrate_file(path)
+        outputs = migrate_directory(source_dir)
+    finally:
+        source_dir.chmod(0o700)
+        path.chmod(0o600)
+
+    assert outputs == {path: output}
+    assert yaml.safe_load(output)["regions"]["OP"] == "read-only"
+    assert path.read_bytes() == original
+    assert list(source_dir.iterdir()) == [path]
+
+
 def test_legacy_dry_run_rejects_runtime_invalid_output_without_publication(tmp_path):
     path = tmp_path / "legacy.yml"
     original = _legacy_config(region="op", newline="\r\n")

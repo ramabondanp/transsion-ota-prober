@@ -217,6 +217,9 @@ regions:
         # Multi-line scalar: continuation lines are indistinguishable from keys
         # to the line-oriented rewriter.
         'regions:\n  OP: "OLD\n    continued"',
+        # A valid scalar on the line after its key has no source form the
+        # line-oriented updater can replace without leaving a dangling value.
+        'regions:\n  OP:\n    "OLD"',
     ],
 )
 def test_unsafe_layout_is_rejected_without_rewrite(tmp_path, replacement):
@@ -306,6 +309,38 @@ regions:
     assert "android_version: \"15\"" not in text
     assert "build_tag:" not in text
     assert Config.from_yaml(path)[0].incremental == "NEW"
+
+
+def test_tagged_expanded_region_updates_from_parsed_mapping(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  EU: !!map
+    android_version: "15"
+    incremental: "OLD"
+  OP: "UNCHANGED"
+""",
+    )
+    configs = Config.from_yaml(path)
+    cfg = configs[0]
+    unrelated_fingerprint = configs[1].fingerprint()
+    target = _target(cfg, "16", "BP2A.250605.031.A3", "NEW")
+
+    assert update_config_from_fingerprint(path, cfg, target)
+
+    updated = Config.from_yaml(path)
+    assert updated[0].fingerprint() == target
+    assert updated[1].fingerprint() == unrelated_fingerprint
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["regions"] == {
+        "EU": "NEW",
+        "OP": "UNCHANGED",
+    }
 
 
 def test_expanded_region_preserves_product_base_override(tmp_path):
@@ -531,6 +566,37 @@ def test_mapping_collapse_preserves_missing_final_newline(tmp_path):
     updated = path.read_bytes()
     assert updated.endswith(b'EU: "NEW"')
     assert not updated.endswith(b"\n")
+
+
+def test_mapping_collapse_separates_final_child_comment_without_final_newline(
+    tmp_path,
+):
+    path = tmp_path / "config.yml"
+    content = (
+        'oem: "Infinix"\n'
+        'product_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\n'
+        'android_version: "16"\n'
+        "regions:\n"
+        '  IN: "UNCHANGED"\n'
+        "  EU:\n"
+        '    android_version: "15"\n'
+        '    incremental: "OLD" # final child note'
+    )
+    _write(path, content)
+    configs = Config.from_yaml(path)
+    cfg = configs[1]
+    unrelated_fingerprint = configs[0].fingerprint()
+    target = _target(cfg, "16", "BP2A.250605.031.A3", "NEW")
+
+    assert update_config_from_fingerprint(path, cfg, target)
+
+    updated_bytes = path.read_bytes()
+    assert updated_bytes.endswith(b'  # final child note\n  EU: "NEW"')
+    assert not updated_bytes.endswith(b"\n")
+    updated = Config.from_yaml(path)
+    assert updated[0].fingerprint() == unrelated_fingerprint
+    assert updated[1].fingerprint() == target
 
 
 def test_mapping_normalization_preserves_missing_final_newline(tmp_path):
