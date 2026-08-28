@@ -206,12 +206,28 @@ def migrate_text(regions: list[LegacyRegion]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _migration_output(path: Path) -> tuple[str, bool]:
+    """Return output text and whether a legacy document needs publication."""
+    with path.open(encoding="utf-8", newline="") as stream:
+        source = stream.read()
+    data = yaml.load(source, Loader=_UniqueKeyLoader)
+    if isinstance(data, dict) and ({"product_base", "regions"} & data.keys()):
+        # A compact-looking document must satisfy the complete runtime schema.
+        # In particular, never reinterpret a malformed compact document as a
+        # legacy config just because legacy parsing might produce some fields.
+        Config.from_yaml(path)
+        return source, False
+    return migrate_text(load_legacy_regions(path)), True
+
+
 def migrate_file(path: Path, write: bool = False) -> str:
     if not write:
-        return migrate_text(load_legacy_regions(path))
+        return _migration_output(path)[0]
 
     with _config_lock(path):
-        output = migrate_text(load_legacy_regions(path))
+        output, needs_publication = _migration_output(path)
+        if not needs_publication:
+            return output
         staged = _stage_output(path, output)
         try:
             Config.from_yaml(staged)
@@ -276,14 +292,20 @@ def migrate_directory(config_dir: Path, write: bool = False) -> dict[Path, str]:
                 # The unlocked pass above is only preflight. Re-read every
                 # source after acquiring all locks so a concurrent runtime
                 # update is included in the published migration output.
-                outputs = {
-                    path: migrate_text(load_legacy_regions(path)) for path in paths
+                migration_results = {
+                    path: _migration_output(path) for path in paths
                 }
-                for path, output in outputs.items():
+                outputs = {
+                    path: output
+                    for path, (output, _) in migration_results.items()
+                }
+                for path, (output, needs_publication) in migration_results.items():
+                    if not needs_publication:
+                        continue
                     temporary = _stage_output(path, output)
                     staged[path] = temporary
                     Config.from_yaml(temporary)
-                for path in paths:
+                for path in staged:
                     backups[path] = _stage_bytes(path, path.read_bytes())
                 for path, temporary in staged.items():
                     os.replace(temporary, path)

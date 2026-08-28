@@ -30,6 +30,21 @@ incremental: "{incremental}"
     return text.replace("\n", newline).encode()
 
 
+def _compact_config(
+    region: str = "OP", incremental: str = "1", newline: str = "\n"
+) -> bytes:
+    text = f'''\
+# already compact; preserve this comment and quoting
+oem: "TECNO"
+product_base: "T1"
+model: "Example"
+android_version: "15"
+regions:
+  {region}: "{incremental}"
+'''
+    return text.replace("\n", newline).encode()
+
+
 def test_legacy_variants_are_merged_and_region_order_is_preserved(tmp_path):
     path = tmp_path / "config.yml"
     path.write_text(
@@ -212,6 +227,86 @@ def test_default_ties_use_first_region_and_expanded_keys_are_ordered():
     )
 
 
+def test_directory_write_is_byte_identical_on_second_migration(tmp_path):
+    first = tmp_path / "first.yml"
+    second = tmp_path / "second.yaml"
+    first.write_bytes(_legacy_config(incremental="first", newline="\r\n"))
+    second.write_bytes(_legacy_config(region="EU", incremental="second"))
+    first.chmod(0o640)
+    second.chmod(0o600)
+
+    migrate_directory(tmp_path, write=True)
+    migrated = {
+        path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        for path in (first, second)
+    }
+
+    outputs = migrate_directory(tmp_path, write=True)
+
+    assert outputs == {
+        path: content.decode("utf-8")
+        for path, (content, _) in migrated.items()
+    }
+    for path, (content, mode) in migrated.items():
+        assert path.read_bytes() == content
+        assert stat.S_IMODE(path.stat().st_mode) == mode
+    assert set(tmp_path.iterdir()) == {first, second}
+
+
+def test_mixed_directory_migrates_legacy_and_preserves_compact(tmp_path):
+    legacy = tmp_path / "legacy.yml"
+    compact = tmp_path / "compact.yaml"
+    legacy.write_bytes(_legacy_config(incremental="legacy", newline="\r\n"))
+    compact_content = _compact_config(incremental="compact", newline="\r\n")
+    compact.write_bytes(compact_content)
+    legacy.chmod(0o600)
+    compact.chmod(0o640)
+
+    outputs = migrate_directory(tmp_path, write=True)
+
+    assert legacy.read_bytes() == outputs[legacy].encode("utf-8")
+    assert b'regions:\n  OP: "legacy"' in legacy.read_bytes()
+    assert compact.read_bytes() == compact_content
+    assert outputs[compact].encode("utf-8") == compact_content
+    assert stat.S_IMODE(legacy.stat().st_mode) == 0o600
+    assert stat.S_IMODE(compact.stat().st_mode) == 0o640
+    assert set(tmp_path.iterdir()) == {legacy, compact}
+
+
+def test_single_compact_file_write_and_dry_run_are_noops(tmp_path):
+    path = tmp_path / "compact.yml"
+    content = _compact_config(newline="\r\n")
+    path.write_bytes(content)
+    path.chmod(0o640)
+
+    assert migrate_file(path) == content.decode("utf-8")
+    assert migrate_file(path, write=True) == content.decode("utf-8")
+    assert path.read_bytes() == content
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_compact_looking_invalid_document_fails_preflight(tmp_path):
+    valid_legacy = tmp_path / "legacy.yml"
+    invalid_compact = tmp_path / "invalid.yaml"
+    legacy_content = _legacy_config()
+    valid_legacy.write_bytes(legacy_content)
+    invalid_compact.write_text(
+        '''\
+oem: "TECNO"
+product_base: "T1"
+model: "Example"
+android_version: "15"
+regions: []
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="regions.*mapping"):
+        migrate_directory(tmp_path, write=True)
+
+    assert valid_legacy.read_bytes() == legacy_content
+
+
 def test_batch_preflight_writes_nothing_when_any_legacy_config_is_invalid(tmp_path):
     valid = tmp_path / "config-A.yml"
     invalid = tmp_path / "config-B.yml"
@@ -376,11 +471,13 @@ def test_runtime_validation_happens_before_publication(tmp_path):
 def test_later_replace_failure_rolls_back_and_allows_rerun(tmp_path, monkeypatch):
     first = tmp_path / "A-first.yaml"
     second = tmp_path / "b-second.yml"
+    compact = tmp_path / "c-compact.yaml"
     originals = {
         first: _legacy_config(incremental="first", newline="\r\n"),
         second: _legacy_config(region="EU", incremental="second"),
+        compact: _compact_config(incremental="unchanged", newline="\r\n"),
     }
-    modes = {first: 0o640, second: 0o600}
+    modes = {first: 0o640, second: 0o600, compact: 0o644}
     for path, content in originals.items():
         path.write_bytes(content)
         path.chmod(modes[path])
@@ -407,7 +504,7 @@ def test_later_replace_failure_rolls_back_and_allows_rerun(tmp_path, monkeypatch
 
     outputs = migrate_directory(tmp_path, write=True)
 
-    assert list(outputs) == [first, second]
+    assert list(outputs) == [first, second, compact]
     for path, output in outputs.items():
         assert path.read_bytes() == output.encode()
         assert stat.S_IMODE(path.stat().st_mode) == modes[path]

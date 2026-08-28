@@ -289,6 +289,25 @@ def test_multi_line_scalars_are_rejected(tmp_path, config):
 
 
 @pytest.mark.parametrize(
+    "regions_key",
+    ["? regions\n:", "!!str regions:"],
+)
+def test_unsupported_mapping_key_layouts_are_rejected(tmp_path, regions_key):
+    with pytest.raises(ValueError, match="mapping key source layout"):
+        _load(
+            tmp_path,
+            f'''\
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+{regions_key}
+  OP: "I"
+''',
+        )
+
+
+@pytest.mark.parametrize(
     ("region_value", "message"),
     [("&base \"I\"", "anchor"), ("*base", "alias")],
 )

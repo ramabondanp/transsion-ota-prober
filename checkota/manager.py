@@ -411,6 +411,63 @@ def _load_yaml(stream: Any) -> Any:
         loader.dispose()
 
 
+def _validate_mapping_key_source_forms(
+    events: list[yaml.events.Event], source: str, file: Path
+) -> None:
+    """Require every mapping key to use syntax understood by the updater."""
+    source_lines = source.splitlines()
+    # Each frame is [is_mapping, mapping_expects_key]. Collection nodes only
+    # complete in their parent when their corresponding end event is reached.
+    frames: list[list[bool]] = []
+
+    def complete_node() -> None:
+        if frames and frames[-1][0]:
+            frames[-1][1] = not frames[-1][1]
+
+    for event in events:
+        if isinstance(
+            event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)
+        ):
+            if frames and frames[-1][0] and frames[-1][1]:
+                raise ValueError(
+                    f"Config {file} uses an unsupported mapping key source layout; "
+                    "use a plain or quoted scalar key followed by ':' on the same "
+                    "line so updates can locate it."
+                )
+            frames.append(
+                [isinstance(event, yaml.events.MappingStartEvent), True]
+            )
+            continue
+
+        if isinstance(
+            event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)
+        ):
+            frames.pop()
+            complete_node()
+            continue
+
+        if not isinstance(event, (yaml.events.ScalarEvent, yaml.events.AliasEvent)):
+            continue
+
+        is_mapping_key = bool(frames and frames[-1][0] and frames[-1][1])
+        if is_mapping_key:
+            line = source_lines[event.start_mark.line]
+            match = _DIRECT_KEY_RE.match(line)
+            if (
+                not isinstance(event, yaml.events.ScalarEvent)
+                or event.start_mark.line != event.end_mark.line
+                or match is None
+                or match.start("key") != event.start_mark.column
+                or match.end("key") != event.end_mark.column
+            ):
+                raise ValueError(
+                    f"Config {file} uses an unsupported mapping key source layout; "
+                    "use a plain or quoted scalar key followed by ':' on the same "
+                    "line so updates can locate it."
+                )
+        complete_node()
+
+
 def _validate_compact_source_layout(source: str, file: Path) -> None:
     """Reject YAML layouts that the line-preserving updater cannot rewrite safely.
 
@@ -421,6 +478,26 @@ def _validate_compact_source_layout(source: str, file: Path) -> None:
     readable-but-unupdatable.
     """
     events = list(yaml.parse(source))
+    # Explicit mapping keys and tagged keys are valid YAML, but the updater's
+    # line-oriented key locator cannot rewrite them. Reject these source forms
+    # before schema validation; flow collections are handled below so they keep
+    # their more specific existing diagnostic.
+    for line in source.splitlines():
+        stripped = line.lstrip(" \t")
+        if stripped.startswith("?") and (
+            len(stripped) == 1 or stripped[1].isspace()
+        ):
+            raise ValueError(
+                f"Config {file} uses an unsupported mapping key source layout; "
+                "use a plain or quoted scalar key followed by ':' on the same "
+                "line so updates can locate it."
+            )
+        if re.match(r"!![^\s:]+[ \t]+[^:]+:", stripped):
+            raise ValueError(
+                f"Config {file} uses an unsupported mapping key source layout; "
+                "use a plain or quoted scalar key followed by ':' on the same "
+                "line so updates can locate it."
+            )
     for index, event in enumerate(events):
         # AliasEvent and every *StartEvent carry `.anchor`; keeping this check
         # out of an isinstance guard also keeps the raise honest (a shared node
@@ -1019,9 +1096,25 @@ def _collapse_region_mapping(
         scalar_body = f"{scalar_body.rstrip()} {comment}"
     scalar_line = scalar_body + line_ending
 
+    following_region_prefix = len(block)
+    saw_following_comment = False
+    for index in range(len(block) - 1, 0, -1):
+        body, _ = _line_body_and_ending(block[index])
+        stripped = body.lstrip(" \t")
+        if not stripped:
+            following_region_prefix = index
+            continue
+        if stripped.startswith("#") and len(body) - len(stripped) <= region_indent:
+            following_region_prefix = index
+            saw_following_comment = True
+            continue
+        break
+    if not saw_following_comment:
+        following_region_prefix = len(block)
+
     comments: list[str] = []
     trailing: list[str] = []
-    for line in block[1:]:
+    for line in block[1:following_region_prefix]:
         body, _ = _line_body_and_ending(line)
         if not body.strip():
             trailing.append(line)
@@ -1030,7 +1123,12 @@ def _collapse_region_mapping(
         if comment_line is not None:
             comments.append(comment_line)
 
-    collapsed = [*comments, scalar_line, *trailing]
+    collapsed = [
+        *comments,
+        scalar_line,
+        *trailing,
+        *block[following_region_prefix:],
+    ]
     if not had_final_newline:
         final_body, _ = _line_body_and_ending(collapsed[-1])
         collapsed[-1] = final_body

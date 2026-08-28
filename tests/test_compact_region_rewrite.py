@@ -382,6 +382,37 @@ regions:
     assert yaml.safe_load(text)["regions"]["EU"] == "NEW"
 
 
+def test_collapse_keeps_following_region_comment_with_following_region(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        '''\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  EU:
+    android_version: "15"
+    incremental: "OLD"
+
+  # India rollout
+  IN: "OTHER"
+''',
+    )
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert '  EU: "NEW"\n\n  # India rollout\n  IN: "OTHER"\n' in text
+    assert yaml.safe_load(text)["regions"] == {"EU": "NEW", "IN": "OTHER"}
+
+
 def test_expanded_region_is_normalized_without_collapsing(tmp_path):
     path = tmp_path / "config.yml"
     _write(
