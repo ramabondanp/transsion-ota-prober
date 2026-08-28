@@ -8,7 +8,7 @@ import os
 import stat
 import tempfile
 from collections import Counter
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -222,19 +222,40 @@ def _migration_output(path: Path) -> tuple[str, bool]:
 
 def migrate_file(path: Path, write: bool = False) -> str:
     if not write:
-        return _migration_output(path)[0]
+        output, needs_publication = _migration_output(path)
+        if not needs_publication:
+            return output
+        with _validated_stage(path, output):
+            pass
+        return output
 
     with _config_lock(path):
         output, needs_publication = _migration_output(path)
         if not needs_publication:
             return output
-        staged = _stage_output(path, output)
-        try:
-            Config.from_yaml(staged)
+        with _validated_stage(path, output) as staged:
             os.replace(staged, path)
-        finally:
-            staged.unlink(missing_ok=True)
     return output
+
+
+def _stage_validated(path: Path, output: str) -> Path:
+    staged = _stage_output(path, output)
+    try:
+        Config.from_yaml(staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+@contextmanager
+def _validated_stage(path: Path, output: str):
+    """Stage output, validate its exact bytes, and clean it up on exit."""
+    staged = _stage_validated(path, output)
+    try:
+        yield staged
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def _stage_bytes(path: Path, content: bytes) -> Path:
@@ -302,9 +323,8 @@ def migrate_directory(config_dir: Path, write: bool = False) -> dict[Path, str]:
                 for path, (output, needs_publication) in migration_results.items():
                     if not needs_publication:
                         continue
-                    temporary = _stage_output(path, output)
+                    temporary = _stage_validated(path, output)
                     staged[path] = temporary
-                    Config.from_yaml(temporary)
                 for path in staged:
                     backups[path] = _stage_bytes(path, path.read_bytes())
                 for path, temporary in staged.items():

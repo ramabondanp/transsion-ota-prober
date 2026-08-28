@@ -59,6 +59,64 @@ regions:
     }
 
 
+def test_indented_root_mapping_region_is_rewritten_in_place(tmp_path):
+    path = tmp_path / "config.yml"
+    content = """\
+  oem: "Infinix"
+  product_base: "X6873"
+  model: "Infinix GT 30 Pro"
+  android_version: "16"
+  regions:
+    OP: "OLD" # retain region comment
+    IN: "UNCHANGED"
+"""
+    _write(path, content)
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+
+    assert path.read_text(encoding="utf-8") == content.replace(
+        '    OP: "OLD"', '    OP: "NEW"'
+    )
+
+
+def test_indented_root_convergence_rewrites_android_default(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+  oem: "Infinix"
+  product_base: "X6873"
+  model: "Infinix GT 30 Pro"
+  android_version: "15" # retain default comment
+  regions:
+    OP: "OLD"
+    EU:
+      android_version: "16"
+      incremental: "EU"
+""",
+    )
+    configs = Config.from_yaml(path)
+    cfg = configs[0]
+    unrelated_fingerprint = configs[1].fingerprint()
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+
+    text = path.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(text)
+    assert '  android_version: "16" # retain default comment' in text
+    assert parsed["regions"] == {"OP": "NEW", "EU": "EU"}
+    assert Config.from_yaml(path)[1].fingerprint() == unrelated_fingerprint
+
+
 def test_quoted_top_level_keys_are_rewritten_in_place(tmp_path):
     path = tmp_path / "config.yml"
     _write(

@@ -307,6 +307,23 @@ android_version: "16"
         )
 
 
+def test_named_tag_handle_on_mapping_key_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="mapping key source layout"):
+        _load(
+            tmp_path,
+            """\
+%TAG !e! tag:yaml.org,2002:
+---
+oem: "Infinix"
+product_base: "X1"
+model: "Model"
+android_version: "16"
+!e!str regions:
+  OP: "I"
+""",
+        )
+
+
 @pytest.mark.parametrize(
     ("region_value", "message"),
     [("&base \"I\"", "anchor"), ("*base", "alias")],

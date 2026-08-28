@@ -452,13 +452,15 @@ def _validate_mapping_key_source_forms(
         is_mapping_key = bool(frames and frames[-1][0] and frames[-1][1])
         if is_mapping_key:
             line = source_lines[event.start_mark.line]
-            match = _DIRECT_KEY_RE.match(line)
+            key_source = line[event.start_mark.column :]
+            match = _DIRECT_KEY_RE.match(key_source)
             if (
                 not isinstance(event, yaml.events.ScalarEvent)
                 or event.start_mark.line != event.end_mark.line
                 or match is None
-                or match.start("key") != event.start_mark.column
-                or match.end("key") != event.end_mark.column
+                or match.start("key") != 0
+                or match.end("key")
+                != event.end_mark.column - event.start_mark.column
             ):
                 raise ValueError(
                     f"Config {file} uses an unsupported mapping key source layout; "
@@ -550,6 +552,8 @@ def _validate_compact_source_layout(source: str, file: Path) -> None:
                 "the source layout."
             )
 
+    _validate_mapping_key_source_forms(events, source, file)
+
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
     match = _FINGERPRINT_RE.match((fingerprint or "").strip())
@@ -613,6 +617,15 @@ def _decoded_direct_key(match: re.Match[str]) -> str | None:
     except yaml.YAMLError:
         return None
     return key if isinstance(key, str) else None
+
+
+def _root_mapping_indent(lines: list[str]) -> int | None:
+    indents = (
+        len(match.group("indent"))
+        for line in lines
+        if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
+    )
+    return min(indents, default=None)
 
 
 def _direct_key_line(line: str, key: str, indent: int | None = None) -> bool:
@@ -883,11 +896,13 @@ def _region_block_span(
     lines: list[str], region_code: str, config_path: Path
 ) -> tuple[int, int, int, int] | None:
     """Locate a compact region block as (start, end, key indent, child indent)."""
+    root_indent = _root_mapping_indent(lines)
     regions_line_idx = next(
         (
             index
             for index, line in enumerate(lines)
-            if _direct_key_line(line, "regions", indent=0)
+            if root_indent is not None
+            and _direct_key_line(line, "regions", indent=root_indent)
         ),
         None,
     )
@@ -1218,11 +1233,13 @@ def _converge_android_default(
         Log.w(f"Could not uniquely identify all regions in {config_path}.")
         return False
 
+    root_indent = _root_mapping_indent(lines)
     version_line = next(
         (
             index
             for index, line in enumerate(lines)
-            if _direct_key_line(line, "android_version", indent=0)
+            if root_indent is not None
+            and _direct_key_line(line, "android_version", indent=root_indent)
         ),
         None,
     )

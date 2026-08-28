@@ -285,6 +285,30 @@ def test_single_compact_file_write_and_dry_run_are_noops(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
+def test_legacy_dry_run_returns_validated_output_without_publication(tmp_path):
+    path = tmp_path / "legacy.yml"
+    original = _legacy_config(incremental="dry-run", newline="\r\n")
+    path.write_bytes(original)
+
+    output = migrate_file(path)
+
+    assert yaml.safe_load(output)["regions"]["OP"] == "dry-run"
+    assert path.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_legacy_dry_run_rejects_runtime_invalid_output_without_publication(tmp_path):
+    path = tmp_path / "legacy.yml"
+    original = _legacy_config(region="op", newline="\r\n")
+    path.write_bytes(original)
+
+    with pytest.raises(ValueError, match="uppercase"):
+        migrate_file(path)
+
+    assert path.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def test_compact_looking_invalid_document_fails_preflight(tmp_path):
     valid_legacy = tmp_path / "legacy.yml"
     invalid_compact = tmp_path / "invalid.yaml"
