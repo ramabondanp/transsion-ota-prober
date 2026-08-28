@@ -290,7 +290,7 @@ def test_multi_line_scalars_are_rejected(tmp_path, config):
 
 @pytest.mark.parametrize(
     "regions_key",
-    ["? regions\n:", "!!str regions:"],
+    ["? regions\n:", "!!str regions:", "!<tag:yaml.org,2002:str> regions:"],
 )
 def test_unsupported_mapping_key_layouts_are_rejected(tmp_path, regions_key):
     with pytest.raises(ValueError, match="mapping key source layout"):

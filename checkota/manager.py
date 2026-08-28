@@ -492,7 +492,9 @@ def _validate_compact_source_layout(source: str, file: Path) -> None:
                 "use a plain or quoted scalar key followed by ':' on the same "
                 "line so updates can locate it."
             )
-        if re.match(r"!![^\s:]+[ \t]+[^:]+:", stripped):
+        if re.match(
+            r"(?:!![^\s:]+[ \t]+[^:]+:|!<[^>]+>[ \t]+.+:)", stripped
+        ):
             raise ValueError(
                 f"Config {file} uses an unsupported mapping key source layout; "
                 "use a plain or quoted scalar key followed by ':' on the same "
