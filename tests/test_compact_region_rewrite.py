@@ -535,3 +535,39 @@ regions:
 
     assert path.read_bytes() == before
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_scalar_region_expansion_inherits_dominant_child_indent(tmp_path):
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "14"
+regions:
+    OP:
+        build_tag: "B"
+        incremental: "I"
+    IN: "OTHER"
+""",
+    )
+    cfg = _config(path, region_index=1)
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert "    IN:\n" in text
+    # Expanded children must follow the file's 4-space child indent, not +2.
+    assert '\n        android_version: "16"\n' in text
+    assert '\n        incremental: "NEW"\n' in text
+    assert '\n      android_version' not in text
+    assert yaml.safe_load(text)["regions"] == {
+        "OP": {"build_tag": "B", "incremental": "I"},
+        "IN": {"android_version": "16", "incremental": "NEW"},
+    }

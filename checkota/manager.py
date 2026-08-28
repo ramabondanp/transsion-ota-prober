@@ -862,8 +862,33 @@ def _region_block_span(
         if match is not None and len(match.group("indent")) > region_indent:
             child_indent = len(match.group("indent"))
             break
+    else:
+        # The target block has no children (scalar region). Deriving the child
+        # indent from the file's other regions keeps an expansion aligned with
+        # the file's convention instead of assuming `region_indent + 2`.
+        child_indent = _dominant_child_indent(
+            lines, regions_line_idx + 1, regions_end, region_indent
+        )
 
     return start, end, region_indent, child_indent
+
+
+def _dominant_child_indent(
+    lines: list[str], start: int, end: int, region_indent: int
+) -> int:
+    """Pick the file's dominant region-child indent (ties -> deepest)."""
+    counts: dict[int, int] = {}
+    for index in range(start, end):
+        body, _ = _line_body_and_ending(lines[index])
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None:
+            continue
+        indent = len(match.group("indent"))
+        if indent > region_indent:
+            counts[indent] = counts.get(indent, 0) + 1
+    if not counts:
+        return region_indent + 2
+    return max(counts, key=lambda indent: (counts[indent], indent))
 
 
 def _line_value_is_scalar(line: str) -> bool:

@@ -201,9 +201,13 @@ before and after; a promotion that would change any of them is rejected.
 
 Convergence runs **only on a real update**. A check whose target values already match the
 YAML returns early and leaves the file byte-identical — normalization is a side effect of
-applying an update, not something a no-op sweep across 114 configs may trigger. Because
+applying an update, not something a no-op sweep across 114 configs may trigger. This
+early return is load-bearing: it was dropped once and restored deliberately; do not let a
+"harmless normalization" pass reintroduce writes on no-op checks. Because
 collapsing removes child keys, comments attached to them are re-indented to the region key
-and hoisted above it rather than left at a dead indentation level.
+and hoisted above it rather than left at a dead indentation level. When a scalar region
+expands, inserted child keys follow the file's dominant region-child indent
+(`_dominant_child_indent`) rather than assuming two spaces.
 
 ### Network hardening
 
