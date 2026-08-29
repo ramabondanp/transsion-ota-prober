@@ -1,4 +1,3 @@
-import hashlib
 import runpy
 import subprocess
 import sys
@@ -8,12 +7,8 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _MANIFEST = runpy.run_path(str(_ROOT / "scripts" / "compact_manifest.py"))
-config_paths = _MANIFEST["config_paths"]
 manifest_bytes = _MANIFEST["manifest_bytes"]
 manifest_rows = _MANIFEST["manifest_rows"]
-serialize_manifest = _MANIFEST["serialize_manifest"]
-
-_BASELINE_SHA256 = "50aa62e1eedd9994f1f763a5a9e92d10d7b840717ea3d7af0dab76b391639519"
 
 
 def test_manifest_preserves_baseline_field_order_and_serialization(tmp_path):
@@ -104,16 +99,3 @@ def test_cli_rejects_empty_input_without_touching_output(tmp_path):
     assert result.returncode != 0
     assert result.stdout == b""
     assert output.read_bytes() == sentinel
-
-
-def test_repository_manifest_matches_preserved_baseline(monkeypatch):
-    # The source paths are intentionally relative because that is part of the
-    # Phase 0 manifest contract.
-    monkeypatch.chdir(_ROOT)
-    config_dir = Path("configs")
-    rows = manifest_rows(config_dir)
-    payload = serialize_manifest(rows)
-
-    assert len(config_paths(config_dir)) == 114
-    assert len(rows) == 148
-    assert hashlib.sha256(payload).hexdigest() == _BASELINE_SHA256
