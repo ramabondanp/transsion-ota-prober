@@ -3,6 +3,7 @@ top-level run orchestration (sequential and parallel)."""
 
 import argparse
 import io
+import math
 import signal
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -16,9 +17,9 @@ from checkota.paths import IS_SOURCE_CHECKOUT, active_config_dir
 from checkota.processor import (
     config_from_fingerprint,
     drain_pending_notifications,
-    load_config_variants,
+    load_config_regions,
     process_config,
-    process_config_variant,
+    process_region,
 )
 from checkota.runtime import (
     RunContext,
@@ -81,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reg",
         "--region",
         dest="region",
-        help="Process only variants matching the given region code (e.g. OP, RU)",
+        help="Process only regions matching the given region code (e.g. OP, RU)",
     )
     parser.add_argument(
         "--jobs",
@@ -152,8 +153,8 @@ def resolve_config_dir(value: Path) -> Path:
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     args.zip_proxy = getattr(args, "fetch_zip_proxy", False)
-    if args.timeout < 0:
-        parser.error("--timeout must be >= 0")
+    if not math.isfinite(args.timeout) or args.timeout < 0:
+        parser.error("--timeout must be a finite number >= 0")
     if args.update_incremental:
         args.skip_telegram = True
     if args.gen_fp:
@@ -219,32 +220,32 @@ def _run_sequential(
 
 @dataclass
 class _ConfigJob:
-    """Per-config load result plus the buffered outputs of its variants."""
+    """Per-config load result plus the buffered outputs of its regions."""
 
     index: int
     path: Path
     load_output: str
     status: int
-    variants: list[Config]
+    regions: list[Config]
     results: dict[int, str] = field(default_factory=dict)
 
 
 def _load_config_jobs(
     ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
 ) -> dict[int, _ConfigJob]:
-    """Load every config's variants upfront (YAML parse only, no network),
+    """Load every config's regions upfront (YAML parse only, no network),
     capturing any filter/error output into a per-config buffer."""
     config_jobs: dict[int, _ConfigJob] = {}
     for idx, config_path in enumerate(config_paths, start=1):
         buf = io.StringIO()
         with Log.capture(buf):
-            status, variants = load_config_variants(config_path, args)
+            status, regions = load_config_regions(config_path, args)
         config_jobs[idx] = _ConfigJob(
             index=idx,
             path=config_path,
             load_output=buf.getvalue(),
             status=status,
-            variants=variants,
+            regions=regions,
         )
     return config_jobs
 
@@ -255,52 +256,52 @@ def _run_global_pool(
     config_paths: list[Path],
     executor: ThreadPoolExecutor,
 ) -> int:
-    """Run every (config, variant) pair through a single pool sized by --jobs.
+    """Run every (config, region) pair through a single pool sized by --jobs.
 
-    Total in-flight requests never exceed --jobs regardless of how many variants
-    a config has. Output is buffered per variant and regrouped per config in the
-    original config order (variants in order within each config).
+    Total in-flight requests never exceed --jobs regardless of how many regions
+    a config has. Output is buffered per region and regrouped per config in the
+    original config order (regions in order within each config).
     """
     total = len(config_paths)
     config_jobs = _load_config_jobs(ctx, args, config_paths)
 
-    def variant_worker(
-        config_idx: int, variant_idx: int, variants_total: int, cfg: Config, path: Path
+    def region_worker(
+        config_idx: int, region_idx: int, regions_total: int, cfg: Config, path: Path
     ) -> tuple[int, int, int, str]:
         if ctx.stop_event.is_set():
-            return config_idx, variant_idx, 130, ""
+            return config_idx, region_idx, 130, ""
         local_args = argparse.Namespace(**vars(args))
         buffer = io.StringIO()
         try:
             with Log.capture(buffer):
-                if variants_total > 1:
-                    label = cfg.variant or f"variant {variant_idx}"
-                    Log.i(f"Processing variant {variant_idx}/{variants_total}: {label}")
+                if regions_total > 1:
+                    label = cfg.region or f"region {region_idx}"
+                    Log.i(f"Processing region {region_idx}/{regions_total}: {label}")
                 if args.incremental:
                     Log.i(f"Override incremental: {args.incremental}")
-                result = process_config_variant(ctx, cfg, path, local_args, cfg.variant)
-        except Exception as exc:  # noqa: BLE001 -- buffered per-variant safety net
+                result = process_region(ctx, cfg, path, local_args)
+        except Exception as exc:  # noqa: BLE001 -- buffered per-region safety net
             buffer.write(
-                f"\033[91m✗\033[0m {path} variant {variant_idx} failed with unhandled exception: {exc}\n"
+                f"\033[91m✗\033[0m {path} region {region_idx} failed with unhandled exception: {exc}\n"
             )
             result = 1
-        return config_idx, variant_idx, result, buffer.getvalue()
+        return config_idx, region_idx, result, buffer.getvalue()
 
     exit_code = 0
-    # Count of variant futures still pending per config; a config is ready to
+    # Count of region futures still pending per config; a config is ready to
     # flush (in order) once its count hits zero.
     pending: dict[int, int] = {}
     futures = []
     for cj in config_jobs.values():
-        if cj.status != 0 or not cj.variants:
+        if cj.status != 0 or not cj.regions:
             pending[cj.index] = 0
             exit_code = max(exit_code, cj.status)
             continue
-        vt = len(cj.variants)
-        pending[cj.index] = vt
-        for v_idx, cfg in enumerate(cj.variants, start=1):
+        rt = len(cj.regions)
+        pending[cj.index] = rt
+        for region_idx, cfg in enumerate(cj.regions, start=1):
             futures.append(
-                executor.submit(variant_worker, cj.index, v_idx, vt, cfg, cj.path)
+                executor.submit(region_worker, cj.index, region_idx, rt, cfg, cj.path)
             )
 
     remaining = set(futures)
@@ -323,12 +324,12 @@ def _run_global_pool(
             Log.i(header)
             if cj.load_output:
                 print(cj.load_output, end="")
-            if len(cj.variants) > 1:
+            if len(cj.regions) > 1:
                 Log.raw("")
-            for v_idx in sorted(cj.results):
-                if v_idx > 1:
+            for region_idx in sorted(cj.results):
+                if region_idx > 1:
                     Log.raw("")
-                output = cj.results[v_idx]
+                output = cj.results[region_idx]
                 if output:
                     print(output, end="" if output.endswith("\n") else "\n")
             next_index += 1
@@ -336,18 +337,18 @@ def _run_global_pool(
     _flush_ready()
     while remaining:
         if ctx.stop_event.is_set():
-            # Flush whatever already-completed variants are ready before
+            # Flush whatever already-completed regions are ready before
             # bailing; their side effects happened, so their output should
             # not be silently dropped.
             _flush_ready()
             return 130
         done, remaining = wait(remaining, timeout=2, return_when=FIRST_COMPLETED)
         for future in done:
-            c_idx, v_idx, result, output = future.result()
+            config_idx, region_idx, result, output = future.result()
             exit_code = max(exit_code, result)
-            cj = config_jobs[c_idx]
-            cj.results[v_idx] = output
-            pending[c_idx] -= 1
+            cj = config_jobs[config_idx]
+            cj.results[region_idx] = output
+            pending[config_idx] -= 1
         _flush_ready()
 
         now = time.monotonic()
@@ -355,7 +356,7 @@ def _run_global_pool(
             completed = next_index - 1
             Log.raw(
                 f"... waiting for config {next_index}/{total} "
-                f"({completed}/{total} configs flushed, {len(remaining)} variant tasks in flight)"
+                f"({completed}/{total} configs flushed, {len(remaining)} region tasks in flight)"
             )
             last_heartbeat = now
     _flush_ready()
@@ -402,12 +403,8 @@ def main() -> int:
                 Log.i("Processing direct fingerprint input")
                 # Direct mode does not buffer; no drain needed.
                 buffered_notifications_possible = False
-                exit_code = process_config_variant(
-                    ctx,
-                    cfg=cfg,
-                    config_path=Path("<fingerprint>"),
-                    args=args,
-                    variant_label=None,
+                exit_code = process_region(
+                    ctx, cfg=cfg, config_path=Path("<fingerprint>"), args=args
                 )
         else:
             args.no_config = False

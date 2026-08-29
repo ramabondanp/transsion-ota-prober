@@ -66,6 +66,15 @@ class TgNotify:
         else:
             self.session = session
 
+    def _redact(self, value: object) -> str:
+        """Return str(value) with the bot token scrubbed.
+
+        requests includes the full request URL in HTTPError/ConnectionError
+        messages, and self.url embeds the bot token; never let it reach logs.
+        """
+        text = str(value)
+        return text.replace(self.token, "***") if self.token else text
+
     @staticmethod
     def _html_to_telegraph_nodes(html_content: str) -> list:
         """Convert simple HTML (bold tags + newlines) to Telegra.ph NodeElement array.
@@ -83,7 +92,7 @@ class TgNotify:
         cleaned = re.sub(r"</\s*font\s*>", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"<\s*a\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</\s*a\s*>", "", cleaned, flags=re.IGNORECASE)
-        # Normalize any leftover <br> variants to newlines (defensive)
+        # Normalize any leftover <br> alternatives to newlines (defensive)
         cleaned = re.sub(r"<\s*br\s*/?\s*>", "\n", cleaned, flags=re.IGNORECASE)
 
         # Split into paragraphs by double+ newlines
@@ -292,7 +301,10 @@ class TgNotify:
                     detail = exc.response.text
                 except requests.RequestException:
                     detail = str(exc.response)
-            Log.e(f"Failed to send notification: {exc} - {detail}")
+            Log.e(
+                "Failed to send notification: "
+                f"{self._redact(exc)} - {self._redact(detail)}"
+            )
             return False
         except (
             requests.RequestException,
@@ -300,5 +312,5 @@ class TgNotify:
             TypeError,
             KeyError,
         ) as exc:
-            Log.e(f"Failed to send notification: {exc}")
+            Log.e(f"Failed to send notification: {self._redact(exc)}")
             return False

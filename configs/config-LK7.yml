@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "LK7-OP"
-device: "TECNO-LK7"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301350036"
+product_base: "LK7"
 model: "TECNO POVA 8 Pro 5G"
+android_version: "16"
+regions:
+  OP: "301350036"

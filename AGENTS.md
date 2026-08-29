@@ -19,14 +19,14 @@ checkota/              ← Package (import: from checkota.cli import main)
                          CHECKOTA_VENDOR_DIR override; ensure_vendor_on_path() fails loud
                          if missing. processed_updates_path() lives here.
     cli.py             ← argparse, arg validation, config-path resolution; orchestration:
-                         _run_sequential (--jobs 1), _run_global_pool ((config,variant) pool)
+                         _run_sequential (--jobs 1), _run_global_pool ((config,region) pool)
     runtime.py         ← RunContext (per-thread sessions w/ tuned HTTPAdapter pool, locks,
                          stop_event), create_run_context, install_interrupt_handler,
                          start_watchdog (--timeout)
     processor.py       ← Pipeline: collect_update_info, apply_update_actions,
-                         process_config(_variant), load_config_variants,
+                         process_config (per region), load_config_regions,
                          config_from_fingerprint, OTA metadata cache
-    models.py          ← VariantUpdate dataclass (processor + notifier)
+    models.py          ← RegionUpdate dataclass (processor + notifier)
     description.py     ← TerminalParser (HTML→ANSI) + format_update_description
     notifier.py        ← create_notifier + build_notification_message
     constants.py       ← URLs, region codes, SDK versions, regex patterns
@@ -40,18 +40,22 @@ checkota/              ← Package (import: from checkota.cli import main)
                          ZIP64-aware, absolute ranges only (Google rejects suffix ranges);
                          strict 206/Content-Range validation, gvt1-only redirect
                          allowlist, per-member size caps, bounded inflate, CRC checks
-    fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000)
+    fingerprints.py    ← Persistence: processed update titles (dedup, trimmed at 2000);
+                         per-title claim locks pruned at startup (committed or >7d stale)
     logging.py         ← Thread-safe logging with ANSI colors
-    telegram.py        ← Telegram notify + Telegraph fallback + HTML canonicalization;
-                         rendered-UTF-16 length fitting; plain-text fallback for
-                         uncanonicalizable markup
-configs/               ← YAML device configs (one per codename, 114 files)
+    validation.py      ← Untrusted-input predicates: control chars + Google HTTPS URL
+                         allowlist checks shared by update_checker and zip_metadata
+    message_text.py    ← Pure Telegram text pipeline: sanitize_html, canonicalization,
+                         rendered-UTF-16 length fitting, plain-text fallback (no I/O)
+    telegram.py        ← Telegram notify + Telegraph fallback; bot token redacted from
+                         error logs; delegates text work to message_text.py
+configs/               ← YAML device configs (one per codename, 114 files); bundled into
+                         wheels as checkota.bundled_configs and seeded to XDG on first use
 tests/                 ← pytest suite
+scripts/               ← Ad-hoc tooling (proxy-based checks: fetch_spys, check_update_proxy)
 processed_updates.txt  ← Append-only log of seen update titles (trimmed at 2000)
 pyproject.toml         ← Package metadata + deps (requests, PyYAML, protobuf)
 
-configs/               ← YAML device configs (one per codename); bundled into wheels as
-                         checkota.bundled_configs and seeded to XDG on first use
 vendor/google-ota-prober/   ← Vendored (pinned commit in VERSION; ATTRIBUTION = scope/license)
   checkin/             ← Compiled protobuf modules (checkin_generator_pb2)
   proto/               ← .proto sources
@@ -65,8 +69,9 @@ pyproject [tool.pyright] extraPaths teaches static analysis the same trick.
 
 ## Data Flow
 
-1. **Read config** — YAML defines fingerprint fields (`oem`, `product`, `device`,
-   `android_version`, `build_tag`, `incremental`). Multiple variants via `variants:` list.
+1. **Read config** — YAML defines shared identity/default fields (`oem`, `product_base`,
+   `model`, `android_version`) and a `regions` mapping. Product, device, and canonical
+   build tags are derived for each region; expanded regions contain only overrides.
 2. **Build request** — `UpdateChecker` builds protobuf `AndroidCheckinRequest` (fingerprint
    + generated IMEI/serial/MAC/digest), gzips, POSTs to `https://android.googleapis.com/checkin`.
 3. **Parse response** — `AndroidCheckinResponse` protobuf; scan `setting` entries for
@@ -97,36 +102,46 @@ Examples: `KL8-OP`→`OP`, `X6852-IN`→`IN`, `CN7c-OP-M1`→`OP-M1`.
 
 ### Config file format
 
-Single variant — all fields top level:
-
-```yaml
-oem: "TECNO"
-product: "KL8-OP"
-device: "TECNO-KL8"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260412V1712"
-model: "TECNO SPARK 30 5G"
-```
-
-Multiple variants — shared fields top level, list overrides:
+Every config uses the compact `regions` schema. Shared values are top level; each region
+is either a quoted incremental or an expanded mapping:
 
 ```yaml
 oem: "Infinix"
-device: "Infinix-X6873"
+product_base: "X6873"
 model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6873-OP"
-    incremental: "201350016"
-  - variant: "India"
-    product: "X6873-IN"
-    incremental: "201350016"
+android_version: "16"
+regions:
+  OP: "201500011"
+  EU:
+    android_version: "15"
+    incremental: "131015"
 ```
 
+Product is `{effective_product_base}-{region}`. Device is
+`{device_prefix}-{effective_product_base}`, where `device_prefix` is normally the exact
+`oem`; the exact OEM value `"Itel"` is the exception and maps to lowercase `itel`. A
+region may override `product_base` (the `IN` region in `config-X6857.yml` uses `X6857B`)
+or provide a noncanonical `build_tag` (currently X1301 and T1102). Canonical Android
+build tags come from `BUILD_TAG_BY_ANDROID` and must not be written in YAML. Region codes
+must match `[A-Z0-9][A-Z0-9-]*` — the code is concatenated into `product` and thus into
+the fingerprint, so it gets the same allowlist treatment as every other field.
+
+**Loadable implies updatable.** `_validate_compact_source_layout` runs on every load *and*
+again before every update, rejecting whatever the line-oriented rewriter cannot express:
+flow-style collections (except empty `{}`/`[]`, left to the schema check for a better
+message), multi-line scalars, `|`/`>` block scalars, and anchors/aliases. Without this a
+config would parse fine yet fail every update, and `apply_update_actions` treats a failed
+config rewrite as fatal — it releases the title claim and drops the notification.
+
 Fingerprint: `{oem}/{product}/{device}:{android_version}/{build_tag}/{incremental}:user/release-keys`
+
+The runtime accepts only this compact schema. A config containing `variants` fails with
+`uses the legacy 'variants' schema; migrate it to a 'regions' mapping`; a legacy
+single-region config containing `product` or `device` similarly directs the user to
+`product_base` and `regions`. From a repository checkout, migrate a legacy directory with
+`python scripts/migrate_compact_configs.py --write <config-dir>`. Bundled repository
+defaults are migrated, but existing wheel/XDG configs are never overwritten automatically
+and require this manual migration.
 
 ### Telegram HTML sanitization (`_sanitize_html`, 5 ordered steps)
 
@@ -173,9 +188,26 @@ Same two-stage approach as Telegram:
 
 A target fingerprint's immutable identity (`oem`, `product`, `device`) must match the
 config before any action: dry-run printing, config update, notification, and title
-processing all gate on `fingerprint_identity_matches_config`. Multi-variant rewrites
-disambiguate stale variant indices by label or current build values and fail closed when
-ambiguous. This prevents a mismatched OTA response from poisoning a device's config.
+processing all gate on `fingerprint_identity_matches_config`. Region updates resolve the
+exact region code and fail closed if the in-memory identity disagrees with the latest YAML.
+This prevents a mismatched OTA response from poisoning a device's config.
+
+### Android default convergence (`_converge_android_default`)
+
+After a region is rewritten, if all effective regions now agree on one Android version the
+top-level `android_version` is promoted and redundant per-region overrides collapse (an
+expanded region reduces to a scalar incremental). Every region's fingerprint is compared
+before and after; a promotion that would change any of them is rejected.
+
+Convergence runs **only on a real update**. A check whose target values already match the
+YAML returns early and leaves the file byte-identical — normalization is a side effect of
+applying an update, not something a no-op sweep across 114 configs may trigger. This
+early return is load-bearing: it was dropped once and restored deliberately; do not let a
+"harmless normalization" pass reintroduce writes on no-op checks. Because
+collapsing removes child keys, comments attached to them are re-indented to the region key
+and hoisted above it rather than left at a dead indentation level. When a scalar region
+expands, inserted child keys follow the file's dominant region-child indent
+(`_dominant_child_indent`) rather than assuming two spaces.
 
 ### Network hardening
 
@@ -209,13 +241,13 @@ ambiguous. This prevents a mismatched OTA response from poisoning a device's con
 > `checkota.cli.main`, `python -m checkota` via `__main__.py`).
 > Historical `checkota.py` rows map to: CLI/orchestration/watchdog → `cli.py`+`runtime.py`;
 > pipeline → `processor.py`; `TerminalParser` → `description.py`; notify → `notifier.py`;
-> `RunContext` → `runtime.py`; `VariantUpdate` → `models.py`; vendor bootstrap →
+> `RunContext` → `runtime.py`; `RegionUpdate` → `models.py`; vendor bootstrap →
 > `paths.py`+`checkota/__init__.py`.
 
 | Issue | File | Fix |
 | ------- | ------ | ----- |
 | `DESC_SECTION_RE` mismatch with OS line | `constants.py` | Trailing `\n` → optional `\n?` |
-| `OP-M1` region mis-parsed | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
+| `OP-M1` region parsed incorrectly | `manager.py` | `split("-",1)[1]` not `split("-")[-1]` |
 | OTA fetch hung whole run | `metadata.py`, `checkota.py` | `RemoteZip` timeout 60→15; `--timeout` watchdog (`threading.Timer` sets `stop_event`, flushes stdio, `os._exit(124)`) since stuck socket reads ignore `stop_event` |
 | Dead Python version guards | `checkota.py` | Removed `<(3,7)` / `>=(3,9)` branches (`requires-python>=3.10`); `cancel_futures=True` unconditional |
 | Vendor dir missing on non-editable install | `checkota.py` | Fail loud if absent; `CHECKOTA_VENDOR_DIR` env override |
@@ -233,19 +265,27 @@ ambiguous. This prevents a mismatched OTA response from poisoning a device's con
 | `processed_updates.txt` path CWD-relative | `checkota/metadata.py` | Anchored to repo root via `Path(__file__).resolve().parent.parent` |
 | 989-line monolith | `checkota/*` | Sliced into focused modules; entry → `checkota.cli.main`. Behavior-preserving |
 | `remotezip` dep for OTA metadata | `zip_metadata.py`, `metadata.py`, `pyproject.toml` | Vendored ZIP64-aware `fetch_zip_member()` w/ absolute Range requests (Google rejects suffix `bytes=-N`); probes size via `bytes=0-0`, reads EOCD→central-dir→entry. Byte-identical, one less dep |
-| Multi-variant configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,variant) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per variant, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
+| Multi-region configs serial | `cli.py`, `processor.py`, `runtime.py` | `_run_global_pool` flattens (config,region) pairs into one `--jobs` pool (in-flight ≤ `--jobs`); output buffered per region, regrouped per config. `-c X6873 --jobs 5`: ~15s→4.7s |
 | Per-thread session pool too small | `runtime.py` | `HTTPAdapter` `pool_maxsize = max(10, --jobs)` |
 | Flat 5s retry backoff | `update_checker.py`, `metadata.py` | Exponential 1s→2s→4s instead of flat 5s×3 |
 | Watchdog deadlocked on session close | `runtime.py` | Timer callback must NOT call `ctx.stop()` (races workers); set `stop_event` → flush → `os._exit(124)` only |
 | Buffered notifications lost on interrupt/failure | `cli.py` | Drain runs whenever buffering was possible (any exit code); executor owned by `main()` and shut down once with `cancel_futures=True` |
 | Metadata waiters timed out spuriously at 15s | `processor.py` | Waiters poll the owner's completion Event (instant wake) instead of abandoning a still-valid fetch |
-| Cross-device fingerprint poisoned config/notifications | `manager.py`, `processor.py` | Identity validation gates before update/notify/title processing; ambiguous variant disambiguation fails closed |
+| Cross-device fingerprint poisoned config/notifications | `manager.py`, `processor.py` | Identity validation gates before update/notify/title processing; exact region resolution fails closed |
 | YAML duplicate keys silently last-wins | `manager.py` | `_UniqueKeyLoader` raises `ConstructorError` on duplicate mapping keys |
 | Config corruption if rewrite crashes mid-write | `manager.py` | Temp file → write → fsync → chmod → reparse round-trip verification → `os.replace`; original untouched on any failure |
 | SSRF via check-in URL / OTA redirect | `update_checker.py`, `zip_metadata.py` | Exact-host HTTPS allowlists; check-in rejects redirects; ZIP fetch follows only Google delivery hosts ≤5 hops |
 | Unbounded response/decompression memory | `update_checker.py`, `zip_metadata.py` | Streamed reads capped (4 MiB check-in / 1 MiB member); inflate bounded by declared size + `unconsumed_tail` check |
 | Telegram API 400 on oversized/control-char payloads | `telegram.py` | Canonicalize entities, enforce rendered UTF-16 limit locally, plain-text fallback for uncanonicalizable markup |
 | Vendor dir missing on plain wheel install | `paths.py`, `pyproject.toml` | Wheels bundle vendor as `checkota._vendor.*` + configs as `checkota.bundled_configs`; XDG seeding keeps them self-contained |
+| Bot token leaked into logs on send failure | `telegram.py` | requests includes the full URL (which embeds `bot<TOKEN>`) in HTTPError/ConnectionError messages; `_redact()` scrubs the token before logging |
+| Per-title lock files accumulated forever | `fingerprints.py`, `runtime.py` | `prune_title_locks()` at startup removes locks for committed titles or files >7d old, only when no process holds them (LOCK_EX\|LOCK_NB probe); skipped in dry-run |
+| Config lock files left beside configs | `manager.py` | `_prune_config_lock()` unlinks the released lock when no other process holds it (residual unlink race documented; rewrites are atomic + idempotent) |
+| `assert` used for control flow (stripped by `-O`) | `processor.py`, `update_checker.py` | Explicit `raise RuntimeError`/`UpdateCheckError` on the unreachable branches |
+| Loadable configs the updater could not rewrite | `manager.py` | Flow-style collections, multi-line scalars, block scalars, and anchors/aliases rejected on load *and* pre-update; previously they parsed, then failed every update (claim released, notification dropped) |
+| No-op check rewrote the file via convergence | `manager.py` | Early return when target values already match: `_converge_android_default` no longer runs on a check that found nothing new |
+| Collapse orphaned comments at a dead indent | `manager.py` | `_collapse_region_mapping()` re-indents retained comments to the region key and hoists them above it |
+| Region code accepted spaces/`#`/`.`/non-ASCII | `manager.py` | `_REGION_CODE_RE` (`[A-Z0-9][A-Z0-9-]*`); the code is structural — it builds `product` and thus the fingerprint |
 
 ## Running
 

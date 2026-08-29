@@ -1,22 +1,8 @@
 oem: "TECNO"
-device: "TECNO-CM5"
+product_base: "CM5"
 model: "TECNO CAMON 40 4G"
-
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "CM5-OP"
-    incremental: "201500015"
-
-  - variant: "Turkey"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "CM5-TR"
-    incremental: "201500015"
-
-  - variant: "Russia"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "CM5-RU"
-    incremental: "201500015"
+android_version: "16"
+regions:
+  OP: "201500015"
+  TR: "201500015"
+  RU: "201500015"

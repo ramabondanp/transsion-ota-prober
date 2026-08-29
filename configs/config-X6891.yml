@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6891-OP"
-device: "Infinix-X6891"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301400029"
+product_base: "X6891"
 model: "Infinix GT 50 Pro"
+android_version: "16"
+regions:
+  OP: "301400029"

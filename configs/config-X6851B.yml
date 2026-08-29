@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6851B-OP"
-device: "Infinix-X6851B"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301300006"
+product_base: "X6851B"
 model: "Infinix NOTE 40 Pro+ 5G"
+android_version: "16"
+regions:
+  OP: "301300006"

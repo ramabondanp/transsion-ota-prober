@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from checkota.manager import Config
-from checkota.models import VariantUpdate
+from checkota.models import RegionUpdate
 from checkota.notifier import build_notification_message
 from checkota.telegram import TgNotify
 
@@ -27,8 +27,8 @@ class _Session:
         return _Response()
 
 
-def _update(desc: str, title: str = "TECNO <hack>") -> VariantUpdate:
-    return VariantUpdate(
+def _update(desc: str, title: str = "TECNO <hack>") -> RegionUpdate:
+    return RegionUpdate(
         cfg=Config(
             oem="Infinix",
             product="X6873-OP",
@@ -39,7 +39,6 @@ def _update(desc: str, title: str = "TECNO <hack>") -> VariantUpdate:
             model="Infinix GT 30 Pro",
         ),
         config_path=Path("/tmp/config-X6873.yml"),
-        variant_label="Global",
         region_name="Global - OP Market",
         title=title,
         url="https://example.com/x.zip",
@@ -53,7 +52,7 @@ def _update(desc: str, title: str = "TECNO <hack>") -> VariantUpdate:
     )
 
 
-def _sent_text(update: VariantUpdate, *, truncate_desc: bool = True) -> str:
+def _sent_text(update: RegionUpdate, *, truncate_desc: bool = True) -> str:
     session = _Session()
     notifier = TgNotify("token", "chat", "telegraph", session=session)  # type: ignore[arg-type]
     assert notifier.send(

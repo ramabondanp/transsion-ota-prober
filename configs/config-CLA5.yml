@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CLA5-OP"
-device: "TECNO-CLA5"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301400007"
+product_base: "CLA5"
 model: "TECNO CAMON 30S"
+android_version: "16"
+regions:
+  OP: "301400007"

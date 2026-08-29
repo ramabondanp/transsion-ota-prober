@@ -1,24 +1,8 @@
 oem: "Infinix"
-device: "Infinix-X6962"
-android_version: "14"
-build_tag: "UP1A.231005.007"
+product_base: "X6962"
 model: "Infinix ZERO Flip"
-
-variants:
-  - variant: "Global"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "X6962-OP"
-    incremental: "135003"
-
-  - variant: "India"
-    product: "X6962-IN"
-    incremental: "135003"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-
-  - variant: "Russia"
-    product: "X6962-RU"
-    incremental: "135003"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
+android_version: "15"
+regions:
+  OP: "135003"
+  IN: "135003"
+  RU: "135003"

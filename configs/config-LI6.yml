@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "LI6-OP"
-device: "TECNO-LI6"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "170004"
+product_base: "LI6"
 model: "TECNO POVA 6 Neo"
+android_version: "15"
+regions:
+  OP: "170004"

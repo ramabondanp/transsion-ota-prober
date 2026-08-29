@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "LJ9-OP"
-device: "TECNO-LJ9"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301450017"
+product_base: "LJ9"
 model: "TECNO POVA 7 Ultra 5G"
+android_version: "16"
+regions:
+  OP: "301450017"

@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KL5-OP"
-device: "TECNO-KL5"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260615V2258"
+product_base: "KL5"
 model: "TECNO SPARK 30C"
+android_version: "14"
+regions:
+  OP: "260615V2258"

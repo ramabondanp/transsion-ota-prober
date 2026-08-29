@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6853-OP"
-device: "Infinix-X6853"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301450013"
+product_base: "X6853"
 model: "Infinix NOTE 40 4G"
+android_version: "16"
+regions:
+  OP: "301450013"

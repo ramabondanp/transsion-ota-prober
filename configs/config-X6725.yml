@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6725-OP"
-device: "Infinix-X6725"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "185014"
+product_base: "X6725"
 model: "Infinix SMART 10"
+android_version: "15"
+regions:
+  OP: "185014"

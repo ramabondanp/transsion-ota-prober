@@ -9,7 +9,7 @@ from checkota.manager import (
     fingerprint_identity_matches_config,
     update_config_from_fingerprint,
 )
-from checkota.models import VariantUpdate
+from checkota.models import RegionUpdate
 from checkota.processor import apply_update_actions
 from checkota.runtime import RunContext
 
@@ -24,13 +24,14 @@ def _write_single_config(path: Path) -> None:
     path.write_text(
         """\
 oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-android_version: "14"
-build_tag: "OLD#TAG" # retain this comment
-incremental: 'OLD#INCREMENTAL' # retain this comment too
-not_android_version: "must remain unchanged"
 model: "Infinix GT 30 Pro"
+product_base: "X6873"
+android_version: "14"
+regions:
+  OP:
+    build_tag: "OLD#TAG" # retain this comment
+    incremental: 'OLD#INCREMENTAL' # retain this comment too
+  IN: "OTHER"
 """,
         encoding="utf-8",
     )
@@ -53,7 +54,9 @@ def test_changed_on_disk_identity_is_rejected(tmp_path):
     _write_single_config(path)
     cfg = _config(path)
     path.write_text(
-        path.read_text(encoding="utf-8").replace("X6873-OP", "X6873-IN"),
+        path.read_text(encoding="utf-8").replace(
+            'product_base: "X6873"', 'product_base: "X6874"'
+        ),
         encoding="utf-8",
     )
     before = path.read_bytes()
@@ -66,13 +69,14 @@ def test_yaml_replacement_quotes_hashes_preserves_comments_and_crlf(tmp_path):
     path = tmp_path / "config.yml"
     content = """\
 oem: "Infinix" # identity comment
-product: "X6873-OP"
-device: "Infinix-X6873"
+product_base: "X6873"
 android_version: "14" # version comment
-build_tag: "OLD#TAG" # build comment
-incremental: 'OLD#INCREMENTAL' # incremental comment
-not_android_version: "must remain unchanged"
 model: "Infinix GT 30 Pro"
+regions:
+  OP:
+    build_tag: "OLD#TAG" # build comment
+    incremental: 'OLD#INCREMENTAL' # incremental comment
+  IN: "OTHER"
 """.replace("\n", "\r\n")
     path.write_bytes(content.encode("utf-8"))
     cfg = _config(path)
@@ -90,31 +94,29 @@ model: "Infinix GT 30 Pro"
     assert "# version comment" in text
     assert "# build comment" in text
     assert "# incremental comment" in text
-    assert 'not_android_version: "must remain unchanged"' in text
 
     parsed = yaml.safe_load(text)
-    assert parsed["android_version"] == "16"
-    assert parsed["build_tag"] == 'BP2A#250605."031'
-    assert parsed["incremental"] == "201350#016"
+    assert parsed["android_version"] == "14"
+    assert parsed["regions"]["OP"] == {
+        "android_version": "16",
+        "build_tag": 'BP2A#250605."031',
+        "incremental": "201350#016",
+    }
+    assert parsed["regions"]["IN"] == "OTHER"
 
 
-def test_variant_identity_and_effective_values_are_preserved(tmp_path):
+def test_region_identity_and_effective_values_are_preserved(tmp_path):
     path = tmp_path / "config.yml"
     path.write_text(
         """\
 oem: "Infinix"
-device: "Infinix-X6873"
+product_base: "X6873"
 model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Global"
-    android_version: "14"
-    build_tag: "GLOBAL"
-    product: "X6873-OP"
-    incremental: "GLOBAL-I"
-  - variant: "India"
-    android_version: "14"
+android_version: "14"
+regions:
+  OP: "GLOBAL-I"
+  IN:
     build_tag: "INDIA"
-    product: "X6873-IN"
     incremental: "INDIA-I"
 """,
         encoding="utf-8",
@@ -124,24 +126,27 @@ variants:
 
     assert update_config_from_fingerprint(path, cfg, target) is True
     parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert parsed["variants"][0]["incremental"] == "GLOBAL-I"
-    assert parsed["variants"][1]["android_version"] == "16"
-    assert parsed["variants"][1]["build_tag"] == "BP2A.250605.031.A3"
-    assert parsed["variants"][1]["incremental"] == "201350016"
+    assert parsed["regions"]["OP"] == "GLOBAL-I"
+    assert parsed["regions"]["IN"] == {
+        "android_version": "16",
+        "incremental": "201350016",
+    }
 
 
-def test_variant_first_key_on_sequence_marker_is_rewritten_without_duplicate(tmp_path):
+def test_region_first_key_is_rewritten_without_duplicate(tmp_path):
     path = tmp_path / "config.yml"
     path.write_text(
         """\
 oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
+product_base: "X6873"
+android_version: "14"
 model: "Infinix GT 30 Pro"
-variants:
-  - android_version: "14" # keep marker comment
+regions:
+  OP:
+    android_version: "14" # keep marker comment
     build_tag: "OLD"
     incremental: "OLD-I"
+  IN: "INDIA-I"
 """,
         encoding="utf-8",
     )
@@ -149,30 +154,30 @@ variants:
     assert update_config_from_fingerprint(path, _config(path), FP) is True
 
     text = path.read_text(encoding="utf-8")
-    assert text.count("android_version:") == 1
-    assert '  - android_version: "16" # keep marker comment' in text
+    assert text.count("android_version:") == 2
+    assert '    android_version: "16" # keep marker comment' in text
     parsed = yaml.safe_load(text)
-    assert parsed["variants"][0]["android_version"] == "16"
+    assert parsed["regions"]["OP"] == {
+        "android_version": "16",
+        "incremental": "201350016",
+    }
 
 
-def test_indentless_variant_sequence_is_updated_in_place(tmp_path):
+def test_multiple_regions_update_only_the_target(tmp_path):
     path = tmp_path / "config.yml"
     path.write_text(
         """\
 oem: "Infinix"
-device: "Infinix-X6873"
+product_base: "X6873"
 model: "Infinix GT 30 Pro"
-variants:
-- variant: "Global"
-  product: "X6873-OP"
-  android_version: "14"
-  build_tag: "OLD"
-  incremental: "OLD-I"
-- variant: "India"
-  product: "X6873-IN"
-  android_version: "14"
-  build_tag: "INDIA"
-  incremental: "INDIA-I"
+android_version: "14"
+regions:
+  OP:
+    build_tag: "OLD"
+    incremental: "OLD-I"
+  IN:
+    build_tag: "INDIA"
+    incremental: "INDIA-I"
 """,
         encoding="utf-8",
     )
@@ -180,25 +185,29 @@ variants:
     assert update_config_from_fingerprint(path, _config(path), FP) is True
 
     text = path.read_text(encoding="utf-8")
-    assert "\n- variant:" in text
     parsed = yaml.safe_load(text)
-    assert parsed["variants"][0]["incremental"] == "201350016"
-    assert parsed["variants"][1]["incremental"] == "INDIA-I"
+    assert parsed["regions"]["OP"] == {
+        "android_version": "16",
+        "incremental": "201350016",
+    }
+    assert parsed["regions"]["IN"] == {
+        "build_tag": "INDIA",
+        "incremental": "INDIA-I",
+    }
 
 
-def test_duplicate_variant_keys_fail_closed_without_writing(tmp_path):
+def test_duplicate_region_keys_fail_closed_without_writing(tmp_path):
     path = tmp_path / "config.yml"
     path.write_text(
         """\
 oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
+product_base: "X6873"
 model: "Infinix GT 30 Pro"
-variants:
-  - android_version: "13"
-    android_version: "14"
-    build_tag: "OLD"
+android_version: "14"
+regions:
+  OP:
     incremental: "OLD-I"
+    incremental: "DUPLICATE"
 """,
         encoding="utf-8",
     )
@@ -211,116 +220,8 @@ variants:
         device="Infinix-X6873",
         oem="Infinix",
         product="X6873-OP",
-        variant_index=0,
+        region="OP",
     )
-
-    assert update_config_from_fingerprint(path, cfg, FP) is False
-    assert path.read_bytes() == before
-
-
-def test_stale_variant_index_uses_label_for_shared_identity(tmp_path):
-    path = tmp_path / "config.yml"
-    original = """\
-oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Alpha"
-    android_version: "14"
-    build_tag: "ALPHA"
-    incremental: "ALPHA-I"
-  - variant: "Beta"
-    android_version: "15"
-    build_tag: "BETA"
-    incremental: "BETA-I"
-"""
-    reordered = """\
-oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Beta"
-    android_version: "15"
-    build_tag: "BETA"
-    incremental: "BETA-I"
-  - variant: "Alpha"
-    android_version: "14"
-    build_tag: "ALPHA"
-    incremental: "ALPHA-I"
-"""
-    path.write_text(original, encoding="utf-8")
-    cfg = Config.from_yaml(path)[1]
-    path.write_text(reordered, encoding="utf-8")
-
-    assert update_config_from_fingerprint(path, cfg, FP) is True
-
-    variants = yaml.safe_load(path.read_text(encoding="utf-8"))["variants"]
-    assert variants[0]["variant"] == "Beta"
-    assert variants[0]["incremental"] == "201350016"
-    assert variants[1]["incremental"] == "ALPHA-I"
-
-
-def test_stale_variant_index_uses_current_build_for_shared_identity(tmp_path):
-    path = tmp_path / "config.yml"
-    original = """\
-oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - android_version: "14"
-    build_tag: "ALPHA"
-    incremental: "ALPHA-I"
-  - android_version: "15"
-    build_tag: "BETA"
-    incremental: "BETA-I"
-"""
-    reordered = """\
-oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - android_version: "15"
-    build_tag: "BETA"
-    incremental: "BETA-I"
-  - android_version: "14"
-    build_tag: "ALPHA"
-    incremental: "ALPHA-I"
-"""
-    path.write_text(original, encoding="utf-8")
-    cfg = Config.from_yaml(path)[1]
-    path.write_text(reordered, encoding="utf-8")
-
-    assert update_config_from_fingerprint(path, cfg, FP) is True
-
-    variants = yaml.safe_load(path.read_text(encoding="utf-8"))["variants"]
-    assert variants[0]["incremental"] == "201350016"
-    assert variants[1]["incremental"] == "ALPHA-I"
-
-
-def test_variant_index_is_not_used_when_shared_identity_is_ambiguous(tmp_path):
-    path = tmp_path / "config.yml"
-    path.write_text(
-        """\
-oem: "Infinix"
-product: "X6873-OP"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - android_version: "14"
-    build_tag: "SAME"
-    incremental: "SAME-I"
-  - android_version: "14"
-    build_tag: "SAME"
-    incremental: "SAME-I"
-""",
-        encoding="utf-8",
-    )
-    before = path.read_bytes()
-    cfg = Config.from_yaml(path)[1]
 
     assert update_config_from_fingerprint(path, cfg, FP) is False
     assert path.read_bytes() == before
@@ -336,10 +237,9 @@ def test_processor_rejects_identity_mismatch_before_actions(tmp_path):
         oem="Infinix",
         product="X6873-OP",
     )
-    update = VariantUpdate(
+    update = RegionUpdate(
         cfg=cfg,
         config_path=tmp_path / "config.yml",
-        variant_label=None,
         region_name=None,
         title="OTA",
         url="https://example.test/ota.zip",

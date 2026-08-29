@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KM7-OP"
-device: "TECNO-KM7"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "180001"
+product_base: "KM7"
 model: "TECNO SPARK 40 Pro+"
+android_version: "15"
+regions:
+  OP: "180001"

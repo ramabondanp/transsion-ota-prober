@@ -1,24 +1,10 @@
 oem: "Infinix"
-device: "Infinix-X6852"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
+product_base: "X6852"
 model: "Infinix NOTE 40 5G"
-
-variants:
-  - variant: "Global"
+android_version: "15"
+regions:
+  OP:
     android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6852-OP"
     incremental: "301300004"
-
-  - variant: "India"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "X6852-IN"
-    incremental: "170032"
-
-  - variant: "Europe"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    product: "X6852-EU"
-    incremental: "170031"
+  IN: "170032"
+  EU: "170031"

@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CL7-OP"
-device: "TECNO-CL7"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301300008"
+product_base: "CL7"
 model: "TECNO CAMON 30 5G"
+android_version: "16"
+regions:
+  OP: "301300008"

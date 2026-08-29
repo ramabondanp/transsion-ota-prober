@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6836-OP"
-device: "Infinix-X6836"
-android_version: "13"
-build_tag: "TP1A.220624.014"
-incremental: "250908V2010"
+product_base: "X6836"
 model: "Infinix HOT 40"
+android_version: "13"
+regions:
+  OP: "250908V2010"

@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "LJ6-OP"
-device: "TECNO-LJ6"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301400010"
+product_base: "LJ6"
 model: "TECNO POVA 7 4G / POVA 7 Neo 4G"
+android_version: "16"
+regions:
+  OP: "301400010"

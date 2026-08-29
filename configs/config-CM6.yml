@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CM6-OP"
-device: "TECNO-CM6"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "201500012"
+product_base: "CM6"
 model: "TECNO CAMON 40 Pro 4G"
+android_version: "16"
+regions:
+  OP: "201500012"

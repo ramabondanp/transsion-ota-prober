@@ -5,6 +5,7 @@ wheel has no writable repository beside the package, so it uses per-user XDG
 directories and copies packaged defaults there on first use.
 """
 
+import errno
 import os
 import shutil
 import sys
@@ -98,11 +99,43 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
             os.link(temporary, destination)
         except FileExistsError:
             return False
-        except OSError:
-            # Filesystems without hardlink support (e.g. some network mounts):
-            # publish by renaming instead. Contents are the identical bundled
-            # defaults, so last-writer-wins is harmless.
-            os.replace(temporary, destination)
+        except OSError as exc:
+            # Hard links may be unavailable on some filesystems, but an
+            # arbitrary link failure must not turn into an overwrite. In
+            # particular, permission errors should remain errors rather than
+            # falling through to os.replace().
+            unsupported = {
+                errno.EXDEV,
+                errno.EOPNOTSUPP,
+                getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+            }
+            if exc.errno not in unsupported:
+                raise
+
+            # There is no portable atomic rename-with-NOREPLACE primitive in
+            # Python. O_EXCL still makes the fallback publication exclusive:
+            # a concurrent process/user can win the race, but this process can
+            # never overwrite the winner.
+            try:
+                destination_fd = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    mode,
+                )
+            except FileExistsError:
+                return False
+            try:
+                with (
+                    os.fdopen(destination_fd, "wb") as output_file,
+                    temporary.open("rb") as input_file,
+                ):
+                    destination_fd = -1
+                    shutil.copyfileobj(input_file, output_file)
+                    output_file.flush()
+                    os.fsync(output_file.fileno())
+            finally:
+                if destination_fd != -1:
+                    os.close(destination_fd)
         return True
     finally:
         if fd != -1:

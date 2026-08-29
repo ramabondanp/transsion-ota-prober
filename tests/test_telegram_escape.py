@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from checkota.manager import Config
-from checkota.models import VariantUpdate
+from checkota.models import RegionUpdate
 from checkota.notifier import build_notification_message
 
 
@@ -11,8 +11,8 @@ def _fake_update(
     title: str = "TECNO <hack>",
     desc: str = "a & b",
     sdk: str = "Android 14",
-) -> VariantUpdate:
-    return VariantUpdate(
+) -> RegionUpdate:
+    return RegionUpdate(
         cfg=Config(
             oem="Infinix",
             product="X6873-OP",
@@ -23,7 +23,6 @@ def _fake_update(
             model="Infinix GT 30 Pro",
         ),
         config_path=Path("/tmp/config-X6873.yml"),
-        variant_label="Global",
         region_name=None,
         title=title,
         url="https://example.com/x.zip",

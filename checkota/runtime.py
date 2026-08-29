@@ -7,18 +7,24 @@ import os
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
 from typing import TextIO
 
 import requests
 from requests.adapters import HTTPAdapter
 
 from checkota.constants import EMERGENCY_DRAIN_MAX_SENDS
-from checkota.fingerprints import load_processed_titles
+from checkota.fingerprints import load_processed_titles, prune_title_locks
 from checkota.logging import Log
 from checkota.models import PendingNotification
 from checkota.paths import processed_updates_path
+
+# Matches typeshed's _HANDLER so the saved SIGINT handler can be restored
+# without a type error at the call site.
+SignalHandler = Callable[[int, FrameType | None], object] | int | signal.Handlers | None
 
 
 @dataclass
@@ -61,7 +67,7 @@ class RunContext:
         session = getattr(self._local, "session", None)
         if session is None:
             session = requests.Session()
-            # Size the connection pool so concurrent variant/config workers that
+            # Size the connection pool so concurrent region/config workers that
             # share this thread's session never block on a full pool.
             adapter = HTTPAdapter(
                 pool_connections=self.pool_size, pool_maxsize=self.pool_size
@@ -132,6 +138,12 @@ def create_run_context(
         Log.i("Dry-run mode enabled: no external side effects will occur.")
 
     processed_path = processed_updates_path()
+    processed_titles = load_processed_titles(processed_path)
+    if not dry_run:
+        # Housekeeping: clear stale per-title claim locks so the state
+        # directory does not accumulate one file per title forever. Skipped
+        # in dry-run mode, which promises no external side effects.
+        prune_title_locks(processed_path, processed_titles)
     env = {
         "bot_token": os.environ.get("bot_token", ""),
         "chat_id": os.environ.get("chat_id", ""),
@@ -140,10 +152,10 @@ def create_run_context(
     return RunContext(
         env=env,
         processed_path=processed_path,
-        processed_titles=load_processed_titles(processed_path),
+        processed_titles=processed_titles,
         dry_run=dry_run,
         # Per AGENTS.md "Per-thread session pool too small" — give each thread at
-        # least 10 socket slots so concurrent variant/config workers never block
+        # least 10 socket slots so concurrent region/config workers never block
         # on a full pool when --jobs overshoots the default floor. This is the
         # *capacity* of HTTPAdapter.pool_maxsize, not eagerly-opened sockets.
         pool_size=max(10, pool_size),
@@ -151,7 +163,7 @@ def create_run_context(
     )
 
 
-def install_interrupt_handler(ctx: RunContext) -> object:
+def install_interrupt_handler(ctx: RunContext) -> SignalHandler:
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def handle_interrupt(signum, frame):
@@ -175,20 +187,35 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
 
     def _on_timeout() -> None:
         ctx.stop_event.set()
-        # Flush buffered stdio: os._exit skips interpreter shutdown, so piped
-        # (block-buffered) output would otherwise be lost.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        # Best-effort flush of buffered Telegram notifications before the hard
-        # exit; a one-shot cron run would otherwise lose every update found by
-        # this sweep. Bounded and fully guarded -- teardown must not hang or
-        # crash because of it.
-        _emergency_drain_notifications(ctx)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
-        # the stop_event mid-call, so force termination after the budget.
-        os._exit(124)
+
+        def flush_stdio() -> None:
+            # os._exit skips interpreter shutdown, so piped (block-buffered)
+            # output would otherwise be lost. A closed pipe or custom stream
+            # must not prevent the hard exit below.
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                # A closed/broken stream must not stop the hard exit below.
+                except BaseException:  # noqa: S110, BLE001
+                    pass
+
+        try:
+            flush_stdio()
+            # Best-effort flush of buffered Telegram notifications before the
+            # hard exit; a one-shot cron run would otherwise lose every update
+            # found by this sweep. Teardown must not hang or crash because of
+            # any exception raised by this optional path.
+            try:
+                _emergency_drain_notifications(ctx)
+            # Teardown must not hang or crash on this optional path.
+            except BaseException:  # noqa: S110, BLE001
+                pass
+            flush_stdio()
+        finally:
+            # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
+            # stop_event mid-call, so force termination after the budget even
+            # when output flushing or emergency draining fails.
+            os._exit(124)
 
     watchdog = threading.Timer(timeout, _on_timeout)
     watchdog.daemon = True

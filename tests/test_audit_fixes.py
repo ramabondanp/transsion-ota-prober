@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from checkota.manager import Config
-from checkota.models import PendingNotification, VariantUpdate
+from checkota.models import PendingNotification, RegionUpdate
 from checkota.processor import (
     _claim_new_update,
     _release_claimed_update,
@@ -47,11 +47,10 @@ def _cfg() -> Config:
     )
 
 
-def _update(**overrides) -> VariantUpdate:
+def _update(**overrides) -> RegionUpdate:
     base = {
         "cfg": _cfg(),
         "config_path": Path("/tmp/config-X6873.yml"),
-        "variant_label": "Global",
         "region_name": None,
         "title": "TECNO-X123-15.0.1.2-OP001",
         "url": "https://example.com/ota.zip",
@@ -64,7 +63,7 @@ def _update(**overrides) -> VariantUpdate:
         "data": {},
     }
     base.update(overrides)
-    return VariantUpdate(**base)
+    return RegionUpdate(**base)
 
 
 def _args(**overrides) -> argparse.Namespace:

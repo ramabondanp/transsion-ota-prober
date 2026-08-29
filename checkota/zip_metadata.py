@@ -68,6 +68,15 @@ class RemoteZipTransientError(RemoteZipFetchError):
 
 _CONNECT_TIMEOUT = 5.0
 
+
+def _sleep_before_retry(attempt: int, attempts: int) -> bool:
+    """Return True (after a backoff sleep) when another attempt remains."""
+    if attempt >= attempts - 1:
+        return False
+    time.sleep(2**attempt)
+    return True
+
+
 def _timeout_pair(read_budget: float) -> tuple[float, float]:
     """Convert a single numeric timeout into requests' (connect, read) tuple."""
     return (_CONNECT_TIMEOUT, max(read_budget, _CONNECT_TIMEOUT))
@@ -248,16 +257,14 @@ def _range_get_with_total(
                 response = None
                 request_url = redirect_url
         except RemoteZipTransientError:
-            if attempt < attempts - 1:
-                time.sleep(2**attempt)
+            if _sleep_before_retry(attempt, attempts):
                 continue
             raise
         except requests.exceptions.RequestException as exc:
             transient_err = RemoteZipTransientError(
                 f"Transport failure for {url} (bytes={start}-{end}): {exc}"
             )
-            if attempt < attempts - 1:
-                time.sleep(2**attempt)
+            if _sleep_before_retry(attempt, attempts):
                 continue
             raise transient_err from exc
         finally:

@@ -1,23 +1,58 @@
+import contextlib
 import os
 import re
 import stat
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
-from checkota.constants import REGION_CODE_MAP
+from checkota.constants import (
+    BUILD_TAG_BY_ANDROID,
+    DEVICE_PREFIX_BY_OEM,
+    REGION_CODE_MAP,
+)
 from checkota.logging import Log
 
 try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - non-POSIX fallback
     _fcntl = None  # type: ignore[assignment]
+
+
+def _prune_config_lock(lock_path: Path) -> None:
+    """Best-effort removal of a released config lock file.
+
+    Config lock files would otherwise accumulate next to every config ever
+    rewritten. The lock is re-acquired non-blocking and the file is unlinked
+    only when no other process holds it. Residual race (documented, accepted):
+    a process that opened the file just before the unlink proceeds on an
+    unlinked inode, so two whole-file rewrites could interleave; both are
+    atomic and round-trip verified, and the loser's update is reapplied by
+    its next OTA run.
+    """
+    if _fcntl is None:
+        return
+    try:
+        handle = lock_path.open("a+", encoding="utf-8")
+    except OSError:
+        return
+    try:
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            return  # another process holds the lock; keep the file
+        with contextlib.suppress(OSError):
+            lock_path.unlink()
+    finally:
+        with contextlib.suppress(OSError):
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        handle.close()
 
 
 @contextmanager
@@ -32,6 +67,77 @@ def _config_lock(config_path: Path):
         if _fcntl is not None:
             _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
         handle.close()
+        _prune_config_lock(lock_path)
+
+
+_COMPACT_REQUIRED_KEYS = (
+    "oem",
+    "product_base",
+    "model",
+    "android_version",
+    "regions",
+)
+_COMPACT_TOP_LEVEL_KEYS = frozenset(_COMPACT_REQUIRED_KEYS)
+_COMPACT_REGION_KEYS = frozenset(
+    {"incremental", "product_base", "android_version", "build_tag"}
+)
+_LEGACY_SINGLE_REGION_KEYS = frozenset(
+    {"product", "device", "build_tag", "incremental"}
+)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+# Region codes become part of `product` (`{product_base}-{REGION}`) and thus of
+# the check-in fingerprint, so they are restricted to the uppercase
+# alphanumeric/hyphen vocabulary the convention actually uses (e.g. "OP-M1").
+_REGION_CODE_RE = re.compile(r"[A-Z0-9][A-Z0-9-]*")
+
+
+def _region_context(file: Path, region_code: Any) -> str:
+    return f"Config {file} region {region_code!r}"
+
+
+def _validated_config_string(
+    value: Any,
+    field: str,
+    file: Path,
+    region_code: Any = None,
+    forbidden_chars: str = "",
+) -> str:
+    context = (
+        _region_context(file, region_code)
+        if region_code is not None
+        else f"Config {file}"
+    )
+    if not isinstance(value, str):
+        raise TypeError(f"{context} {field} must be a string.")
+    if not value:
+        raise ValueError(f"{context} {field} must not be empty.")
+    if value != value.strip():
+        raise ValueError(
+            f"{context} {field} must not have leading or trailing whitespace."
+        )
+    if _CONTROL_CHAR_RE.search(value):
+        raise ValueError(f"{context} {field} must not contain control characters.")
+    if any(char in value for char in forbidden_chars):
+        raise ValueError(
+            f"{context} {field} must not contain any of {forbidden_chars!r}."
+        )
+    return value
+
+
+def _validate_region_code(region_code: Any, context: str) -> None:
+    if not isinstance(region_code, str):
+        raise TypeError(f"{context} key must be a string.")
+    if not region_code:
+        raise ValueError(f"{context} key must not be empty.")
+    if region_code != region_code.strip():
+        raise ValueError(
+            f"{context} key must not have leading or trailing whitespace."
+        )
+    if region_code != region_code.upper():
+        raise ValueError(f"{context} key must use uppercase characters.")
+    # The region code is structural (see _REGION_CODE_RE).
+    if not _REGION_CODE_RE.fullmatch(region_code):
+        raise ValueError(f"{context} key contains an invalid character.")
 
 
 @dataclass
@@ -43,35 +149,7 @@ class Config:
     device: str
     oem: str
     product: str
-    variant: str | None = None
-    variant_index: int | None = None
-
-    @classmethod
-    def _from_dict(
-        cls,
-        data: dict[str, str],
-        variant_name: str | None = None,
-        variant_index: int | None = None,
-    ) -> "Config":
-        field_names = {field.name for field in fields(cls)}
-        required_fields = field_names - {"variant", "variant_index"}
-
-        filtered: dict[str, Any] = {
-            key: value for key, value in data.items() if key in field_names
-        }
-
-        if variant_name:
-            filtered["variant"] = variant_name
-        if variant_index is not None:
-            filtered["variant_index"] = variant_index
-
-        missing = [key for key in required_fields if key not in filtered]
-        if missing:
-            raise ValueError(
-                f"Config missing required fields: {', '.join(sorted(missing))}"
-            )
-
-        return cls(**filtered)
+    region: str | None = None
 
     @classmethod
     def from_yaml(cls, file: Path) -> list["Config"]:
@@ -79,37 +157,148 @@ class Config:
             raise FileNotFoundError(f"Config file not found: {file}")
 
         try:
-            with open(file, encoding="utf-8") as handle:
-                data = _load_yaml(handle)
-        except (OSError, yaml.YAMLError) as exc:
-            raise ValueError(f"Could not read or parse config {file}: {exc}") from exc
+            with open(file, encoding="utf-8", newline="") as handle:
+                raw_text = handle.read()
+        except OSError as exc:
+            raise ValueError(f"Could not read config {file}: {exc}") from exc
 
+        try:
+            data = _load_yaml(raw_text)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Could not parse config {file}: {exc}") from exc
+
+        # Layout is validated before the schema so an unrewritable source is
+        # rejected even when its data would resolve: a config that loads must
+        # also be updatable.
+        _validate_compact_source_layout(raw_text, file)
+        return cls._from_compact_data(data, file)
+
+    @classmethod
+    def _from_compact_data(cls, data: Any, file: Path) -> list["Config"]:
+        context = f"Config {file}"
         if not isinstance(data, dict):
-            raise TypeError("Config file content is not a valid dictionary.")
+            raise TypeError(f"{context} must contain a top-level mapping.")
 
-        variants = data.get("variants")
-
-        if variants is None:
-            return [cls._from_dict(data)]
-
-        if not isinstance(variants, list) or not variants:
-            raise ValueError("'variants' must be a non-empty list of dictionaries.")
-
-        base = {k: v for k, v in data.items() if k != "variants"}
-        configs = []
-        for idx, variant in enumerate(variants, start=1):
-            if not isinstance(variant, dict):
-                raise TypeError(f"Variant entry #{idx} is not a dictionary.")
-
-            merged = {**base, **variant}
-            variant_name = (
-                variant.get("variant")
-                or variant.get("name")
-                or variant.get("region")
-                or variant.get("label")
-                or variant.get("product")
+        if "variants" in data:
+            raise ValueError(
+                f"{context} uses the legacy 'variants' schema; migrate it to a "
+                "'regions' mapping."
             )
-            configs.append(cls._from_dict(merged, variant_name, idx - 1))
+        legacy_keys = [key for key in data if key in _LEGACY_SINGLE_REGION_KEYS]
+        if legacy_keys:
+            names = ", ".join(repr(key) for key in legacy_keys)
+            raise ValueError(
+                f"{context} uses the legacy single-region schema ({names}); "
+                "migrate it to 'product_base' and a 'regions' mapping."
+            )
+
+        unknown_keys = [key for key in data if key not in _COMPACT_TOP_LEVEL_KEYS]
+        if unknown_keys:
+            names = ", ".join(repr(key) for key in unknown_keys)
+            raise ValueError(f"{context} has unknown top-level key(s): {names}.")
+
+        missing_keys = [key for key in _COMPACT_REQUIRED_KEYS if key not in data]
+        if missing_keys:
+            names = ", ".join(missing_keys)
+            raise ValueError(f"{context} is missing required key(s): {names}.")
+
+        oem = _validated_config_string(data["oem"], "oem", file, forbidden_chars="/:")
+        product_base = _validated_config_string(
+            data["product_base"], "product_base", file, forbidden_chars="/:-"
+        )
+        model = _validated_config_string(data["model"], "model", file)
+        android_version = _validated_config_string(
+            data["android_version"],
+            "android_version",
+            file,
+            forbidden_chars="/:",
+        )
+
+        regions = data["regions"]
+        if not isinstance(regions, dict):
+            raise TypeError(f"{context} 'regions' must be a non-empty mapping.")
+        if not regions:
+            raise ValueError(f"{context} 'regions' must be a non-empty mapping.")
+
+        configs: list[Config] = []
+        for region_code, region_data in regions.items():
+            region_context = _region_context(file, region_code)
+            _validate_region_code(region_code, region_context)
+
+            if isinstance(region_data, str):
+                overrides: dict[str, Any] = {"incremental": region_data}
+            elif isinstance(region_data, dict):
+                unknown_region_keys = [
+                    key for key in region_data if key not in _COMPACT_REGION_KEYS
+                ]
+                if unknown_region_keys:
+                    names = ", ".join(repr(key) for key in unknown_region_keys)
+                    raise ValueError(
+                        f"{region_context} has unknown key(s): {names}."
+                    )
+                if "incremental" not in region_data:
+                    raise ValueError(
+                        f"{region_context} expanded mapping requires 'incremental'."
+                    )
+                overrides = region_data
+            else:
+                raise TypeError(
+                    f"{region_context} must be a string incremental or a mapping."
+                )
+
+            effective_product_base = _validated_config_string(
+                overrides.get("product_base", product_base),
+                "product_base",
+                file,
+                region_code,
+                forbidden_chars="/:-",
+            )
+            effective_android_version = _validated_config_string(
+                overrides.get("android_version", android_version),
+                "android_version",
+                file,
+                region_code,
+                forbidden_chars="/:",
+            )
+            explicit_build_tag = (
+                _validated_config_string(
+                    overrides["build_tag"],
+                    "build_tag",
+                    file,
+                    region_code,
+                    forbidden_chars="/:",
+                )
+                if "build_tag" in overrides
+                else None
+            )
+            try:
+                effective_build_tag = resolve_build_tag(
+                    effective_android_version, explicit_build_tag
+                )
+            except ValueError as exc:
+                raise ValueError(f"{region_context}: {exc}") from exc
+            incremental = _validated_config_string(
+                overrides["incremental"],
+                "incremental",
+                file,
+                region_code,
+                forbidden_chars="/:",
+            )
+            product, device = derive_product_and_device(
+                oem, effective_product_base, region_code
+            )
+            configs.append(
+                cls(
+                    build_tag=effective_build_tag,
+                    incremental=incremental,
+                    android_version=effective_android_version,
+                    model=model,
+                    device=device,
+                    oem=oem,
+                    product=product,
+                    region=region_code,
+                )
+            )
 
         return configs
 
@@ -134,6 +323,32 @@ def region_from_product(product: str) -> str | None:
     return REGION_CODE_MAP.get(code) if code else None
 
 
+def resolve_build_tag(
+    android_version: str, explicit_build_tag: str | None = None
+) -> str:
+    """Resolve a canonical build tag, or use an explicit override."""
+    if explicit_build_tag is not None:
+        return explicit_build_tag
+
+    try:
+        return BUILD_TAG_BY_ANDROID[android_version]
+    except KeyError as exc:
+        raise ValueError(
+            f"No canonical build tag is known for Android {android_version!r}; "
+            "provide an explicit build_tag."
+        ) from exc
+
+
+def derive_product_and_device(
+    oem: str, product_base: str, region_code: str
+) -> tuple[str, str]:
+    """Derive the product and device identity for one region."""
+    product = f"{product_base}-{region_code}"
+    device_prefix = DEVICE_PREFIX_BY_OEM.get(oem, oem)
+    device = f"{device_prefix}-{product_base}"
+    return product, device
+
+
 _FINGERPRINT_RE = re.compile(
     r"^(?P<oem>[^/]+)/(?P<product>[^/]+)/(?P<device>[^:]+):"
     r"(?P<android_version>[^/]+)/(?P<build_tag>[^/]+)/(?P<incremental>[^:]+):.+$"
@@ -142,13 +357,12 @@ _FINGERPRINT_RE = re.compile(
 _IMMUTABLE_IDENTITY_KEYS = ("oem", "product", "device")
 _UPDATED_KEYS = ("android_version", "build_tag", "incremental")
 _DIRECT_KEY_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<key>[A-Za-z_][A-Za-z0-9_-]*)[ \t]*:"
+    r"^(?P<indent>[ \t]*)(?P<key>"
+    r"[A-Za-z0-9_?-][A-Za-z0-9_-]*"
+    r"|'(?:[^']|'')*'"
+    r'|"(?:[^"\\]|\\.)*"'
+    r")[ \t]*:"
 )
-_SEQUENCE_KEY_RE = re.compile(
-    r"^(?P<indent>[ \t]*)-[ \t]+"
-    r"(?P<key>[A-Za-z_][A-Za-z0-9_-]*)[ \t]*:"
-)
-_SEQUENCE_ITEM_RE = re.compile(r"^(?P<indent>[ \t]*)-(?=$|[ \t])")
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -188,7 +402,178 @@ _UniqueKeyLoader.add_constructor(
 
 
 def _load_yaml(stream: Any) -> Any:
-    return yaml.load(stream, Loader=_UniqueKeyLoader)
+    # Identical to yaml.load(stream, Loader=_UniqueKeyLoader); spelled out so
+    # the SafeLoader subclass is visible at the call site (no unsafe loader).
+    loader = _UniqueKeyLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
+def _validate_mapping_key_source_forms(
+    events: list[yaml.events.Event], source: str, file: Path
+) -> None:
+    """Require mapping source forms understood by the line-oriented updater."""
+    source_lines = source.splitlines()
+    # Each frame is [is_mapping, mapping_expects_key]. Collection nodes only
+    # complete in their parent when their corresponding end event is reached.
+    frames: list[list[bool]] = []
+    # For mapping frames, remember the source line of the current key until its
+    # value completes. A scalar value on a later line cannot be rewritten safely
+    # by the line-oriented updater.
+    mapping_key_lines: list[int | None] = []
+
+    def complete_node() -> None:
+        if frames and frames[-1][0]:
+            frames[-1][1] = not frames[-1][1]
+            if frames[-1][1]:
+                mapping_key_lines[-1] = None
+
+    for event in events:
+        if isinstance(
+            event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)
+        ):
+            if frames and frames[-1][0] and frames[-1][1]:
+                raise ValueError(
+                    f"Config {file} uses an unsupported mapping key source layout; "
+                    "use a plain or quoted scalar key followed by ':' on the same "
+                    "line so updates can locate it."
+                )
+            frames.append(
+                [isinstance(event, yaml.events.MappingStartEvent), True]
+            )
+            mapping_key_lines.append(None)
+            continue
+
+        if isinstance(
+            event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)
+        ):
+            frames.pop()
+            mapping_key_lines.pop()
+            complete_node()
+            continue
+
+        if not isinstance(event, (yaml.events.ScalarEvent, yaml.events.AliasEvent)):
+            continue
+
+        is_mapping_key = bool(frames and frames[-1][0] and frames[-1][1])
+        if is_mapping_key:
+            line = source_lines[event.start_mark.line]
+            key_source = line[event.start_mark.column :]
+            match = _DIRECT_KEY_RE.match(key_source)
+            if (
+                not isinstance(event, yaml.events.ScalarEvent)
+                or event.start_mark.line != event.end_mark.line
+                or match is None
+                or match.start("key") != 0
+                or match.end("key")
+                != event.end_mark.column - event.start_mark.column
+            ):
+                raise ValueError(
+                    f"Config {file} uses an unsupported mapping key source layout; "
+                    "use a plain or quoted scalar key followed by ':' on the same "
+                    "line so updates can locate it."
+                )
+            mapping_key_lines[-1] = event.end_mark.line
+        elif (
+            isinstance(event, yaml.events.ScalarEvent)
+            and frames
+            and frames[-1][0]
+            and mapping_key_lines[-1] is not None
+            and event.start_mark.line != mapping_key_lines[-1]
+        ):
+            raise ValueError(
+                f"Config {file} uses an unsupported scalar value source layout; "
+                "put each scalar value on the same line as its mapping key so "
+                "updates can locate it."
+            )
+        complete_node()
+
+
+def _validate_compact_source_layout(source: str, file: Path) -> None:
+    """Reject YAML layouts that the line-preserving updater cannot rewrite safely.
+
+    The updater edits the source line by line, so every construct it may touch
+    has to occupy exactly one line and must not be shared through an anchor.
+    Anything the parser would accept but the rewriter cannot express is rejected
+    here, at load time and again before every update, so a config can never be
+    readable-but-unupdatable.
+    """
+    events = list(yaml.parse(source))
+    # Explicit mapping keys and tagged keys are valid YAML, but the updater's
+    # line-oriented key locator cannot rewrite them. Reject these source forms
+    # before schema validation; flow collections are handled below so they keep
+    # their more specific existing diagnostic.
+    for line in source.splitlines():
+        stripped = line.lstrip(" \t")
+        if stripped.startswith("?") and (
+            len(stripped) == 1 or stripped[1].isspace()
+        ):
+            raise ValueError(
+                f"Config {file} uses an unsupported mapping key source layout; "
+                "use a plain or quoted scalar key followed by ':' on the same "
+                "line so updates can locate it."
+            )
+        if re.match(
+            r"(?:!![^\s:]+[ \t]+[^:]+:|!<[^>]+>[ \t]+.+:)", stripped
+        ):
+            raise ValueError(
+                f"Config {file} uses an unsupported mapping key source layout; "
+                "use a plain or quoted scalar key followed by ':' on the same "
+                "line so updates can locate it."
+            )
+    for index, event in enumerate(events):
+        # AliasEvent and every *StartEvent carry `.anchor`; keeping this check
+        # out of an isinstance guard also keeps the raise honest (a shared node
+        # is a layout problem, not a type problem).
+        anchor = getattr(event, "anchor", None)
+        if anchor is not None:
+            reference = (
+                f"alias '*{anchor}'"
+                if isinstance(event, yaml.events.AliasEvent)
+                else f"anchor '&{anchor}'"
+            )
+            raise ValueError(
+                f"Config {file} uses YAML {reference}; anchors and aliases are "
+                "not supported because updates could leave dangling aliases."
+            )
+
+        if isinstance(event, yaml.events.ScalarEvent):
+            if event.style in ("|", ">"):
+                raise ValueError(
+                    f"Config {file} uses a literal/folded block scalar; use a "
+                    "quoted or plain scalar so updates can preserve the source "
+                    "layout."
+                )
+            if event.start_mark.line != event.end_mark.line:
+                raise ValueError(
+                    f"Config {file} uses a multi-line scalar; keep every value "
+                    "on one line so updates can preserve the source layout."
+                )
+            continue
+
+        if (
+            isinstance(
+                event,
+                (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent),
+            )
+            and event.flow_style
+            # An empty `{}`/`[]` holds nothing to rewrite. Let it through so the
+            # schema check can report the real problem (regions must be a
+            # non-empty mapping) instead of a layout complaint.
+            and not isinstance(
+                events[index + 1],
+                (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent),
+            )
+        ):
+            raise ValueError(
+                f"Config {file} uses a flow-style collection; use block style "
+                "for 'regions' and every region value so updates can preserve "
+                "the source layout."
+            )
+
+    _validate_mapping_key_source_forms(events, source, file)
 
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
@@ -211,70 +596,30 @@ def fingerprint_identity_matches_config(cfg: Config, fingerprint: str) -> bool:
     return bool(parsed and _identity_matches(parsed, cfg))
 
 
-def _effective_variant_values(
-    data: dict[str, Any], variant_index: int | None
-) -> dict[str, Any] | None:
-    if variant_index is None:
-        return data
-
-    variants = data.get("variants")
-    if not isinstance(variants, list) or not (0 <= variant_index < len(variants)):
-        return None
-    variant = variants[variant_index]
-    if not isinstance(variant, dict):
-        return None
-
+def _config_values(config: Config) -> dict[str, str]:
     return {
-        key: variant[key] if key in variant else data.get(key)
+        key: str(getattr(config, key))
         for key in (*_IMMUTABLE_IDENTITY_KEYS, *_UPDATED_KEYS)
     }
 
 
-def _matching_variant_index(data: dict[str, Any], cfg: Config) -> int | None:
-    variants = data.get("variants")
-    if not isinstance(variants, list):
+def _effective_region_values(
+    data: dict[str, Any], region_code: str, config_path: Path
+) -> dict[str, str] | None:
+    """Resolve one exact compact region from the latest on-disk YAML."""
+    regions = data.get("regions")
+    if not isinstance(regions, dict) or region_code not in regions:
         return None
 
-    identity_matches: list[int] = []
-    for index in range(len(variants)):
-        effective = _effective_variant_values(data, index)
-        if effective is not None and _identity_matches(effective, cfg):
-            identity_matches.append(index)
+    try:
+        configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError):
+        return None
 
-    if len(identity_matches) <= 1:
-        return identity_matches[0] if identity_matches else None
-
-    label_matches: list[int] = []
-    if cfg.variant is not None:
-        for index in identity_matches:
-            variant = variants[index]
-            if not isinstance(variant, dict):
-                continue
-            label = (
-                variant.get("variant")
-                or variant.get("name")
-                or variant.get("region")
-                or variant.get("label")
-                or variant.get("product")
-            )
-            if label is not None and str(label) == str(cfg.variant):
-                label_matches.append(index)
-
-    build_matches = []
-    for index in identity_matches:
-        effective = _effective_variant_values(data, index)
-        if effective is not None and all(
-            key in effective
-            and effective[key] is not None
-            and str(effective[key]) == str(getattr(cfg, key))
-            for key in _UPDATED_KEYS
-        ):
-            build_matches.append(index)
-
-    unique_evidence = {
-        matches[0] for matches in (label_matches, build_matches) if len(matches) == 1
-    }
-    return unique_evidence.pop() if len(unique_evidence) == 1 else None
+    matches = [config for config in configs if config.region == region_code]
+    if len(matches) != 1:
+        return None
+    return _config_values(matches[0])
 
 
 def _line_body_and_ending(line: str) -> tuple[str, str]:
@@ -287,20 +632,31 @@ def _line_body_and_ending(line: str) -> tuple[str, str]:
     return line, ""
 
 
+def _decoded_direct_key(match: re.Match[str]) -> str | None:
+    try:
+        key = yaml.safe_load(match.group("key"))
+    except yaml.YAMLError:
+        return None
+    return key if isinstance(key, str) else None
+
+
+def _root_mapping_indent(lines: list[str]) -> int | None:
+    indents = (
+        len(match.group("indent"))
+        for line in lines
+        if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
+    )
+    return min(indents, default=None)
+
+
 def _direct_key_line(line: str, key: str, indent: int | None = None) -> bool:
     body, _ = _line_body_and_ending(line)
     match = _DIRECT_KEY_RE.match(body)
     return bool(
         match
-        and match.group("key") == key
+        and _decoded_direct_key(match) == key
         and (indent is None or len(match.group("indent")) == indent)
     )
-
-
-def _sequence_item_indent(line: str) -> int | None:
-    body, _ = _line_body_and_ending(line)
-    match = _SEQUENCE_ITEM_RE.match(body)
-    return len(match.group("indent")) if match else None
 
 
 def _comment_start(text: str) -> int | None:
@@ -342,10 +698,8 @@ def _quote_yaml_string(value: str) -> str:
 def _rewrite_yaml_line(line: str, key: str, value: str) -> str:
     body, newline = _line_body_and_ending(line)
     match = _DIRECT_KEY_RE.match(body)
-    if not match or match.group("key") != key:
-        match = _SEQUENCE_KEY_RE.match(body)
-        if not match or match.group("key") != key:
-            return line
+    if not match or _decoded_direct_key(match) != key:
+        return line
 
     comment_index = _comment_start(body)
     if comment_index is None:
@@ -386,7 +740,7 @@ def _update_config_from_fingerprint(
 ) -> bool:
     """Apply a target fingerprint to a config file (lock must be held).
 
-    Pipeline: validate target -> read/parse -> resolve the matching variant ->
+    Pipeline: validate target -> read/parse -> resolve the matching region ->
     rewrite lines -> atomic persist with round-trip verification.
     """
     parsed = parse_fingerprint(fingerprint)
@@ -414,6 +768,12 @@ def _update_config_from_fingerprint(
         return False
 
     try:
+        _validate_compact_source_layout(raw_text, config_path)
+    except (ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not validate config {config_path} before updating: {exc}")
+        return False
+
+    try:
         data = _load_yaml(raw_text)
     except yaml.YAMLError as exc:
         Log.w(f"Could not parse config {config_path} before updating: {exc}")
@@ -422,16 +782,33 @@ def _update_config_from_fingerprint(
         Log.w(f"Config {config_path} did not parse as a dictionary.")
         return False
 
-    proceed, match_idx = _resolve_update_target(data, cfg, config_path)
+    proceed, region_code = _resolve_update_target(data, cfg, config_path)
     if not proceed:
         return False
 
-    effective = _effective_variant_values(data, match_idx)
+    if region_code is None:
+        Log.w(f"Could not resolve update region in {config_path}.")
+        return False
+
+    effective = _effective_region_values(data, region_code, config_path)
     if effective is None or not _identity_matches(effective, cfg):
         Log.w(
             f"Effective config identity does not match {config_path}; "
             "configuration was not updated."
         )
+        return False
+    try:
+        before_configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError) as exc:
+        Log.w(f"Could not snapshot config {config_path} before updating: {exc}")
+        return False
+    before_by_region = {
+        config.region: config
+        for config in before_configs
+        if config.region is not None
+    }
+    if len(before_by_region) != len(before_configs):
+        Log.w(f"Could not uniquely identify regions in {config_path}.")
         return False
 
     if all(
@@ -440,23 +817,30 @@ def _update_config_from_fingerprint(
         and str(effective[key]) == str(value)
         for key, value in updates.items()
     ):
+        # Nothing changed for the target region. Default-Android convergence is
+        # a side effect of applying an update, not a normalization pass we run
+        # on read: a check that finds no new build must leave the file alone.
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
 
     lines = raw_text.splitlines(keepends=True)
     newline = _detect_newline(raw_text)
-
-    variants = data.get("variants")
-    if isinstance(variants, list):
-        variant_index = cast(int, match_idx)
-        if not _rewrite_variant_block(
-            lines, len(variants), variant_index, updates, newline, config_path
-        ):
-            return False
-    elif not _rewrite_top_level_keys(lines, updates, config_path):
+    if not _rewrite_compact_region(
+        lines, data, region_code, updates, newline, config_path
+    ):
+        return False
+    if not _converge_android_default(lines, config_path, newline):
         return False
 
-    return _write_updated_config(config_path, lines, raw_text, cfg, match_idx, updates)
+    return _write_updated_config(
+        config_path,
+        lines,
+        raw_text,
+        cfg,
+        region_code,
+        updates,
+        before_by_region,
+    )
 
 
 def _detect_newline(raw_text: str) -> str:
@@ -469,192 +853,449 @@ def _detect_newline(raw_text: str) -> str:
 
 def _resolve_update_target(
     data: dict[str, Any], cfg: Config, config_path: Path
-) -> tuple[bool, int | None]:
-    """Locate which part of the parsed config the target applies to.
-
-    Returns (proceed, variant_index). variant_index is None for single-variant
-    configs; proceed=False means the reason was already logged.
-    """
-    variants = data.get("variants")
-    if isinstance(variants, list):
-        match_idx = _matching_variant_index(data, cfg)
-        if match_idx is None:
-            Log.w(
-                f"Could not locate matching variant in {config_path} when updating incremental."
-            )
-            return False, None
-        return True, match_idx
-    if "variants" in data:
-        Log.w(f"Config {config_path} has an invalid variants section.")
-        return False, None
-    if not _identity_matches(data, cfg):
+) -> tuple[bool, str | None]:
+    """Locate the exact compact region targeted by a current Config."""
+    region_code = region_code_from_product(cfg.product)
+    if region_code is None:
         Log.w(
-            f"Config identity changed before updating {config_path}; "
+            f"Could not derive a region code from {cfg.product!r} for {config_path}."
+        )
+        return False, None
+    if cfg.region != region_code:
+        Log.w(
+            f"Config region identity {cfg.region!r} does not match product region "
+            f"{region_code!r} for {config_path}; configuration was not updated."
+        )
+        return False, None
+
+    regions = data.get("regions")
+    if not isinstance(regions, dict):
+        Log.w(f"Config {config_path} has no valid 'regions' mapping.")
+        return False, None
+    if region_code not in regions:
+        Log.w(
+            f"Could not locate region {region_code!r} in {config_path}; "
             "configuration was not updated."
         )
         return False, None
-    return True, None
+
+    equivalent_region_keys = [
+        key
+        for key in regions
+        if isinstance(key, str) and key.upper() == region_code
+    ]
+    if len(equivalent_region_keys) != 1 or equivalent_region_keys[0] != region_code:
+        Log.w(
+            f"Region {region_code!r} is duplicated or not an exact mapping key in "
+            f"{config_path}; configuration was not updated."
+        )
+        return False, None
+
+    try:
+        configs = Config._from_compact_data(data, config_path)
+    except (TypeError, ValueError) as exc:
+        Log.w(f"Could not resolve region {region_code!r} in {config_path}: {exc}")
+        return False, None
+
+    matches = [config for config in configs if config.region == region_code]
+    if len(matches) != 1:
+        Log.w(
+            f"Could not uniquely resolve region {region_code!r} in {config_path}; "
+            "configuration was not updated."
+        )
+        return False, None
+    if not _identity_matches(_config_values(matches[0]), cfg):
+        Log.w(
+            f"Effective config identity changed before updating {config_path}; "
+            "configuration was not updated."
+        )
+        return False, None
+    return True, region_code
 
 
-def _rewrite_variant_block(
+def _region_block_span(
+    lines: list[str], region_code: str, config_path: Path
+) -> tuple[int, int, int, int] | None:
+    """Locate a compact region block as (start, end, key indent, child indent)."""
+    root_indent = _root_mapping_indent(lines)
+    regions_line_idx = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if root_indent is not None
+            and _direct_key_line(line, "regions", indent=root_indent)
+        ),
+        None,
+    )
+    if regions_line_idx is None:
+        Log.w(f"Could not find 'regions' section in {config_path}.")
+        return None
+
+    regions_match = _DIRECT_KEY_RE.match(
+        _line_body_and_ending(lines[regions_line_idx])[0]
+    )
+    if regions_match is None:  # pragma: no cover - guarded by _direct_key_line above
+        Log.w(f"Could not parse 'regions' section in {config_path}.")
+        return None
+    regions_indent = len(regions_match.group("indent"))
+    region_indent: int | None = None
+    region_lines: dict[str, int] = {}
+    regions_end = len(lines)
+
+    for index in range(regions_line_idx + 1, len(lines)):
+        body, _ = _line_body_and_ending(lines[index])
+        if not body.strip() or body.lstrip().startswith("#"):
+            continue
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None:
+            continue
+        indent = len(match.group("indent"))
+        if indent <= regions_indent:
+            regions_end = index
+            break
+        if region_indent is None:
+            region_indent = indent
+        if indent == region_indent:
+            key = _decoded_direct_key(match)
+            if key is not None:
+                region_lines[key] = index
+
+    start = region_lines.get(region_code)
+    if region_indent is None or start is None:
+        Log.w(f"Could not map region {region_code!r} in {config_path}.")
+        return None
+
+    end = regions_end
+    for index in region_lines.values():
+        if start < index < end:
+            end = index
+
+    child_indent = region_indent + 2
+    for index in range(start + 1, end):
+        body, _ = _line_body_and_ending(lines[index])
+        match = _DIRECT_KEY_RE.match(body)
+        if match is not None and len(match.group("indent")) > region_indent:
+            child_indent = len(match.group("indent"))
+            break
+    else:
+        # The target block has no children (scalar region). Deriving the child
+        # indent from the file's other regions keeps an expansion aligned with
+        # the file's convention instead of assuming `region_indent + 2`.
+        child_indent = _dominant_child_indent(
+            lines, regions_line_idx + 1, regions_end, region_indent
+        )
+
+    return start, end, region_indent, child_indent
+
+
+def _dominant_child_indent(
+    lines: list[str], start: int, end: int, region_indent: int
+) -> int:
+    """Pick the file's dominant region-child indent (ties -> deepest)."""
+    counts: dict[int, int] = {}
+    for index in range(start, end):
+        body, _ = _line_body_and_ending(lines[index])
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None:
+            continue
+        indent = len(match.group("indent"))
+        if indent > region_indent:
+            counts[indent] = counts.get(indent, 0) + 1
+    if not counts:
+        return region_indent + 2
+    return max(counts, key=lambda indent: (counts[indent], indent))
+
+
+def _inline_comment(line: str) -> str | None:
+    body, _ = _line_body_and_ending(line)
+    index = _comment_start(body)
+    return body[index:] if index is not None else None
+
+
+def _comment_line(line: str, indent: int) -> str | None:
+    comment = _inline_comment(line)
+    if comment is None:
+        return None
+    _, newline = _line_body_and_ending(line)
+    return " " * indent + comment + newline
+
+
+def _desired_region_values(
+    data: dict[str, Any], region_code: str, updates: dict[str, str]
+) -> dict[str, str] | None:
+    regions = data.get("regions")
+    if not isinstance(regions, dict) or region_code not in regions:
+        return None
+
+    region_data = regions[region_code]
+    if isinstance(region_data, str):
+        product_base = data["product_base"]
+    elif isinstance(region_data, dict):
+        product_base = region_data.get("product_base", data["product_base"])
+    else:
+        return None
+
+    desired: dict[str, str] = {}
+    if product_base != data["product_base"]:
+        desired["product_base"] = str(product_base)
+    if updates["android_version"] != data["android_version"]:
+        desired["android_version"] = updates["android_version"]
+
+    try:
+        canonical_build_tag = resolve_build_tag(updates["android_version"])
+    except ValueError:
+        canonical_build_tag = None
+    if canonical_build_tag is None or updates["build_tag"] != canonical_build_tag:
+        desired["build_tag"] = updates["build_tag"]
+    desired["incremental"] = updates["incremental"]
+    return {
+        key: desired[key]
+        for key in ("product_base", "android_version", "build_tag", "incremental")
+        if key in desired
+    }
+
+
+def _rewrite_region_mapping(
+    block: list[str],
+    child_indent: int,
+    desired: dict[str, str],
+    newline: str,
+) -> list[str]:
+    """Update an expanded region while retaining surrounding comments/blanks."""
+    had_final_newline = bool(_line_body_and_ending(block[-1])[1])
+    present: set[str] = set()
+    rewritten: list[str] = [block[0]]
+    for line in block[1:]:
+        body, _ = _line_body_and_ending(line)
+        match = _DIRECT_KEY_RE.match(body)
+        if match is None or len(match.group("indent")) != child_indent:
+            rewritten.append(line)
+            continue
+
+        key = _decoded_direct_key(match)
+        if key is not None and key in desired:
+            rewritten.append(_rewrite_yaml_line(line, key, desired[key]))
+            present.add(key)
+            continue
+
+        comment_line = _comment_line(line, child_indent)
+        if comment_line is not None:
+            rewritten.append(comment_line)
+
+    missing = [key for key in desired if key not in present]
+    if missing:
+        insert_at = 1
+        inserted = [
+            " " * child_indent
+            + f"{key}: {_quote_yaml_string(desired[key])}{newline}"
+            for key in missing
+        ]
+        rewritten[insert_at:insert_at] = inserted
+    if not had_final_newline:
+        final_body, _ = _line_body_and_ending(rewritten[-1])
+        rewritten[-1] = final_body
+    return rewritten
+
+
+def _collapse_region_mapping(
+    block: list[str], region_code: str, region_indent: int, incremental: str
+) -> list[str]:
+    """Collapse an expanded region to scalar incremental form.
+
+    The child keys disappear, so any comment that annotated them would be left
+    dangling at an indentation level that no longer exists. Retained comments
+    are re-indented to the region key and hoisted above it, where they still
+    read as notes about this region; blank lines stay below as separators.
+    """
+    had_final_newline = bool(_line_body_and_ending(block[-1])[1])
+    region_line = block[0]
+    body, line_ending = _line_body_and_ending(region_line)
+    comment = _inline_comment(region_line)
+    match = _DIRECT_KEY_RE.match(body)
+    if match is None:  # pragma: no cover - mapped by _region_block_span
+        return block
+    scalar_line = _rewrite_yaml_line(
+        f"{body[: match.end()]} {line_ending}", region_code, incremental
+    )
+    scalar_body, _ = _line_body_and_ending(scalar_line)
+    if comment is not None:
+        scalar_body = f"{scalar_body.rstrip()} {comment}"
+    scalar_line = scalar_body + line_ending
+
+    following_region_prefix = len(block)
+    saw_following_comment = False
+    for index in range(len(block) - 1, 0, -1):
+        body, _ = _line_body_and_ending(block[index])
+        stripped = body.lstrip(" \t")
+        if not stripped:
+            following_region_prefix = index
+            continue
+        if stripped.startswith("#") and len(body) - len(stripped) <= region_indent:
+            following_region_prefix = index
+            saw_following_comment = True
+            continue
+        break
+    if not saw_following_comment:
+        following_region_prefix = len(block)
+
+    comments: list[str] = []
+    trailing: list[str] = []
+    for line in block[1:following_region_prefix]:
+        body, _ = _line_body_and_ending(line)
+        if not body.strip():
+            trailing.append(line)
+            continue
+        comment_line = _comment_line(line, region_indent)
+        if comment_line is not None:
+            comment_body, comment_ending = _line_body_and_ending(comment_line)
+            comments.append(
+                comment_line if comment_ending else comment_body + line_ending
+            )
+
+    collapsed = [
+        *comments,
+        scalar_line,
+        *trailing,
+        *block[following_region_prefix:],
+    ]
+    if not had_final_newline:
+        final_body, _ = _line_body_and_ending(collapsed[-1])
+        collapsed[-1] = final_body
+    return collapsed
+
+
+def _rewrite_compact_region(
     lines: list[str],
-    variants_count: int,
-    variant_index: int,
+    data: dict[str, Any],
+    region_code: str,
     updates: dict[str, str],
     newline: str,
     config_path: Path,
 ) -> bool:
-    """Rewrite (or insert) the target keys inside one variants-list entry."""
-    variants_line_idx = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if _direct_key_line(line, "variants", indent=0)
-        ),
-        None,
-    )
-    if variants_line_idx is None:
-        Log.w(f"Could not find variants section in {config_path}.")
+    """Rewrite one compact region without reserializing unrelated YAML."""
+    span = _region_block_span(lines, region_code, config_path)
+    desired = _desired_region_values(data, region_code, updates)
+    if span is None or desired is None:
         return False
 
-    variants_indent = len(lines[variants_line_idx]) - len(
-        lines[variants_line_idx].lstrip(" ")
-    )
-
-    sequence_indent: int | None = None
-    variant_lines: list[int] = []
-    variants_end_idx = len(lines)
-    for i in range(variants_line_idx + 1, len(lines)):
-        line = lines[i]
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(" "))
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        item_indent = _sequence_item_indent(line)
-        if sequence_indent is None:
-            if item_indent is not None and item_indent >= variants_indent:
-                sequence_indent = item_indent
-                variant_lines.append(i)
-                continue
-            if indent <= variants_indent:
-                variants_end_idx = i
-                break
-            continue
-
-        if item_indent == sequence_indent:
-            variant_lines.append(i)
-            continue
-        if indent <= variants_indent:
-            variants_end_idx = i
-            break
-
-    if sequence_indent is None or len(variant_lines) != variants_count:
-        Log.w(f"Failed to map variant blocks in {config_path}.")
-        return False
-
-    mapping_indent = _variant_mapping_indent(
-        lines, variant_lines, variant_index, variants_end_idx, sequence_indent
-    )
-    if mapping_indent is None:
-        Log.w(
-            f"Failed to locate variant block #{variant_index + 1} in {config_path}."
-        )
-        return False
-
-    variant_line_idx = variant_lines[variant_index]
-    variant_end_idx = (
-        variant_lines[variant_index + 1]
-        if variant_index + 1 < len(variant_lines)
-        else variants_end_idx
-    )
-
-    key_lines: dict[str, int] = {}
-    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
-    for key in ("android_version", "build_tag", "incremental"):
-        marker_match = _SEQUENCE_KEY_RE.match(marker_body)
-        if marker_match is not None and marker_match.group("key") == key:
-            key_lines[key] = variant_line_idx
-            continue
-        line_idx = next(
-            (
-                i
-                for i in range(variant_line_idx + 1, variant_end_idx)
-                if _direct_key_line(lines[i], key, indent=mapping_indent)
-            ),
-            None,
-        )
-        if line_idx is not None:
-            key_lines[key] = line_idx
-
-    for key, line_idx in key_lines.items():
-        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
-
-    insert_idx = variant_line_idx + 1
-    for key in ("android_version", "build_tag", "incremental"):
-        if key not in key_lines:
-            lines.insert(
-                insert_idx,
-                " " * mapping_indent + f"{key}: {_quote_yaml_string(updates[key])}{newline}",
+    start, end, region_indent, child_indent = span
+    block = lines[start:end]
+    region_data = data["regions"][region_code]
+    if isinstance(region_data, str):
+        if tuple(desired) == ("incremental",):
+            lines[start] = _rewrite_yaml_line(
+                block[0], region_code, desired["incremental"]
             )
-            insert_idx += 1
+            return True
+
+        body, line_ending = _line_body_and_ending(block[0])
+        comment = _inline_comment(block[0])
+        region_match = _DIRECT_KEY_RE.match(body)
+        if region_match is None:
+            Log.w(f"Could not parse region {region_code!r} in {config_path}.")
+            return False
+        region_line = body[: region_match.end()].rstrip()
+        if comment:
+            region_line += f" {comment}"
+        region_line += line_ending or newline
+        inserted = [
+            " " * child_indent
+            + f"{key}: {_quote_yaml_string(desired[key])}{newline}"
+            for key in desired
+        ]
+        if line_ending == "":
+            inserted[-1] = inserted[-1][:-len(newline)]
+        lines[start:end] = [region_line, *inserted, *block[1:]]
+        return True
+
+    if tuple(desired) == ("incremental",):
+        lines[start:end] = _collapse_region_mapping(
+            block, region_code, region_indent, desired["incremental"]
+        )
+    else:
+        lines[start:end] = _rewrite_region_mapping(
+            block, child_indent, desired, newline
+        )
     return True
 
 
-def _variant_mapping_indent(
-    lines: list[str],
-    variant_lines: list[int],
-    variant_index: int,
-    variants_end_idx: int,
-    sequence_indent: int,
-) -> int | None:
-    """Find the indentation of the key mappings inside one variant block."""
-    variant_line_idx = variant_lines[variant_index]
-    variant_end_idx = (
-        variant_lines[variant_index + 1]
-        if variant_index + 1 < len(variant_lines)
-        else variants_end_idx
-    )
-    marker_body, _ = _line_body_and_ending(lines[variant_line_idx])
-    marker_key_match = _SEQUENCE_KEY_RE.match(marker_body)
-    if marker_key_match is not None:
-        return marker_key_match.start("key")
-    return next(
+def _converge_android_default(
+    lines: list[str], config_path: Path, newline: str
+) -> bool:
+    """Promote one Android version only after all regions converge on it."""
+    try:
+        projected = _load_yaml("".join(lines))
+        configs = Config._from_compact_data(projected, config_path)
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not resolve rewritten config {config_path}: {exc}")
+        return False
+
+    versions = {config.android_version for config in configs}
+    if len(versions) != 1:
+        return True
+    converged_version = next(iter(versions))
+    if projected["android_version"] == converged_version:
+        return True
+
+    fingerprints_before = {
+        config.region: config.fingerprint()
+        for config in configs
+        if config.region is not None
+    }
+    if len(fingerprints_before) != len(configs):
+        Log.w(f"Could not uniquely identify all regions in {config_path}.")
+        return False
+
+    root_indent = _root_mapping_indent(lines)
+    version_line = next(
         (
-            len(match.group("indent"))
-            for line in lines[variant_line_idx + 1 : variant_end_idx]
-            if (match := _DIRECT_KEY_RE.match(_line_body_and_ending(line)[0]))
-            and len(match.group("indent")) > sequence_indent
+            index
+            for index, line in enumerate(lines)
+            if root_indent is not None
+            and _direct_key_line(line, "android_version", indent=root_indent)
         ),
         None,
     )
-
-
-def _rewrite_top_level_keys(
-    lines: list[str], updates: dict[str, str], config_path: Path
-) -> bool:
-    """Rewrite the target keys at the top level of a single-variant config."""
-    top_level_end = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if _direct_key_line(line, "variants", indent=0)
-        ),
-        len(lines),
+    if version_line is None:
+        Log.w(f"Could not find top-level android_version in {config_path}.")
+        return False
+    lines[version_line] = _rewrite_yaml_line(
+        lines[version_line], "android_version", converged_version
     )
-    for key in ("android_version", "build_tag", "incremental"):
-        line_idx = next(
-            (
-                i
-                for i, line in enumerate(lines[:top_level_end])
-                if _direct_key_line(line, key, indent=0)
-            ),
-            None,
-        )
-        if line_idx is None:
-            Log.w(f"Could not find {key} entry in {config_path}.")
+
+    projected["android_version"] = converged_version
+    for config in configs:
+        if config.region is None:
+            Log.w(f"Resolved region has no stable identity in {config_path}.")
             return False
-        lines[line_idx] = _rewrite_yaml_line(lines[line_idx], key, updates[key])
+        if not _rewrite_compact_region(
+            lines,
+            projected,
+            config.region,
+            _config_values(config),
+            newline,
+            config_path,
+        ):
+            return False
+
+    try:
+        normalized = Config._from_compact_data(
+            _load_yaml("".join(lines)), config_path
+        )
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+        Log.w(f"Could not resolve normalized config {config_path}: {exc}")
+        return False
+    fingerprints_after = {
+        config.region: config.fingerprint()
+        for config in normalized
+        if config.region is not None
+    }
+    if fingerprints_after != fingerprints_before:
+        Log.w(
+            "Android default promotion changed an effective region fingerprint in "
+            f"{config_path}."
+        )
+        return False
     return True
 
 
@@ -663,8 +1304,9 @@ def _write_updated_config(
     lines: list[str],
     raw_text: str,
     cfg: Config,
-    match_idx: int | None,
+    region_code: str | None,
     updates: dict[str, str],
+    before_by_region: dict[str, Config],
 ) -> bool:
     """Persist rewritten lines atomically after a round-trip verification."""
     new_text = "".join(lines)
@@ -688,7 +1330,14 @@ def _write_updated_config(
             prefix=f".{config_path.name}.", suffix=".tmp", dir=config_path.parent
         )
         tmp_path = Path(tmp_name)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8", newline="")
+        except BaseException:
+            # fdopen takes ownership only when it succeeds. Avoid leaking the
+            # mkstemp descriptor on setup failures, including cancellation.
+            os.close(fd)
+            raise
+        with handle:
             handle.write(new_text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -697,23 +1346,49 @@ def _write_updated_config(
         if not isinstance(reparse, dict):
             raise TypeError(f"Round-trip parse yielded {type(reparse).__name__}")
 
-        if isinstance(reparse.get("variants"), list):
-            reparsed_effective = _effective_variant_values(reparse, match_idx)
-        elif "variants" not in reparse and match_idx is None:
-            reparsed_effective = reparse
-        else:
-            reparsed_effective = None
-        if reparsed_effective is None or not _identity_matches(reparsed_effective, cfg):
+        reparsed_configs = Config._from_compact_data(reparse, config_path)
+        after_by_region = {
+            config.region: config
+            for config in reparsed_configs
+            if config.region is not None
+        }
+        if len(after_by_region) != len(reparsed_configs):
+            raise ValueError("Round-trip parse changed region identities")
+        if set(after_by_region) != set(before_by_region):
+            raise ValueError("Round-trip parse changed the region set")
+
+        for current_region, before in before_by_region.items():
+            after = after_by_region[current_region]
+            if (
+                after.oem,
+                after.product,
+                after.device,
+            ) != (before.oem, before.product, before.device):
+                raise ValueError(
+                    f"Round-trip parse changed immutable identity for region "
+                    f"{current_region!r}"
+                )
+
+        if region_code is None or region_code not in after_by_region:
+            raise ValueError("Round-trip parse lost the target region")
+        target = after_by_region[region_code]
+        if not _identity_matches(_config_values(target), cfg):
             raise ValueError("Round-trip parse changed the effective config identity")
         if not all(
-            key in reparsed_effective
-            and reparsed_effective[key] is not None
-            and str(reparsed_effective[key]) == str(value)
+            str(getattr(target, key)) == str(value)
             for key, value in updates.items()
         ):
             raise ValueError(
                 "Round-trip parse did not preserve target fingerprint values"
             )
+        for current_region, before in before_by_region.items():
+            if current_region != region_code:
+                after = after_by_region[current_region]
+                if after.fingerprint() != before.fingerprint():
+                    raise ValueError(
+                        f"Round-trip parse changed non-target region "
+                        f"{current_region!r}"
+                    )
 
         os.replace(tmp_path, config_path)
         tmp_path = None

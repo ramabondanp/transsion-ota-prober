@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6837-OP"
-device: "Infinix-X6837"
-android_version: "13"
-build_tag: "TP1A.220624.014"
-incremental: "251011V1613"
+product_base: "X6837"
 model: "Infinix HOT 40 Pro"
+android_version: "13"
+regions:
+  OP: "251011V1613"

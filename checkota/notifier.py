@@ -4,7 +4,7 @@ import argparse
 import html
 
 from checkota.logging import Log
-from checkota.models import VariantUpdate
+from checkota.models import RegionUpdate
 from checkota.runtime import RunContext
 from checkota.telegram import TgNotify
 
@@ -44,7 +44,7 @@ def is_sweep_mode(args: argparse.Namespace) -> bool:
     return getattr(args, "config_dir", None) is not None
 
 
-def build_notification_message(update: VariantUpdate) -> str:
+def build_notification_message(update: RegionUpdate) -> str:
     esc = html.escape  # quote=False keeps URLs unquoted
     region_line_raw = f" ({update.region_name})" if update.region_name else ""
     # os_line is built HTML (literal <b>OS:</b>); escape only the sdk content.

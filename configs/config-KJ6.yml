@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KJ6-OP"
-device: "TECNO-KJ6"
-android_version: "13"
-build_tag: "TP1A.220624.014"
-incremental: "250908V1836"
+product_base: "KJ6"
 model: "TECNO SPARK 20 Pro 4G"
+android_version: "13"
+regions:
+  OP: "250908V1836"

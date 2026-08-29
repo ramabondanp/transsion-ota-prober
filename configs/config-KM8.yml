@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KM8-IN"
-device: "TECNO-KM8"
-android_version: "15"
-build_tag: "AP3A.240905.015.A2"
-incremental: "180006"
+product_base: "KM8"
 model: "TECNO SPARK Go 5G"
+android_version: "15"
+regions:
+  IN: "180006"

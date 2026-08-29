@@ -31,7 +31,7 @@ ZIP_MEMBER_READ_TIMEOUT_SECONDS = 15.0
 TELEGRAM_API_TIMEOUT_SECONDS = 15
 TELEGRAPH_API_TIMEOUT_SECONDS = 10
 
-# CLI progress heartbeat interval while waiting on parallel variant workers.
+# CLI progress heartbeat interval while waiting on parallel region workers.
 HEARTBEAT_INTERVAL_SECONDS = 5
 
 # Wall-clock budget granted exclusively to the end-of-run notification drain,
@@ -54,6 +54,19 @@ REGION_CODE_MAP = {
     "TR": "Turkey - TR Market",
     "OPPJ": "Global - OPPJ Market",
     "COCL": "Columbia - COCL Market",
+}
+
+# Canonical Android build tags used when a compact config omits a tag.
+BUILD_TAG_BY_ANDROID = {
+    "13": "TP1A.220624.014",
+    "14": "UP1A.231005.007",
+    "15": "AP3A.240905.015.A2",
+    "16": "BP2A.250605.031.A3",
+}
+
+# Some OEMs use a device prefix whose casing differs from the OEM field.
+DEVICE_PREFIX_BY_OEM = {
+    "Itel": "itel",
 }
 
 SDK_TO_ANDROID = {

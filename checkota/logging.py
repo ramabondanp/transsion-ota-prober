@@ -1,6 +1,6 @@
 """Thread-safe-ish logging helpers with ANSI colors.
 
-Log.capture redirects output for the calling thread only, so parallel variant
+Log.capture redirects output for the calling thread only, so parallel region
 workers can buffer their output without interleaving with other threads.
 """
 
@@ -47,9 +47,9 @@ class Log:
             yield
         finally:
             if prev is None:
-                try:
+                # Thread-local state: no other thread can interleave between
+                # the check and the delete.
+                if hasattr(_thread_local, "stream"):
                     delattr(_thread_local, "stream")
-                except AttributeError:
-                    pass
             else:
                 _thread_local.stream = prev

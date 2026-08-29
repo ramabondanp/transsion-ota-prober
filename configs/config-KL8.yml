@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KL8-OP"
-device: "TECNO-KL8"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "260701V1726"
+product_base: "KL8"
 model: "TECNO SPARK 30 5G"
+android_version: "14"
+regions:
+  OP: "260701V1726"

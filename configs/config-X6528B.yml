@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6528B-OP"
-device: "Infinix-X6528B"
-android_version: "13"
-build_tag: "TP1A.220624.014"
-incremental: "250917V573"
+product_base: "X6528B"
 model: "Infinix HOT 40i (B)"
+android_version: "13"
+regions:
+  OP: "250917V573"

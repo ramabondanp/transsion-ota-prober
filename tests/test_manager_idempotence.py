@@ -6,8 +6,6 @@ from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
 
-import yaml
-
 from checkota.manager import Config, update_config_from_fingerprint
 
 FP = "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/201350016:user/release-keys"
@@ -19,12 +17,14 @@ def _write_config(tmp_path: Path) -> Path:
         dedent(
             """\
             oem: "Infinix"
-            product: "X6873-OP"
-            device: "Infinix-X6873"
-            android_version: "14"
-            build_tag: "B"
-            incremental: "I"
+            product_base: "X6873"
             model: "Infinix GT 30 Pro"
+            android_version: "14"
+            regions:
+              OP:
+                build_tag: "B"
+                incremental: "I"
+              IN: "OTHER"
             """
         ),
         encoding="utf-8",
@@ -62,11 +62,10 @@ def test_post_write_yaml_round_trip_parses(tmp_path):
     p = _write_config(tmp_path)
     cfg = _cfg(p)
     assert update_config_from_fingerprint(p, cfg, FP) is True
-    reparsed = yaml.safe_load(p.read_text(encoding="utf-8"))
-    assert isinstance(reparsed, dict)
-    assert reparsed["android_version"] == "16"
-    assert reparsed["build_tag"] == "BP2A.250605.031.A3"
-    assert reparsed["incremental"] == "201350016"
+    reparsed = Config.from_yaml(p)[0]
+    assert reparsed.android_version == "16"
+    assert reparsed.build_tag == "BP2A.250605.031.A3"
+    assert reparsed.incremental == "201350016"
 
 
 def test_atomic_replace_preserves_config_permissions(tmp_path):

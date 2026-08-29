@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "KL8H-OP"
-device: "TECNO-KL8H"
-android_version: "14"
-build_tag: "UP1A.231005.007"
-incremental: "241015V468"
+product_base: "KL8H"
 model: "TECNO SPARK 30C 5G"
+android_version: "14"
+regions:
+  OP: "241015V468"

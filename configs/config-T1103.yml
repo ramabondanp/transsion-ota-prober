@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "T1103-OP"
-device: "TECNO-T1103"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "301300019"
+product_base: "T1103"
 model: "TECNO MEGAPAD 2"
+android_version: "16"
+regions:
+  OP: "301300019"

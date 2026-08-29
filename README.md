@@ -212,6 +212,72 @@ With a wheel install, the documented `-d configs/` path selects the seeded XDG c
 directory when no `configs/` directory exists in the current working directory. Any
 explicit directory that already exists is used as given.
 
+## Config Format
+
+The runtime supports only the compact `regions` schema. Shared identity and defaults are
+stored once; product, device, and canonical build tags are derived at runtime:
+
+```yaml
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  OP: "201500011"
+  EU:
+    android_version: "15"
+    incremental: "131015"
+```
+
+Updates rewrite the file line by line to preserve comments, quoting, and newline style, so
+a config must stay expressible that way. Loading rejects anything the updater could not
+rewrite — flow-style collections (`regions: {OP: "1"}`, `OP: {incremental: "1"}`),
+multi-line scalars, literal/folded block scalars (`|`, `>`), and YAML anchors or aliases —
+rather than accepting a config that reads fine but can never be updated. Region codes are
+restricted to `[A-Z0-9-]` (uppercase, no leading hyphen) because the code is concatenated
+into `product` and from there into the check-in fingerprint.
+
+A check that finds no new build never touches the file. When an update does land and every
+region has converged on the same Android version, the top-level `android_version` default
+is promoted and the now-redundant per-region overrides are dropped; comments attached to
+removed keys are re-indented to the region key and kept above it.
+
+For example, this former `variants` representation is legacy input and is no longer
+accepted:
+
+```yaml
+oem: "Infinix"
+device: "Infinix-X6873"
+model: "Infinix GT 30 Pro"
+variants:
+  - variant: "Global"
+    product: "X6873-OP"
+    android_version: "16"
+    build_tag: "BP2A.250605.031.A3"
+    incremental: "201500011"
+  - variant: "Europe"
+    product: "X6873-EU"
+    android_version: "15"
+    build_tag: "AP3A.240905.015.A2"
+    incremental: "131015"
+```
+
+Its supported compact equivalent is the example above. Loading a config with `variants`
+reports that it `uses the legacy 'variants' schema; migrate it to a 'regions' mapping`.
+Legacy single-region files containing `product` or `device` are likewise rejected with
+instructions to migrate to `product_base` and `regions`.
+
+An existing wheel installation's XDG configs are not overwritten when new bundled defaults
+are installed, so XDG configs that still use `variants` require manual migration. From a
+repository checkout, run the migration tool against that config directory, for example:
+
+```bash
+python scripts/migrate_compact_configs.py --write ~/.config/checkota/configs
+```
+
+If `XDG_CONFIG_HOME` is set to an absolute path, use its `checkota/configs` directory
+instead. Back up locally customized configs before rewriting them.
+
 Telegram env vars:
 
 - `bot_token`, `chat_id` — required for Telegram notifications

@@ -1,6 +1,7 @@
 import contextlib
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
@@ -12,6 +13,11 @@ from checkota.logging import Log
 # Older entries are trimmed to prevent unbounded growth.
 MAX_PROCESSED_ENTRIES = 2000
 
+#: Per-title lock files older than this are pruned even when their title was
+#: never committed (e.g. a crashed run). Committed titles are pruned
+#: immediately regardless of age.
+TITLE_LOCK_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
 try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - non-POSIX fallback
@@ -21,6 +27,11 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
 def _title_lock_path(path: Path, title: str) -> Path:
     digest = sha256(title.encode("utf-8")).hexdigest()
     return path.with_name(f"{path.name}.{digest}.lock")
+
+
+def _database_lock_path(path: Path) -> Path:
+    """Return the stable lock inode used across processed-file replacements."""
+    return path.with_name(f"{path.name}.db.lock")
 
 
 def _open_locked(path: Path, mode: str) -> TextIO:
@@ -44,17 +55,24 @@ def _close_locked(handle: TextIO) -> None:
 
 @contextmanager
 def _locked_file(path: Path, mode: str = "a+"):
-    """Open a file and hold an advisory exclusive lock for its whole context.
+    """Open a file under a stable lock that survives atomic replacement.
 
-    On POSIX systems this serializes checkota processes that update the shared
-    processed-updates file. On platforms without fcntl it degrades to an
-    unlocked file handle.
+    The data file is replaced when the title history is trimmed, so locking
+    the data inode alone is insufficient: a second process can open the new
+    inode after os.replace() and bypass the first lock. The separate database
+    lock inode remains stable across replacements and is held for the entire
+    read/append/trim transaction. On platforms without fcntl this degrades to
+    unlocked file handles.
     """
-    handle = _open_locked(path, mode)
+    database_lock = _open_locked(_database_lock_path(path), "a+")
     try:
-        yield handle
+        handle = _open_locked(path, mode)
+        try:
+            yield handle
+        finally:
+            _close_locked(handle)
     finally:
-        _close_locked(handle)
+        _close_locked(database_lock)
 
 
 def _read_titles(handle: TextIO) -> tuple[list[str], set[str]]:
@@ -80,8 +98,9 @@ def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
     Truncating the locked handle in place is not crash-safe: a power loss
     mid-truncate loses the whole dedup history and causes duplicate
     notifications. A temp-file swap keeps either the old or the new content,
-    never nothing. The lock held on the old inode stays effective for this
-    critical section because the swap happens last.
+    never nothing. The stable database lock remains held across the swap, so
+    another process cannot read or replace the path until the new inode is
+    fully published.
     """
     path = Path(name)
     fd, tmp_name = tempfile.mkstemp(
@@ -101,10 +120,82 @@ def _rewrite_trimmed(name: str, trimmed: list[str]) -> None:
         raise
 
 
-def load_processed_titles(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
+def _title_lock_digest(path_name: str, file_name: str) -> str | None:
+    """Return the title digest if file_name is a per-title lock of path_name."""
+    prefix = f"{path_name}."
+    if not (file_name.startswith(prefix) and file_name.endswith(".lock")):
+        return None
+    digest = file_name[len(prefix) : -len(".lock")]
+    if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+        return digest
+    return None
+
+
+def prune_title_locks(
+    path: Path, known_titles: set[str] | None = None, *, now: float | None = None
+) -> int:
+    """Best-effort removal of stale per-title lock files.
+
+    Every claimed title creates a ``<path>.<sha256(title)>.lock`` file that
+    would otherwise accumulate forever. A lock is removed when its title is
+    already committed (present in ``known_titles``) or when the file is older
+    than TITLE_LOCK_MAX_AGE_SECONDS, and only when no process currently holds
+    it (LOCK_EX|LOCK_NB probe), so a live claim is never disturbed.
+
+    Residual race (documented, accepted): a process that opened the lock file
+    just before the unlink proceeds on an unlinked inode. For committed titles
+    the claim path re-checks the processed file under the database lock and
+    harmlessly declines; for aged-out titles the worst case is a duplicate
+    notification, which the claim/commit protocol already tolerates.
+    """
+    if _fcntl is None:
+        return 0
+    committed = (
+        {sha256(title.encode("utf-8")).hexdigest() for title in known_titles}
+        if known_titles
+        else set()
+    )
+    now = time.time() if now is None else now
+    removed = 0
     try:
+        candidates = list(path.parent.iterdir())
+    except OSError:
+        return 0
+    for entry in candidates:
+        digest = _title_lock_digest(path.name, entry.name)
+        if digest is None:
+            continue
+        if digest not in committed:
+            try:
+                age = now - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age < TITLE_LOCK_MAX_AGE_SECONDS:
+                continue
+        try:
+            handle = entry.open("a+", encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            try:
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                continue  # another process holds this claim; never prune it
+            with contextlib.suppress(OSError):
+                entry.unlink()
+                removed += 1
+        finally:
+            _close_locked(handle)
+    if removed:
+        Log.i(f"Pruned {removed} stale update-title lock file(s).")
+    return removed
+
+
+def load_processed_titles(path: Path) -> set[str]:
+    try:
+        # Acquire the stable lock before checking/opening the data file so a
+        # concurrent first writer or trim cannot change the path between the
+        # existence check and the read.
         with _locked_file(path, "r") as handle:
             return {line.strip() for line in handle if line.strip()}
     except FileNotFoundError:

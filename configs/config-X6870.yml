@@ -1,16 +1,7 @@
 oem: "Infinix"
-device: "Infinix-X6870"
+product_base: "X6870"
 model: "Infinix NOTE 50s 5G"
-
-variants:
-  - variant: "Global"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    product: "X6870-OP"
-    incremental: "201500023"
-
-  - variant: "India"
-    product: "X6870-IN"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    incremental: "201500023"
+android_version: "16"
+regions:
+  OP: "201500023"
+  IN: "201500023"

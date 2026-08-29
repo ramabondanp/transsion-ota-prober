@@ -1,7 +1,6 @@
 oem: "Infinix"
-product: "X6887-OP"
-device: "Infinix-X6887"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "201500026"
+product_base: "X6887"
 model: "Infinix NOTE Edge"
+android_version: "16"
+regions:
+  OP: "201500026"

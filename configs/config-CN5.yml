@@ -1,7 +1,6 @@
 oem: "TECNO"
-product: "CN5-OP"
-device: "TECNO-CN5"
-android_version: "16"
-build_tag: "BP2A.250605.031.A3"
-incremental: "201500021"
+product_base: "CN5"
 model: "TECNO CAMON 50 4G"
+android_version: "16"
+regions:
+  OP: "201500021"
