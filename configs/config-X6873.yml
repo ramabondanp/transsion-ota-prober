@@ -3,7 +3,7 @@ product_base: "X6873"
 model: "Infinix GT 30 Pro"
 android_version: "16"
 regions:
-  OP: "201500011"
+  OP: "301500018"
   IN: "201500011"
   RU: "201500011"
   TR: "201500011"

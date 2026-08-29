@@ -3,6 +3,6 @@ product_base: "X6876"
 model: "Infinix GT 30"
 android_version: "16"
 regions:
-  OP: "201500013"
+  OP: "301500015"
   IN: "201500013"
   RU: "201500013"

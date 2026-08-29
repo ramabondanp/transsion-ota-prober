@@ -3,4 +3,4 @@ product_base: "X6887"
 model: "Infinix NOTE Edge"
 android_version: "16"
 regions:
-  OP: "201500026"
+  OP: "301400022"

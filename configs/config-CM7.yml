@@ -3,7 +3,7 @@ product_base: "CM7"
 model: "TECNO CAMON 40 Pro 5G"
 android_version: "16"
 regions:
-  OP: "201500011"
+  OP: "301400016"
   TR:
     android_version: "15"
     incremental: "165004"

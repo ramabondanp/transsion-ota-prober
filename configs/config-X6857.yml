@@ -3,7 +3,7 @@ product_base: "X6857"
 model: "Infinix NOTE 50X 5G"
 android_version: "16"
 regions:
-  OP: "201500013"
+  OP: "301500013"
   IN:
     product_base: "X6857B"
-    incremental: "201500018"
+    incremental: "301500013"

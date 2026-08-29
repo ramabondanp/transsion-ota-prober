@@ -1,10 +1,8 @@
 oem: "Infinix"
 product_base: "X6852"
 model: "Infinix NOTE 40 5G"
-android_version: "15"
+android_version: "16"
 regions:
-  OP:
-    android_version: "16"
-    incremental: "301300004"
-  IN: "170032"
-  EU: "170031"
+  OP: "301300004"
+  IN: "301300004"
+  EU: "301300004"

@@ -3,5 +3,5 @@ product_base: "X6870"
 model: "Infinix NOTE 50s 5G"
 android_version: "16"
 regions:
-  OP: "201500023"
+  OP: "301500017"
   IN: "201500023"
