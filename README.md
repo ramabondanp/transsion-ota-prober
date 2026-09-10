@@ -16,6 +16,7 @@ sends Telegram notifications.
 ## CAMON SERIES
 
 - TECNO CAMON 30 4G (CL6)
+- TECNO CAMON 30 4G (k) (CL6k)
 - TECNO CAMON 30 5G (CL7)
 - TECNO CAMON 30 Pro 5G (CL8)
 - TECNO CAMON 30 Premier 5G (CL9)
@@ -290,7 +291,8 @@ The geo-proxy batch tools (`scripts/fetch_spys.py`, `scripts/check_update_proxy.
 developed in a separate git branch (`scripts`) against the same repository. They are not
 part of the `master` tree; check out that branch (or the nested repo) to use them.
 The scripts load a paid proxy template from `scripts/.env`, which is git-ignored and must
-not be committed.
+not be committed. Keep that file mode `0600` (`chmod 600 scripts/.env`) because it contains
+live proxy credentials.
 
 ## Credits
 
@@ -306,3 +308,14 @@ A trimmed, pinned copy lives in `vendor/google-ota-prober/`:
 Only the compiled protobuf modules (`checkin/`), the `.proto` sources, and
 `utils/functions.py` are vendored — `checkota` does not use `probe.py`, `gui.py`,
 or the original `config.yml` format.
+
+## License and third-party notices
+
+The original code in this repository currently carries no public redistribution
+grant; see `LICENSE`. The vendored google-ota-prober copy is documented in
+`NOTICE` and `vendor/google-ota-prober/ATTRIBUTION`. Public wheel publication
+remains gated on confirming the upstream terms for that vendored copy.
+
+The repository ships a GitHub Actions workflow (`.github/workflows/ci.yml`) that
+runs Ruff, Pyright, and pytest across supported Python versions. Operational
+script parsing helpers are covered by `tests/test_scripts.py`.

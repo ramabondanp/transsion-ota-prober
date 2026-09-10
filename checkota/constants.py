@@ -41,8 +41,17 @@ HEARTBEAT_INTERVAL_SECONDS = 5
 DRAIN_WATCHDOG_SECONDS = 300.0
 
 # Upper bound on sends performed by the watchdog thread's emergency drain when
-# the run budget expires mid-sweep.
+# the run budget expires mid-sweep. The deadline is enforced between sends so a
+# blocked Telegram request can overrun it by at most one API timeout.
 EMERGENCY_DRAIN_MAX_SENDS = 30
+EMERGENCY_DRAIN_DEADLINE_SECONDS = 30.0
+
+# Untrusted check-in / ZIP-metadata field caps.
+MAX_OTA_URL_LENGTH = 8192
+MAX_UPDATE_TITLE_LENGTH = 512
+MAX_UPDATE_SIZE_LENGTH = 64
+MAX_METADATA_VALUE_LENGTH = 512
+MAX_FINGERPRINT_LENGTH = 1024
 
 REGION_CODE_MAP = {
     "GL": "Global - GL Market",

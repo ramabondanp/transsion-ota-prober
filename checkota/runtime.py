@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +17,10 @@ from typing import TextIO
 import requests
 from requests.adapters import HTTPAdapter
 
-from checkota.constants import EMERGENCY_DRAIN_MAX_SENDS
+from checkota.constants import (
+    EMERGENCY_DRAIN_DEADLINE_SECONDS,
+    EMERGENCY_DRAIN_MAX_SENDS,
+)
 from checkota.fingerprints import load_processed_titles, prune_title_locks
 from checkota.logging import Log
 from checkota.models import PendingNotification
@@ -229,7 +233,12 @@ def _emergency_drain_notifications(ctx: RunContext) -> None:
     Workers only BUFFER notifications during a sweep; the drain is the sole
     sender, so running it here cannot double-send. Skips silently when main()
     is already draining (its own budget covers those notifications), and caps
-    the number of sends so a huge buffer cannot extend teardown indefinitely.
+    both the number of sends and the wall-clock time so teardown cannot hang
+    behind a slow Telegram API.
+
+    Unlike main()'s drain, this path does NOT clear ``stop_event``: workers may
+    still be running (the watchdog fires asynchronously), and clearing the
+    shared event would let them resume side effects after the shutdown request.
     Titles for unsent notifications are never committed, so whatever this does
     not get to is retried naturally by the next run.
     """
@@ -245,17 +254,15 @@ def _emergency_drain_notifications(ctx: RunContext) -> None:
     if not ctx.drain_lock.acquire(blocking=False):
         return  # main() owns the drain right now
     try:
-        # drain_pending_notifications refuses to run while stop_event is set;
-        # workers have already been signalled (or are stuck in socket reads
-        # that ignore it), so clearing it here only lets the drain proceed.
-        ctx.stop_event.clear()
         drain_pending_notifications(
             ctx,
             ctx.cli_args,
             max_sends=EMERGENCY_DRAIN_MAX_SENDS,
+            delay=0.0,
+            ignore_stop_event=True,
+            deadline=time.monotonic() + EMERGENCY_DRAIN_DEADLINE_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 -- teardown path
         Log.w(f"Emergency notification drain failed: {exc}")
     finally:
-        ctx.stop_event.set()
         ctx.drain_lock.release()

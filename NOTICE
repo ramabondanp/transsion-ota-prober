@@ -1,0 +1,17 @@
+checkota includes a trimmed, vendored copy of google-ota-prober:
+
+    https://github.com/tangalbert919/google-ota-prober
+    Pinned commit: 91d990f14d0bca69954fff97c188b1d00cca0d44
+
+Vendored scope:
+    checkin/*_pb2.py
+    proto/*.proto
+    utils/functions.py
+
+The pinned upstream commit ships no standalone LICENSE file. The upstream
+license terms must be obtained from the upstream repository and confirmed
+before redistributing this repository, any wheel, or any other artifact that
+contains the vendored files. See vendor/google-ota-prober/ATTRIBUTION for the
+scope and source details.
+
+Original checkota code: see LICENSE.

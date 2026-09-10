@@ -286,6 +286,14 @@ expands, inserted child keys follow the file's dominant region-child indent
 | No-op check rewrote the file via convergence | `manager.py` | Early return when target values already match: `_converge_android_default` no longer runs on a check that found nothing new |
 | Collapse orphaned comments at a dead indent | `manager.py` | `_collapse_region_mapping()` re-indents retained comments to the region key and hoists them above it |
 | Region code accepted spaces/`#`/`.`/non-ASCII | `manager.py` | `_REGION_CODE_RE` (`[A-Z0-9][A-Z0-9-]*`); the code is structural — it builds `product` and thus the fingerprint |
+| Watchdog emergency drain could run ~740s past `--timeout` | `runtime.py`, `processor.py` | Emergency drain uses `delay=0`, a 30s deadline, and `max_sends=30`; it also no longer clears `stop_event` while workers may still run |
+| Interrupt race let valid metadata proceed into config/notify | `processor.py` | Stop checks after metadata fetch and before actions; valid metadata is not cached once stop is requested |
+| Untrusted check-in values unbounded | `update_checker.py`, `metadata.py` | Title (512), size (64), URL (8192), fingerprint (1024), and metadata values (512) are capped; C0/C1 controls rejected |
+| Terminal/log output accepted control bytes | `logging.py`, `description.py` | `sanitize_log_text()` and `_sanitize_terminal_text()` neutralize C0/C1 and ANSI CSI; `TerminalParser` decodes entities exactly once |
+| Telegram sanitizer left list/paragraph tags as literal text | `message_text.py` | `<ul>/<ol>/<li>/<p>/<div>/<h1-6>` are normalized; `<strong>` maps to Telegram `<b>` |
+| Partial fallback config seeding was permanent | `paths.py` | `_publish_if_missing()` unlinks an O_EXCL destination if the fallback copy fails |
+| Closed claim handle raised `ValueError` during cleanup | `fingerprints.py` | `release_processed_claim()` checks `claim.closed` and catches `ValueError` |
+| Script timeout flags accepted `nan`/`inf` | `scripts/fetch_spys.py`, `scripts/check_update_proxy.py` | `_positive_float()` requires a finite value |
 
 ## Running
 

@@ -145,6 +145,62 @@ def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
     assert list(destination.parent.glob("*.tmp")) == []
 
 
+def test_publish_removes_partial_exclusive_destination_on_failure(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "config-X6873.yml"
+    source.write_bytes(b"x" * 100)
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    calls = {"n": 0}
+    original_copy = paths.shutil.copyfileobj
+
+    def link_without_hardlink_support(src, dst):
+        raise OSError(errno.EOPNOTSUPP, "operation not supported")
+
+    def fail_second_copy(input_file, output_file):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            output_file.write(b"partial")
+            output_file.flush()
+            raise OSError("simulated destination write failure")
+        return original_copy(input_file, output_file)
+
+    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
+    monkeypatch.setattr(paths.shutil, "copyfileobj", fail_second_copy)
+
+    with pytest.raises(OSError):
+        paths._publish_if_missing(source, destination, 0o644)
+    assert not destination.exists()
+
+
+def test_publish_does_not_remove_replaced_destination_on_failure(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "config-X6873.yml"
+    source.write_bytes(b"x" * 100)
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    calls = {"n": 0}
+    original_copy = paths.shutil.copyfileobj
+
+    def link_without_hardlink_support(src, dst):
+        raise OSError(errno.EOPNOTSUPP, "operation not supported")
+
+    def replace_then_fail(input_file, output_file):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            destination.unlink()
+            destination.write_bytes(b"user-file")
+            raise OSError("simulated destination write failure")
+        return original_copy(input_file, output_file)
+
+    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
+    monkeypatch.setattr(paths.shutil, "copyfileobj", replace_then_fail)
+
+    with pytest.raises(OSError):
+        paths._publish_if_missing(source, destination, 0o644)
+    assert destination.read_bytes() == b"user-file"
+
+
 def test_publish_still_skips_existing_destination_when_link_fails(
     monkeypatch, tmp_path
 ):

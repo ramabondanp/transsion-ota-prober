@@ -15,6 +15,7 @@ from yaml.nodes import MappingNode
 from checkota.constants import (
     BUILD_TAG_BY_ANDROID,
     DEVICE_PREFIX_BY_OEM,
+    MAX_FINGERPRINT_LENGTH,
     REGION_CODE_MAP,
 )
 from checkota.logging import Log
@@ -84,7 +85,7 @@ _COMPACT_REGION_KEYS = frozenset(
 _LEGACY_SINGLE_REGION_KEYS = frozenset(
     {"product", "device", "build_tag", "incremental"}
 )
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # Region codes become part of `product` (`{product_base}-{REGION}`) and thus of
 # the check-in fingerprint, so they are restricted to the uppercase
 # alphanumeric/hyphen vocabulary the convention actually uses (e.g. "OP-M1").
@@ -577,7 +578,10 @@ def _validate_compact_source_layout(source: str, file: Path) -> None:
 
 
 def parse_fingerprint(fingerprint: str) -> dict[str, str] | None:
-    match = _FINGERPRINT_RE.match((fingerprint or "").strip())
+    value = (fingerprint or "").strip()
+    if len(value) > MAX_FINGERPRINT_LENGTH:
+        return None
+    match = _FINGERPRINT_RE.match(value)
     return match.groupdict() if match else None
 
 

@@ -258,7 +258,37 @@ def sanitize_html(value: str) -> str | None:
         r"<\s*br\s*/?\s*>[^\S\n]*\n?", "\n", sanitized, flags=re.IGNORECASE
     )
 
-    # --- Step 3: Strip unsupported HTML tags ---
+    # --- Step 3: Normalize or strip unsupported HTML tags ---
+    # Structural block tags carry formatting meaning but are not valid in
+    # Telegram HTML. Convert headers to bold and everything else to line
+    # boundaries so list/paragraph descriptions read naturally instead of
+    # showing literal escaped markup.
+    sanitized = re.sub(
+        r"<\s*h[1-6]\b[^>]*>", "\n<b>", sanitized, flags=re.IGNORECASE
+    )
+    sanitized = re.sub(
+        r"</\s*h[1-6]\s*>", "</b>\n", sanitized, flags=re.IGNORECASE
+    )
+    sanitized = re.sub(
+        r"<\s*/?\s*(?:p|div|section|article|header|footer|tr)\b[^>]*>",
+        "\n",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        r"<\s*/?\s*(?:ul|ol)\b[^>]*>", "\n", sanitized, flags=re.IGNORECASE
+    )
+    sanitized = re.sub(r"<\s*li\b[^>]*>", "\n- ", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"</\s*li\s*>", "\n", sanitized, flags=re.IGNORECASE)
+    # <strong> and <em> are common semantic aliases; map strong to Telegram
+    # bold. Drop em entirely so it does not survive as literal markup.
+    sanitized = re.sub(
+        r"<\s*strong\b[^>]*>", "<b>", sanitized, flags=re.IGNORECASE
+    )
+    sanitized = re.sub(
+        r"</\s*strong\s*>", "</b>", sanitized, flags=re.IGNORECASE
+    )
+    sanitized = re.sub(r"</?\s*em\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<\s*/?\s*small\s*>", "", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<\s*font\b[^>]*>", "", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"</\s*font\s*>", "", sanitized, flags=re.IGNORECASE)

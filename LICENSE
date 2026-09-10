@@ -1,0 +1,20 @@
+Copyright (c) 2025 The checkota authors
+
+All rights reserved.
+
+This repository and its original source code are made available for
+evaluation and personal use only. No license, express or implied, is granted
+to copy, modify, merge, publish, distribute, sublicense, or sell any part of
+this repository or of any artifact built from it.
+
+Public wheel publication and any redistribution that includes third-party
+components are additionally gated on confirming the upstream terms described
+in NOTICE. See NOTICE for vendored-component attribution and licensing status.
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

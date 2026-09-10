@@ -5,6 +5,7 @@ wheel has no writable repository beside the package, so it uses per-user XDG
 directories and copies packaged defaults there on first use.
 """
 
+import contextlib
 import errno
 import os
 import shutil
@@ -124,15 +125,41 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
                 )
             except FileExistsError:
                 return False
+            destination_identity: tuple[int, int] | None = None
             try:
-                with (
-                    os.fdopen(destination_fd, "wb") as output_file,
-                    temporary.open("rb") as input_file,
-                ):
-                    destination_fd = -1
-                    shutil.copyfileobj(input_file, output_file)
-                    output_file.flush()
-                    os.fsync(output_file.fileno())
+                stat_result = os.fstat(destination_fd)
+                destination_identity = (stat_result.st_dev, stat_result.st_ino)
+            except OSError:
+                destination_identity = None
+            try:
+                try:
+                    with (
+                        os.fdopen(destination_fd, "wb") as output_file,
+                        temporary.open("rb") as input_file,
+                    ):
+                        destination_fd = -1
+                        shutil.copyfileobj(input_file, output_file)
+                        output_file.flush()
+                        os.fsync(output_file.fileno())
+                except BaseException:
+                    # A partial O_EXCL destination would otherwise be treated
+                    # as a user file forever and never replaced by seeding.
+                    # Only remove the inode we created: a concurrent process
+                    # may have replaced the path after our O_EXCL open.
+                    remove = destination_identity is None
+                    if destination_identity is not None:
+                        try:
+                            current = destination.stat()
+                            remove = (
+                                current.st_dev,
+                                current.st_ino,
+                            ) == destination_identity
+                        except OSError:
+                            remove = False
+                    if remove:
+                        with contextlib.suppress(OSError):
+                            destination.unlink(missing_ok=True)
+                    raise
             finally:
                 if destination_fd != -1:
                     os.close(destination_fd)

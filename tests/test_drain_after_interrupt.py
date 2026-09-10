@@ -323,8 +323,16 @@ def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
 
     drained = []
 
-    def _fake_drain(ctx, args, *, max_sends=None):
-        drained.append((ctx, args, max_sends))
+    def _fake_drain(
+        ctx,
+        args,
+        *,
+        max_sends=None,
+        delay=None,
+        ignore_stop_event=False,
+        deadline=None,
+    ):
+        drained.append((ctx, args, max_sends, delay, ignore_stop_event, deadline))
 
     monkeypatch.setattr(runtime.threading, "Timer", _Timer)
     monkeypatch.setattr(runtime.os, "_exit", lambda code: calls.append(("exit", code)))
@@ -347,13 +355,15 @@ def test_watchdog_emergency_drains_before_hard_exit(monkeypatch):
     assert len(drained) == 1
     assert drained[0][0] is ctx
     assert drained[0][2] == EMERGENCY_DRAIN_MAX_SENDS
-    # Emergency drain runs between the stdio flushes; stop_event is re-armed
-    # afterwards so the process still exits via the same hard-exit path.
+    assert drained[0][3] == 0.0
+    assert drained[0][4] is True
+    assert drained[0][5] is not None
+    # Emergency drain runs between the stdio flushes. It does not clear or
+    # re-set stop_event because workers may still be running.
     assert calls == [
         "event_set",
         "flush_stdout",
         "flush_stderr",
-        "event_set",
         "flush_stdout",
         "flush_stderr",
         ("exit", 124),

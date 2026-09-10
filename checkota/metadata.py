@@ -5,14 +5,16 @@ import time
 import requests
 
 from checkota.constants import (
+    MAX_METADATA_VALUE_LENGTH,
     RETRY_BACKOFF_MULTIPLIER,
     RETRY_BASE_DELAY_SECONDS,
     SDK_TO_ANDROID,
     ZIP_MEMBER_READ_TIMEOUT_SECONDS,
 )
-from checkota.logging import Log
+from checkota.logging import Log, sanitize_log_text
 from checkota.manager import parse_fingerprint
 from checkota.paths import processed_updates_path
+from checkota.validation import has_control_chars
 from checkota.zip_metadata import (
     RemoteZipFetchError,
     RemoteZipTransientError,
@@ -69,10 +71,22 @@ def get_ota_metadata(
             meta: dict[str, str] = {}
             for line in content.splitlines():
                 if "=" in line:
-                    key, value = line.strip().split("=", 1)
+                    key, raw_value = line.strip().split("=", 1)
                     key = key.strip()
-                    if key in METADATA_KEYS:
-                        meta[key] = value.strip()
+                    value = raw_value.strip()
+                    if key not in METADATA_KEYS:
+                        continue
+                    if (
+                        not value
+                        or len(value) > MAX_METADATA_VALUE_LENGTH
+                        or has_control_chars(value)
+                    ):
+                        Log.w(
+                            f"Ignoring malformed metadata value for {key!r}: "
+                            f"{sanitize_log_text(value)!r}"
+                        )
+                        continue
+                    meta[key] = value
 
             result: dict[str, str] = {}
             fingerprint = meta.get("post-build", "")

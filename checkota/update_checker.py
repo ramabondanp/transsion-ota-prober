@@ -23,6 +23,9 @@ from checkota.constants import (
     CHECKIN_API_HOST,
     CHECKIN_URL,
     DEBUG_FILE,
+    MAX_OTA_URL_LENGTH,
+    MAX_UPDATE_SIZE_LENGTH,
+    MAX_UPDATE_TITLE_LENGTH,
     OTA_URL_PATH_PREFIXES,
     OTA_URL_PREFIX,
     PROTO_TYPE,
@@ -145,6 +148,8 @@ class UpdateChecker:
     @staticmethod
     def _is_allowed_ota_url(value: str) -> bool:
         """Accept only HTTPS OTA objects served by Google's OTA endpoint."""
+        if len(value) > MAX_OTA_URL_LENGTH:
+            return False
         return is_google_https_url(
             value,
             allowed_hosts=(CHECKIN_API_HOST,),
@@ -155,9 +160,21 @@ class UpdateChecker:
     def _safe_title(value: str) -> str | None:
         """Reject titles that can corrupt the line-oriented dedup file/logs."""
         title = value.strip()
+        if not title or len(title) > MAX_UPDATE_TITLE_LENGTH:
+            return None
         if has_control_chars(title):
             return None
         return title
+
+    @staticmethod
+    def _safe_size(value: str) -> str | None:
+        """Keep only short, control-free update-size strings for display."""
+        size = value.strip()
+        if not size or len(size) > MAX_UPDATE_SIZE_LENGTH:
+            return None
+        if has_control_chars(size):
+            return None
+        return size
 
     def _wait_for_retry(self, delay: int) -> bool:
         """Wait between attempts, returning False if shutdown was requested."""
@@ -417,6 +434,10 @@ class UpdateChecker:
             elif name == "update_description":
                 info["description"] = value.strip()
             elif name == "update_size":
-                info["size"] = value
+                size = self._safe_size(value)
+                if size is None:
+                    Log.w("Ignoring malformed or oversized update size.")
+                else:
+                    info["size"] = size
 
         return info

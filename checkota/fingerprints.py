@@ -244,11 +244,14 @@ def release_processed_claim(claim: TextIO) -> None:
 
     RunContext.stop() pops and closes claimed handles under file_lock; a race
     with _commit_claimed_update could otherwise hand us a closed fd and turn
-    cleanup into an uncaught OSError. Cleanup must never crash the caller.
+    cleanup into an uncaught OSError or ValueError. Cleanup must never crash
+    the caller.
     """
+    if getattr(claim, "closed", False):
+        return
     try:
         _close_locked(claim)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         Log.w(f"Ignoring error while releasing update-title claim: {exc}")
         with contextlib.suppress(OSError, ValueError):
             claim.close()

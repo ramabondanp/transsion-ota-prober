@@ -9,8 +9,12 @@ from urllib.parse import urlsplit
 
 
 def has_control_chars(value: str) -> bool:
-    """True if value contains ASCII C0 control characters or DEL."""
-    return any(ord(char) < 32 or ord(char) == 127 for char in value)
+    """True if value contains C0, DEL, or C1 control characters.
+
+    C1 controls (U+0080..U+009F) are included because terminal emulators may
+    interpret them as escape/control sequences even though they are not ASCII.
+    """
+    return any(ord(char) < 32 or 0x7F <= ord(char) <= 0x9F for char in value)
 
 
 def has_unsafe_url_chars(value: str) -> bool:
@@ -19,7 +23,10 @@ def has_unsafe_url_chars(value: str) -> bool:
     URLs are rejected outright on whitespace (including newlines): a hostile
     response could otherwise forge log lines or split requests.
     """
-    return any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)
+    return any(
+        char.isspace() or ord(char) < 32 or 0x7F <= ord(char) <= 0x9F
+        for char in value
+    )
 
 
 def _host_allowed(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:

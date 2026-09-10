@@ -137,11 +137,9 @@ def get_cached_ota_metadata(
             # Unreachable: wait_event is None only on the fetcher branch.
             raise RuntimeError("metadata fetcher event was not registered")
         use_proxy = ctx.zip_proxy if use_proxy_env is None else use_proxy_env
-        zip_session = (
-            ctx.zip_session()
-            if hasattr(ctx, "zip_session")
-            else (ctx.session() if use_proxy else ctx.direct_session())
-        )
+        # Honor the explicit override instead of unconditionally using
+        # ctx.zip_session(), which only knows the context-wide flag.
+        zip_session = ctx.session() if use_proxy else ctx.direct_session()
         ota_meta: dict[str, str] | None = None
         valid_metadata = False
         try:
@@ -150,19 +148,23 @@ def get_cached_ota_metadata(
                 fetch_kwargs["use_proxy_env"] = True
             ota_meta = get_ota_metadata(url, **fetch_kwargs)
         finally:
+            interrupted = ctx.stop_event.is_set()
             with ctx.cache_lock:
                 valid_metadata = bool(
-                    ota_meta
+                    not interrupted
+                    and ota_meta
                     and ota_meta.get("fingerprint")
                     and parse_fingerprint(ota_meta["fingerprint"]) is not None
                 )
                 if valid_metadata:
                     ctx.metadata_cache[url] = ota_meta
                     ctx.metadata_failures.pop(url, None)
-                elif not ctx.stop_event.is_set():
+                elif not interrupted:
                     ctx.metadata_failures[url] = time.monotonic()
                 ctx._metadata_inflight.pop(url, None)
                 fetcher_event.set()
+        if ctx.stop_event.is_set():
+            return None
         return ota_meta if valid_metadata else None
 
 
@@ -263,7 +265,13 @@ def _resolve_target_metadata(
     Identity mismatches fail closed: without a matching target the caller must
     not update configs, notify, or process titles.
     """
+    if ctx.stop_event.is_set():
+        Log.w("Stop requested before OTA metadata resolution.")
+        return 130, None
     ota_meta = get_cached_ota_metadata(ctx, url)
+    if ctx.stop_event.is_set():
+        Log.w("Stop requested while resolving OTA metadata.")
+        return 130, None
     if not ota_meta or not ota_meta.get("fingerprint"):
         Log.e(
             "Could not determine target fingerprint from OTA metadata. Cannot derive incremental information."
@@ -478,6 +486,9 @@ def _apply_config_update(ctx: RunContext, update: RegionUpdate, args) -> bool:
     Every "skip" reason logs and returns True: skipping the rewrite must not
     abort the notification pipeline.
     """
+    if ctx.stop_event.is_set():
+        Log.w("Stop requested; config file was not updated.")
+        return False
     parsed_target = parse_fingerprint(update.target_fp)
     if getattr(args, "incremental", None):
         Log.i("--incremental override active; skipping config file update.")
@@ -528,6 +539,9 @@ def _dispatch_or_buffer_notification(
     claimed: bool,
 ) -> int:
     """Buffer (sweep mode) or send (direct mode) the notification."""
+    if ctx.stop_event.is_set():
+        Log.w("Stop requested; notification was not dispatched.")
+        return 130
     msg = build_notification_message(update)
     device_title = f"{update.cfg.model} - {update.title}"
 
@@ -585,6 +599,9 @@ def _dispatch_or_buffer_notification(
 def apply_update_actions(
     ctx: RunContext, update: RegionUpdate, args: argparse.Namespace
 ) -> int:
+    if ctx.stop_event.is_set():
+        Log.w("Stop requested before applying update actions.")
+        return 130
     if not fingerprint_identity_matches_config(update.cfg, update.target_fp):
         Log.e(
             "Target fingerprint identity does not match the current config. "
@@ -624,16 +641,23 @@ def apply_update_actions(
     ):
         if claimed:
             _release_claimed_update(ctx, update.title)
+        if ctx.stop_event.is_set():
+            Log.w("Stop requested; config update was not completed.")
+            return 130
         Log.e(
             f"Failed to update config {update.config_path}; "
             "not sending notification or saving title."
         )
         return 1
 
-    if notifier and (
-        _dispatch_or_buffer_notification(ctx, notifier, update, args, claimed) != 0
-    ):
-        return 1
+    if notifier:
+        dispatch_result = _dispatch_or_buffer_notification(
+            ctx, notifier, update, args, claimed
+        )
+        if dispatch_result != 0:
+            if claimed and dispatch_result == 130:
+                _release_claimed_update(ctx, update.title)
+            return dispatch_result
 
     Log.s("Update check completed successfully")
     return 0
@@ -657,12 +681,18 @@ def drain_pending_notifications(
     args: argparse.Namespace,
     *,
     max_sends: int | None = None,
+    delay: float | None = None,
+    ignore_stop_event: bool = False,
+    deadline: float | None = None,
 ) -> int:
     """Drain buffered Telegram notifications, retaining unsent work for retry.
 
     max_sends bounds how many notifications this call will attempt; anything
-    beyond it stays buffered. The watchdog thread's emergency drain uses the
-    bound so a huge sweep buffer cannot extend process teardown indefinitely.
+    beyond it stays buffered. ``delay`` overrides the normal sweep gap (the
+    watchdog's emergency drain uses zero). ``deadline`` is a ``time.monotonic``
+    value after which no further sends are started. ``ignore_stop_event`` lets
+    the hard-exit drain proceed without clearing the shared stop_event while
+    workers may still be running.
     """
     with ctx.pending_lock:
         pending = list(ctx.pending_notifications)
@@ -672,10 +702,12 @@ def drain_pending_notifications(
     if not pending:
         return 0
 
+    inter_send_delay = SWEEP_TELEGRAM_DELAY if delay is None else max(0.0, delay)
+
     if args.dry_run:
         Log.i(
             f"Dry-run: would drain {len(pending)} buffered notification(s) "
-            f"with {SWEEP_TELEGRAM_DELAY}s gap between sends."
+            f"with {inter_send_delay}s gap between sends."
         )
         for idx, note in enumerate(pending, start=1):
             Log.i(f"  [{idx}/{len(pending)}] {note.device_title}")
@@ -694,19 +726,31 @@ def drain_pending_notifications(
     total = len(pending)
     Log.i(
         f"Draining {total} buffered Telegram notification(s) with "
-        f"{SWEEP_TELEGRAM_DELAY}s gap between sends..."
+        f"{inter_send_delay}s gap between sends..."
     )
 
     failed = False
     for idx, note in enumerate(pending, start=1):
-        if ctx.stop_event.is_set():
+        if deadline is not None and time.monotonic() >= deadline:
+            Log.w(
+                f"Notification drain deadline reached; retaining notifications "
+                f"from {idx - 1}/{total}."
+            )
+            for remaining in pending[idx - 1 :]:
+                _release_pending_claim(ctx, remaining)
+            return 1
+        if not ignore_stop_event and ctx.stop_event.is_set():
             Log.w(f"Stop requested; retaining notifications from {idx - 1}/{total}.")
             for remaining in pending[idx - 1 :]:
                 _release_pending_claim(ctx, remaining)
             return 130
         if idx > 1:
-            Log.i(f"Waiting {SWEEP_TELEGRAM_DELAY}s before next notification...")
-            if ctx.stop_event.wait(SWEEP_TELEGRAM_DELAY):
+            if inter_send_delay:
+                Log.i(f"Waiting {inter_send_delay}s before next notification...")
+            stop_during_wait = bool(
+                inter_send_delay and ctx.stop_event.wait(inter_send_delay)
+            )
+            if stop_during_wait and not ignore_stop_event:
                 Log.w(
                     f"Stop requested during wait; retaining notifications from "
                     f"{idx - 1}/{total}."
@@ -714,6 +758,14 @@ def drain_pending_notifications(
                 for remaining in pending[idx - 1 :]:
                     _release_pending_claim(ctx, remaining)
                 return 130
+            if deadline is not None and time.monotonic() >= deadline:
+                Log.w(
+                    f"Notification drain deadline reached; retaining notifications "
+                    f"from {idx - 1}/{total}."
+                )
+                for remaining in pending[idx - 1 :]:
+                    _release_pending_claim(ctx, remaining)
+                return 1
         if note.is_new_update:
             with ctx.file_lock:
                 already_processed = note.title in ctx.processed_titles

@@ -5,11 +5,21 @@ text. ``format_update_description`` is the public entry point used by the
 processing pipeline.
 """
 
-import html
 import re
 from html.parser import HTMLParser
 
 from checkota.constants import SECTION_HEADER_RE
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# Keep newlines/tabs/carriage returns because the parser relies on whitespace;
+# neutralise all other C0/C1 controls so untrusted OTA text cannot emit ANSI
+# escapes or other terminal-control sequences.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _sanitize_terminal_text(value: str) -> str:
+    text = _ANSI_ESCAPE_RE.sub("", value)
+    return _CONTROL_RE.sub(lambda match: f"\\x{ord(match.group(0)):02x}", text)
 
 
 class TerminalParser(HTMLParser):
@@ -75,7 +85,10 @@ class TerminalParser(HTMLParser):
                 self.indent = max(0, self.indent - 2)
 
     def handle_data(self, data):
-        self.buffer += html.unescape(data)
+        # HTMLParser runs with convert_charrefs=True, so entity references are
+        # already decoded exactly once here; calling html.unescape() again would
+        # turn literal "&amp;lt;" into "<" and enable tag-injection surprises.
+        self.buffer += _sanitize_terminal_text(data)
 
     def flush(self, style: str | None = None) -> None:
         text = self.buffer.strip()
