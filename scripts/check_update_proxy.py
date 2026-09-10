@@ -22,6 +22,7 @@ Requires: requests (and requests[socks] when testing SOCKS proxies)
 import argparse
 import concurrent.futures
 import contextlib
+import math
 import os
 import re
 import signal
@@ -91,8 +92,8 @@ def _positive_float(value: str) -> float:
         number = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("must be a number") from exc
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
     return number
 
 
@@ -680,8 +681,7 @@ def main() -> int:
                     )
                 else:
                     print(
-                        f"# [{country}] VERIFY FAILED "
-                        f"{country_check.detail}; skipping",
+                        f"# [{country}] VERIFY FAILED {country_check.detail}; skipping",
                         file=sys.stderr,
                     )
             print(

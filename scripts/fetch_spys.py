@@ -14,6 +14,7 @@ variable definitions, decodes each port, and prints proxy addresses.
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -260,8 +261,8 @@ def _positive_float(value: str) -> float:
         number = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("must be a number") from exc
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
     return number
 
 
