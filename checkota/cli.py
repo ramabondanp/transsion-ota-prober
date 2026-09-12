@@ -385,10 +385,9 @@ def main() -> int:
     executor = None
     exit_code = 0
     drain_result = 0
-    # buffered_notifications_possible drives whether the outer drain runs.
-    # Sweep mode buffers notifications per apply_update_actions; direct --fp
-    # matches args.no_config=True and does NOT set args.config_dir, so this
-    # predicate is false and direct mode never has anything in the pending buffer.
+    # Sweeps always buffer. Interrupted -c jobs can also buffer after rewriting
+    # their config; check for that work after executor shutdown below. --fp
+    # never rewrites a file and never buffers.
     buffered_notifications_possible = getattr(args, "config_dir", None) is not None
 
     try:
@@ -428,13 +427,17 @@ def main() -> int:
         # Parallel mode: wait for running tasks to finish before closing sessions.
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
+        if not args.fp:
+            with ctx.pending_lock:
+                buffered_notifications_possible = (
+                    buffered_notifications_possible or bool(ctx.pending_notifications)
+                )
         # Drain AFTER all workers have stopped -- a worker that was still
         # mid-`apply_update_actions` could otherwise append to
         # `ctx.pending_notifications` after the drain took its snapshot.
         #
-        # Only run drain in sweep mode (where notifications were buffered).
-        # Direct `--fp` and config-error exits don't buffer anything, so
-        # the drain would just be a no-op.
+        # Drain sweeps and any -c notifications buffered during shutdown.
+        # Direct --fp and healthy -c runs still skip the empty drain.
         #
         # By this point the signal handler and the `except KeyboardInterrupt`
         # arm have already set stop_event. Workers are already stopped

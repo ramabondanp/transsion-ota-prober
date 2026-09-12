@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import errno
 import io
+import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,7 +78,15 @@ def test_wheel_seeds_only_missing_configs(monkeypatch, tmp_path):
     assert not (config_dir / "not-a-config.txt").exists()
 
 
-def test_wheel_config_seeding_is_safe_for_concurrent_first_use(monkeypatch, tmp_path):
+@pytest.mark.parametrize("hardlinks", [True, False])
+def test_wheel_config_seeding_is_safe_for_concurrent_first_use(
+    monkeypatch, tmp_path, hardlinks
+):
+    if not hardlinks:
+        def no_hardlinks(*args):
+            raise OSError(errno.EOPNOTSUPP, "hardlinks unavailable")
+
+        monkeypatch.setattr(paths.os, "link", no_hardlinks)
     config_dir = tmp_path / "configs"
     monkeypatch.setattr(paths, "IS_SOURCE_CHECKOUT", False)
     monkeypatch.setattr(paths, "APP_CONFIGS_DIR", config_dir)
@@ -120,7 +131,7 @@ def test_publish_does_not_overwrite_after_link_error(monkeypatch, tmp_path):
     assert not destination.exists()
 
 
-def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
+def test_publish_falls_back_to_atomic_rename_without_hardlink_support(
     monkeypatch, tmp_path
 ):
     source = tmp_path / "config-X6873.yml"
@@ -145,60 +156,188 @@ def test_publish_falls_back_to_exclusive_create_without_hardlink_support(
     assert list(destination.parent.glob("*.tmp")) == []
 
 
-def test_publish_removes_partial_exclusive_destination_on_failure(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_publish_leaves_no_partial_destination_on_copy_failure(
+    monkeypatch, tmp_path, failure
 ):
     source = tmp_path / "config-X6873.yml"
     source.write_bytes(b"x" * 100)
     destination = tmp_path / "configs" / "config-X6873.yml"
-    calls = {"n": 0}
-    original_copy = paths.shutil.copyfileobj
 
-    def link_without_hardlink_support(src, dst):
-        raise OSError(errno.EOPNOTSUPP, "operation not supported")
+    def fail_copy(input_file, output_file):
+        output_file.write(b"partial")
+        output_file.flush()
+        raise failure("simulated write failure")
 
-    def fail_second_copy(input_file, output_file):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            output_file.write(b"partial")
-            output_file.flush()
-            raise OSError("simulated destination write failure")
-        return original_copy(input_file, output_file)
-
-    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
-    monkeypatch.setattr(paths.shutil, "copyfileobj", fail_second_copy)
-
-    with pytest.raises(OSError):
+    monkeypatch.setattr(paths.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(failure, match="simulated write failure"):
         paths._publish_if_missing(source, destination, 0o644)
+    assert list(destination.parent.iterdir()) == []
+
+
+def test_publish_preserves_user_file_on_copy_failure(monkeypatch, tmp_path):
+    source = tmp_path / "config-X6873.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    replacement = tmp_path / "user-edited.yml"
+    replacement.write_bytes(b"user config")
+
+    def fail_copy(input_file, output_file):
+        output_file.write(b"partial")
+        output_file.flush()
+        os.replace(replacement, destination)
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(paths.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(OSError, match="simulated write failure"):
+        paths._publish_if_missing(source, destination, 0o644)
+    assert destination.read_bytes() == b"user config"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_fallback_never_exposes_partial_destination(monkeypatch, tmp_path):
+    source = tmp_path / "bundled.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    copies = []
+
+    def no_hardlinks(*args):
+        raise OSError(errno.EOPNOTSUPP, "hardlinks unavailable")
+
+    def copy_in_chunks(input_file, output_file):
+        data = input_file.read()
+        output_file.write(data[:3])
+        output_file.flush()
+        assert not destination.exists(), "partial config became visible"
+        output_file.write(data[3:])
+        copies.append(1)
+
+    monkeypatch.setattr(paths.os, "link", no_hardlinks)
+    monkeypatch.setattr(paths.shutil, "copyfileobj", copy_in_chunks)
+    assert paths._publish_if_missing(source, destination, 0o644)
+    assert copies == [1]
+    assert destination.read_bytes() == b"bundled config"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_fallback_preserves_concurrent_winner(monkeypatch, tmp_path, symlink):
+    source = tmp_path / "bundled.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "configs" / "config-X6873.yml"
+    missing_target = tmp_path / "missing.yml"
+
+    def no_hardlinks(src, dst):
+        # Win the name after the initial exists() check but before publication.
+        if symlink:
+            destination.symlink_to(missing_target)
+        else:
+            destination.write_bytes(b"user config")
+        raise OSError(errno.EOPNOTSUPP, "hardlinks unavailable")
+
+    monkeypatch.setattr(paths.os, "link", no_hardlinks)
+    assert paths._publish_if_missing(source, destination, 0o644) is False
+    if symlink:
+        assert destination.is_symlink()
+        assert destination.readlink() == missing_target
+        assert not missing_target.exists()
+    else:
+        assert destination.read_bytes() == b"user config"
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_atomic_rename_publishes_the_staged_inode(tmp_path):
+    source = tmp_path / "staged.yml"
+    source.write_bytes(b"complete config")
+    source_inode = source.stat().st_ino
+    destination = tmp_path / "config-é.yml"
+
+    assert paths._rename_if_missing(source, destination) is True
+    assert not source.exists()
+    assert destination.read_bytes() == b"complete config"
+    assert destination.stat().st_ino == source_inode
+
+
+def test_atomic_rename_does_not_replace_existing_file(tmp_path):
+    source = tmp_path / "staged.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "config.yml"
+    destination.write_bytes(b"user config")
+    user_inode = destination.stat().st_ino
+
+    assert paths._rename_if_missing(source, destination) is False
+    assert source.read_bytes() == b"bundled config"
+    assert destination.read_bytes() == b"user config"
+    assert destination.stat().st_ino == user_inode
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux renameat2 binding")
+@pytest.mark.parametrize(
+    "error", [errno.EACCES, errno.ENOSPC, errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP]
+)
+def test_atomic_rename_errors_never_fall_back_to_copy(monkeypatch, tmp_path, error):
+    source = tmp_path / "bundled.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "configs" / "config.yml"
+
+    def no_hardlinks(*args):
+        raise OSError(errno.EOPNOTSUPP, "hardlinks unavailable")
+
+    def renameat2(src_dir, src, dst_dir, dst, flags):
+        assert (src_dir, dst_dir, flags) == (-100, -100, 1)
+        assert dst == os.fsencode(destination)
+        paths.ctypes.set_errno(error)
+        return -1
+
+    monkeypatch.setattr(paths.os, "link", no_hardlinks)
+    monkeypatch.setattr(
+        paths.ctypes, "CDLL", lambda *a, **k: SimpleNamespace(renameat2=renameat2)
+    )
+    with pytest.raises(OSError) as failure:
+        paths._publish_if_missing(source, destination, 0o644)
+    assert failure.value.errno == error
+    assert list(destination.parent.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux renameat2 binding")
+def test_missing_renameat2_fails_without_creating_destination(monkeypatch, tmp_path):
+    source = tmp_path / "bundled.yml"
+    source.write_bytes(b"bundled config")
+    destination = tmp_path / "configs" / "config.yml"
+
+    def no_hardlinks(*args):
+        raise OSError(errno.EOPNOTSUPP, "hardlinks unavailable")
+
+    monkeypatch.setattr(paths.os, "link", no_hardlinks)
+    monkeypatch.setattr(paths.ctypes, "CDLL", lambda *a, **k: SimpleNamespace())
+    with pytest.raises(OSError, match="Atomic no-replace"):
+        paths._publish_if_missing(source, destination, 0o644)
+    assert list(destination.parent.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX fallback guard")
+def test_unsupported_platform_does_not_use_overwriting_rename(monkeypatch, tmp_path):
+    source = tmp_path / "staged.yml"
+    source.write_bytes(b"complete config")
+    destination = tmp_path / "config.yml"
+    monkeypatch.setattr(paths.sys, "platform", "unsupported")
+
+    with pytest.raises(OSError, match="Atomic no-replace"):
+        paths._rename_if_missing(source, destination)
     assert not destination.exists()
+    assert source.read_bytes() == b"complete config"
 
 
-def test_publish_does_not_remove_replaced_destination_on_failure(
-    monkeypatch, tmp_path
-):
-    source = tmp_path / "config-X6873.yml"
-    source.write_bytes(b"x" * 100)
-    destination = tmp_path / "configs" / "config-X6873.yml"
-    calls = {"n": 0}
-    original_copy = paths.shutil.copyfileobj
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux renameat2 binding")
+def test_atomic_rename_rejects_nul_instead_of_truncating_path(tmp_path):
+    source = tmp_path / "staged.yml"
+    source.write_bytes(b"complete config")
+    destination = tmp_path / "config.yml"
 
-    def link_without_hardlink_support(src, dst):
-        raise OSError(errno.EOPNOTSUPP, "operation not supported")
-
-    def replace_then_fail(input_file, output_file):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            destination.unlink()
-            destination.write_bytes(b"user-file")
-            raise OSError("simulated destination write failure")
-        return original_copy(input_file, output_file)
-
-    monkeypatch.setattr(paths.os, "link", link_without_hardlink_support)
-    monkeypatch.setattr(paths.shutil, "copyfileobj", replace_then_fail)
-
-    with pytest.raises(OSError):
-        paths._publish_if_missing(source, destination, 0o644)
-    assert destination.read_bytes() == b"user-file"
+    with pytest.raises(ValueError, match="embedded null byte"):
+        paths._rename_if_missing(Path(str(source) + "\x00ignored"), destination)
+    assert source.read_bytes() == b"complete config"
+    assert not destination.exists()
 
 
 def test_publish_still_skips_existing_destination_when_link_fails(

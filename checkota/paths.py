@@ -5,7 +5,7 @@ wheel has no writable repository beside the package, so it uses per-user XDG
 directories and copies packaged defaults there on first use.
 """
 
-import contextlib
+import ctypes
 import errno
 import os
 import shutil
@@ -79,6 +79,51 @@ def _resource_root():
     return resources.files("checkota.bundled_configs")
 
 
+def _rename_if_missing(source: Path, destination: Path) -> bool:
+    """Atomically publish a complete file without replacing an existing entry.
+
+    Used on filesystems without hard links. Never emulate this with a
+    check-then-rename or an O_EXCL copy: the former can overwrite a user's file,
+    and the latter exposes a partial file that cannot be safely removed by name.
+    Unsupported platforms/filesystems fail closed, leaving destination alone.
+    """
+    if os.name == "nt":
+        # Unlike POSIX rename(), Windows rename() never replaces an entry.
+        try:
+            os.rename(source, destination)
+        except FileExistsError:
+            return False
+        return True
+
+    if sys.platform != "linux":
+        raise OSError(
+            errno.ENOTSUP, "Atomic no-replace config publication unavailable", destination
+        )
+
+    # Python does not expose renameat2 flags. libc's wrapper is independent of
+    # CPU-specific syscall numbers; use_errno keeps concurrent callers isolated.
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(
+            errno.ENOTSUP, "Atomic no-replace config publication unavailable", destination
+        )
+    renameat2.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint
+    ]
+    renameat2.restype = ctypes.c_int
+    src, dst = os.fsencode(source), os.fsencode(destination)
+    if b"\x00" in src or b"\x00" in dst:
+        raise ValueError("embedded null byte")
+    # Linux AT_FDCWD = -100; RENAME_NOREPLACE = 1.
+    if renameat2(-100, src, -100, dst, 1) == 0:
+        return True
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        return False
+    raise OSError(error, os.strerror(error), destination)
+
+
 def _publish_if_missing(source, destination: Path, mode: int) -> bool:
     """Copy source to destination without replacing a concurrent/user file."""
     if destination.exists():
@@ -93,6 +138,8 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
         with source.open("rb") as input_file, os.fdopen(fd, "wb") as output_file:
             fd = -1
             shutil.copyfileobj(input_file, output_file)
+            output_file.flush()
+            os.fsync(output_file.fileno())
         os.chmod(temporary, mode)
         try:
             # Linking, rather than replacing, makes publication non-destructive
@@ -113,63 +160,20 @@ def _publish_if_missing(source, destination: Path, mode: int) -> bool:
             if exc.errno not in unsupported:
                 raise
 
-            # There is no portable atomic rename-with-NOREPLACE primitive in
-            # Python. O_EXCL still makes the fallback publication exclusive:
-            # a concurrent process/user can win the race, but this process can
-            # never overwrite the winner.
-            try:
-                destination_fd = os.open(
-                    destination,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    mode,
-                )
-            except FileExistsError:
-                return False
-            destination_identity: tuple[int, int] | None = None
-            try:
-                stat_result = os.fstat(destination_fd)
-                destination_identity = (stat_result.st_dev, stat_result.st_ino)
-            except OSError:
-                destination_identity = None
-            try:
-                try:
-                    with (
-                        os.fdopen(destination_fd, "wb") as output_file,
-                        temporary.open("rb") as input_file,
-                    ):
-                        destination_fd = -1
-                        shutil.copyfileobj(input_file, output_file)
-                        output_file.flush()
-                        os.fsync(output_file.fileno())
-                except BaseException:
-                    # A partial O_EXCL destination would otherwise be treated
-                    # as a user file forever and never replaced by seeding.
-                    # Only remove the inode we created: a concurrent process
-                    # may have replaced the path after our O_EXCL open.
-                    remove = destination_identity is None
-                    if destination_identity is not None:
-                        try:
-                            current = destination.stat()
-                            remove = (
-                                current.st_dev,
-                                current.st_ino,
-                            ) == destination_identity
-                        except OSError:
-                            remove = False
-                    if remove:
-                        with contextlib.suppress(OSError):
-                            destination.unlink(missing_ok=True)
-                    raise
-            finally:
-                if destination_fd != -1:
-                    os.close(destination_fd)
+            # Publish the already-complete temporary file atomically. There
+            # is no partial destination to roll back, no foreign inode to move
+            # aside, and no cleanup allocation that can fail on a full disk.
+            return _rename_if_missing(temporary, destination)
         return True
     finally:
         if fd != -1:
             os.close(fd)
         try:
             temporary.unlink()
-        except FileNotFoundError:
+        except OSError:
+            # Only our private staging name is cleaned up. It is already gone
+            # after a successful rename; other cleanup failures must not mask
+            # the original error. An orphan staging file never blocks seeding.
             pass
 
 

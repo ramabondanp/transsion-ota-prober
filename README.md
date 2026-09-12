@@ -178,6 +178,11 @@ variables are ignored in favor of the home-directory defaults. Source checkouts
 continue to use repository-local configs and `processed_updates.txt`. Wheel installs
 do not migrate `processed_updates.txt` from the current working directory.
 
+Config seeding writes and fsyncs a private temporary file before publishing it.
+On filesystems without hard links, the fallback uses an atomic no-replace rename
+(Linux `renameat2` or Windows `rename`). If neither primitive is available, seeding
+fails safely rather than exposing a partial config or overwriting a user file.
+
 `CHECKOTA_VENDOR_DIR` remains an explicit override for a relocated vendor tree; a
 source checkout with a valid override continues to use repository-local configs and
 state even when the default `vendor/google-ota-prober/` directory has moved. The

@@ -537,17 +537,30 @@ def _dispatch_or_buffer_notification(
     update: RegionUpdate,
     args: argparse.Namespace,
     claimed: bool,
+    *,
+    allow_after_stop: bool = False,
 ) -> int:
-    """Buffer (sweep mode) or send (direct mode) the notification."""
-    if ctx.stop_event.is_set():
+    """Buffer (sweep mode) or send (direct mode) the notification.
+
+    ``allow_after_stop`` is set once the config step has been passed. Both
+    single-config (-c) and sweep (-d) runs may already have advanced the YAML,
+    making the update undiscoverable on retry. After a stop, those jobs may
+    only buffer locally; main's shutdown drain owns delivery. No-config --fp
+    runs remain retryable and still abort. Healthy -c runs keep sending inline.
+    """
+    stopped = ctx.stop_event.is_set()
+    buffer_after_stop = (
+        stopped and allow_after_stop and not getattr(args, "no_config", False)
+    )
+    if stopped and not buffer_after_stop:
         Log.w("Stop requested; notification was not dispatched.")
         return 130
     msg = build_notification_message(update)
     device_title = f"{update.cfg.model} - {update.title}"
 
-    if is_sweep_mode(args):
-        # Sweep mode: buffer the notification; drain at end of run with a
-        # SWEEP_TELEGRAM_DELAY-second gap between sends.
+    if is_sweep_mode(args) or buffer_after_stop:
+        # Sweeps and interrupted file-backed updates drain after workers stop.
+        # Never start a network send here when shutdown has been requested.
         with ctx.pending_lock:
             ctx.pending_notifications.append(
                 PendingNotification(
@@ -652,7 +665,7 @@ def apply_update_actions(
 
     if notifier:
         dispatch_result = _dispatch_or_buffer_notification(
-            ctx, notifier, update, args, claimed
+            ctx, notifier, update, args, claimed, allow_after_stop=True
         )
         if dispatch_result != 0:
             if claimed and dispatch_result == 130:

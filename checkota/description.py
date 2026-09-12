@@ -11,9 +11,11 @@ from html.parser import HTMLParser
 from checkota.constants import SECTION_HEADER_RE
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-# Keep newlines/tabs/carriage returns because the parser relies on whitespace;
-# neutralise all other C0/C1 controls so untrusted OTA text cannot emit ANSI
-# escapes or other terminal-control sequences.
+# Keep newlines and tabs because the parser relies on whitespace; neutralise
+# every other C0/C1 control so untrusted OTA text cannot emit ANSI escapes or
+# other terminal-control sequences. Carriage returns are deliberately included:
+# callers normalise CRLF before parsing, so a surviving \r is stray output, not
+# a line break, and must not reach the terminal as a raw control byte.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -142,6 +144,13 @@ class TerminalParser(HTMLParser):
 def format_update_description(description: str) -> str:
     if not description:
         return ""
+
+    # Normalise CRLF before any parsing. HTMLParser and the section regexes
+    # treat only \n as a line boundary, so a lingering \r would survive as a
+    # literal control byte (escaped to "\x0d") instead of the intended break.
+    # Lone \r is left alone: this is a line-ending normalisation, not a
+    # general control-character filter (that is _sanitize_terminal_text).
+    description = description.replace("\r\n", "\n")
 
     # Transsion descriptions put Update Version directly after safety prose;
     # terminal output treats it as its own section without adding gaps before

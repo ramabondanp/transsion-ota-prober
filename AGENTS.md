@@ -179,8 +179,12 @@ Same two-stage approach as Telegram:
   `processed_updates.txt` is preserved.
 + Wheel mode: bundled defaults are seeded lazily to `$XDG_CONFIG_HOME/checkota/configs`
   (relative XDG values ignored → home fallback) via copy-once publication
-  (`_publish_if_missing`: mkstemp → hardlink, rename fallback on FS without hardlinks;
-  never overwrites). State goes to `$XDG_STATE_HOME/checkota`; no CWD migration.
+  (`_publish_if_missing`: write + fsync a private temporary file → hardlink, or an
+  atomic no-replace rename on Linux/Windows when hardlinks are unavailable). Never
+  copy into or clean up the destination itself: inode-check/unlink and tombstone
+  restoration both race user edits. If neither publication primitive is available,
+  fail closed; do not fall back to O_EXCL copying. State goes to
+  `$XDG_STATE_HOME/checkota`; no CWD migration.
 + Importing the package never seeds anything; seeding happens only when config lookup
   needs it (`active_config_dir()`).
 
@@ -291,7 +295,9 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Untrusted check-in values unbounded | `update_checker.py`, `metadata.py` | Title (512), size (64), URL (8192), fingerprint (1024), and metadata values (512) are capped; C0/C1 controls rejected |
 | Terminal/log output accepted control bytes | `logging.py`, `description.py` | `sanitize_log_text()` and `_sanitize_terminal_text()` neutralize C0/C1 and ANSI CSI; `TerminalParser` decodes entities exactly once |
 | Telegram sanitizer left list/paragraph tags as literal text | `message_text.py` | `<ul>/<ol>/<li>/<p>/<div>/<h1-6>` are normalized; `<strong>` maps to Telegram `<b>` |
-| Partial fallback config seeding was permanent | `paths.py` | `_publish_if_missing()` unlinks an O_EXCL destination if the fallback copy fails |
+| Partial seeding / cleanup races lost user configs | `paths.py` | Stage and fsync the complete file, then publish by hardlink or atomic no-replace rename; no O_EXCL copy, destination cleanup, tombstone restoration, or cleanup allocation after ENOSPC |
+| Stop after a completed rewrite dropped notifications | `processor.py`, `cli.py` | Both `-c` and `-d` jobs may buffer locally after the config step; main checks pending work after workers stop and drains it. No-config `--fp` remains stoppable; healthy `-c` still sends inline |
+| CRLF descriptions showed literal `\x0d` | `description.py` | Normalize CRLF before parsing; continue escaping lone carriage returns |
 | Closed claim handle raised `ValueError` during cleanup | `fingerprints.py` | `release_processed_claim()` checks `claim.closed` and catches `ValueError` |
 | Script timeout flags accepted `nan`/`inf` | `scripts/fetch_spys.py`, `scripts/check_update_proxy.py` | `_positive_float()` requires a finite value |
 

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from checkota import metadata
+from checkota import metadata, processor
 from checkota.constants import (
     MAX_FINGERPRINT_LENGTH,
     MAX_UPDATE_SIZE_LENGTH,
@@ -43,21 +43,23 @@ def _cfg() -> Config:
     )
 
 
-def _update() -> RegionUpdate:
-    return RegionUpdate(
-        cfg=_cfg(),
-        config_path=Path("/tmp/config-X6873.yml"),
-        region_name=None,
-        title="TITLE",
-        url="https://example.com/ota.zip",
-        size="2 GB",
-        desc="desc",
-        is_new_update=True,
-        target_fp="Infinix/X6873-OP/Infinix-X6873:16/B/I:user/release-keys",
-        target_incremental="I",
-        sdk_message=None,
-        data={},
-    )
+def _update(**overrides) -> RegionUpdate:
+    base = {
+        "cfg": _cfg(),
+        "config_path": Path("/tmp/config-X6873.yml"),
+        "region_name": None,
+        "title": "TITLE",
+        "url": "https://example.com/ota.zip",
+        "size": "2 GB",
+        "desc": "desc",
+        "is_new_update": True,
+        "target_fp": "Infinix/X6873-OP/Infinix-X6873:16/B/I:user/release-keys",
+        "target_incremental": "I",
+        "sdk_message": None,
+        "data": {},
+    }
+    base.update(overrides)
+    return RegionUpdate(**base)
 
 
 def _args(**overrides) -> argparse.Namespace:
@@ -109,6 +111,13 @@ def test_terminal_output_decodes_entities_once_and_strips_ansi():
     assert out == "hellored"
     assert "\x1b" not in out
     assert format_update_description("bad\x07bell") == "bad\\x07bell"
+
+
+def test_crlf_line_endings_normalize_before_parsing():
+    """CRLF is a line ending, not a stray control byte worth escaping."""
+    assert format_update_description("alpha<br>\r\nbeta") == "alpha\nbeta"
+    assert format_update_description("alpha\r\nbeta") == "alpha\nbeta"
+    assert "x0d" not in format_update_description("alpha<br>\r\nbeta")
 
 
 def test_log_sanitizer_neutralizes_ansi_and_controls():
@@ -165,6 +174,7 @@ def test_stopped_metadata_fetch_is_not_cached_even_when_valid(tmp_path):
 
     def fake_fetch(url, session=None, stop_event=None):
         calls["n"] += 1
+        assert stop_event is not None
         stop_event.set()
         return valid
 
@@ -262,6 +272,79 @@ def test_apply_update_actions_aborts_when_stop_requested(tmp_path):
     assert apply_update_actions(ctx, _update(), _args()) == 130
 
 
+def test_stop_after_config_rewrite_still_buffers_notification(tmp_path, monkeypatch):
+    """A stop arriving after the config rewrite must not drop the update.
+
+    The config file already carries the new fingerprint, so the next run can no
+    longer rediscover this update. Bailing on the stop check here would make the
+    notification permanently unretryable; it has to reach the drain buffer.
+    """
+    config_path = tmp_path / "config-X6873.yml"
+    config_path.write_text(
+        'oem: "Infinix"\nproduct_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\nandroid_version: "15"\n'
+        'regions:\n  OP: "131015"\n',
+        encoding="utf-8",
+    )
+    cfg = Config.from_yaml(config_path)[0]
+    ctx = _ctx(tmp_path)
+    update = _update(
+        cfg=cfg,
+        config_path=config_path,
+        target_fp=(
+            "Infinix/X6873-OP/Infinix-X6873:16/"
+            "BP2A.250605.031.A3/201500011:user/release-keys"
+        ),
+        target_incremental="201500011",
+    )
+    real_rewrite = processor.update_config_from_fingerprint
+
+    def rewrite_then_stop(*args):
+        result = real_rewrite(*args)
+        # The config now holds the new fingerprint; signal shutdown before
+        # this workstream reaches the notification step.
+        ctx.stop_event.set()
+        return result
+
+    class _StubNotifier:
+        def send(self, msg, truncate_desc=True, device_title=None):
+            raise AssertionError("sweep mode must buffer, not send directly")
+
+    monkeypatch.setattr(processor, "update_config_from_fingerprint", rewrite_then_stop)
+    with patch("checkota.processor.create_notifier", return_value=_StubNotifier()):
+        rc = apply_update_actions(
+            ctx, update, _args(no_config=False, config_dir=tmp_path, skip_telegram=False)
+        )
+
+    # The stop check must not fire here: buffering is local and the drain owns
+    # stop handling. Returning 0 mirrors the pre-regression behaviour.
+    assert rc == 0, f"Expected the buffered notification path to succeed, got {rc}"
+    assert [note.title for note in ctx.pending_notifications] == [update.title], (
+        "Notification for an already-rewritten config was dropped"
+    )
+
+
+@pytest.mark.parametrize("allow_after_stop", [False, True])
+def test_no_config_send_still_aborts_when_stop_requested(tmp_path, allow_after_stop):
+    """--fp never rewrites a file, so it remains retryable after a stop."""
+    ctx = _ctx(tmp_path)
+    ctx.stop_event.set()
+    sent: list[str] = []
+
+    class _StubNotifier:
+        def send(self, msg, truncate_desc=True, device_title=None):
+            sent.append(str(device_title))
+            return True
+
+    rc = processor._dispatch_or_buffer_notification(
+        ctx, _StubNotifier(), _update(), _args(no_config=True, skip_telegram=False), False,
+        allow_after_stop=allow_after_stop,
+    )
+    assert rc == 130
+    assert sent == []
+    assert ctx.pending_notifications == []
+
+
 def test_metadata_rejects_oversized_values(monkeypatch):
     payload = b"post-build=" + b"A" * 600 + b"\n"
     monkeypatch.setattr(metadata, "fetch_zip_member", lambda *a, **k: payload)
@@ -270,13 +353,10 @@ def test_metadata_rejects_oversized_values(monkeypatch):
 
 def test_script_timeout_helpers_reject_non_finite(monkeypatch):
     scripts = Path(__file__).resolve().parents[1] / "scripts"
-    if not (scripts / "fetch_spys.py").is_file() or not (
-        scripts / "check_update_proxy.py"
-    ).is_file():
-        pytest.skip("optional operational scripts are not available")
     monkeypatch.syspath_prepend(str(scripts))
-    import check_update_proxy
-    import fetch_spys
+    # Resolve optional scripts dynamically after adding their runtime path.
+    check_update_proxy = pytest.importorskip("check_update_proxy")
+    fetch_spys = pytest.importorskip("fetch_spys")
 
     for bad in ("nan", "inf", "-inf"):
         with pytest.raises(argparse.ArgumentTypeError):
