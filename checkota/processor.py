@@ -258,7 +258,7 @@ def _log_target_metadata(target: _TargetMetadata) -> None:
 
 
 def _resolve_target_metadata(
-    ctx: RunContext, cfg: Config, url: str, data: dict
+    ctx: RunContext, cfg: Config, url: str
 ) -> tuple[int, _TargetMetadata | None]:
     """Fetch OTA metadata for the update URL and validate it against the config.
 
@@ -438,7 +438,7 @@ def collect_update_info(
             Log.i("This update has already been processed. Skipping.")
             return 0, None
 
-    status, target = _resolve_target_metadata(ctx, cfg, url, data)
+    status, target = _resolve_target_metadata(ctx, cfg, url)
     if status != 0 or target is None:
         return status, None
 

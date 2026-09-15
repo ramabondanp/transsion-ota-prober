@@ -231,7 +231,7 @@ class _ConfigJob:
 
 
 def _load_config_jobs(
-    ctx: RunContext, args: argparse.Namespace, config_paths: list[Path]
+    args: argparse.Namespace, config_paths: list[Path]
 ) -> dict[int, _ConfigJob]:
     """Load every config's regions upfront (YAML parse only, no network),
     capturing any filter/error output into a per-config buffer."""
@@ -263,7 +263,7 @@ def _run_global_pool(
     original config order (regions in order within each config).
     """
     total = len(config_paths)
-    config_jobs = _load_config_jobs(ctx, args, config_paths)
+    config_jobs = _load_config_jobs(args, config_paths)
 
     def region_worker(
         config_idx: int, region_idx: int, regions_total: int, cfg: Config, path: Path
