@@ -49,7 +49,7 @@ checkota/              ← Package (import: from checkota.cli import main)
                          rendered-UTF-16 length fitting, plain-text fallback (no I/O)
     telegram.py        ← Telegram notify + Telegraph fallback; bot token redacted from
                          error logs; delegates text work to message_text.py
-configs/               ← YAML device configs (one per codename, 114 files); bundled into
+configs/               ← YAML device configs (one per codename, 96 files); bundled into
                          wheels as checkota.bundled_configs and seeded to XDG on first use
 tests/                 ← pytest suite
 scripts/               ← Ad-hoc tooling (proxy-based checks: fetch_spys, check_update_proxy)
@@ -121,7 +121,7 @@ Product is `{effective_product_base}-{region}`. Device is
 `{device_prefix}-{effective_product_base}`, where `device_prefix` is normally the exact
 `oem`; the exact OEM value `"Itel"` is the exception and maps to lowercase `itel`. A
 region may override `product_base` (the `IN` region in `config-X6857.yml` uses `X6857B`)
-or provide a noncanonical `build_tag` (currently X1301 and T1102). Canonical Android
+or provide a noncanonical `build_tag` (currently T1102). Canonical Android
 build tags come from `BUILD_TAG_BY_ANDROID` and must not be written in YAML. Region codes
 must match `[A-Z0-9][A-Z0-9-]*` — the code is concatenated into `product` and thus into
 the fingerprint, so it gets the same allowlist treatment as every other field.
@@ -205,7 +205,7 @@ before and after; a promotion that would change any of them is rejected.
 
 Convergence runs **only on a real update**. A check whose target values already match the
 YAML returns early and leaves the file byte-identical — normalization is a side effect of
-applying an update, not something a no-op sweep across 114 configs may trigger. This
+applying an update, not something a no-op sweep across 96 configs may trigger. This
 early return is load-bearing: it was dropped once and restored deliberately; do not let a
 "harmless normalization" pass reintroduce writes on no-op checks. Because
 collapsing removes child keys, comments attached to them are re-indented to the region key

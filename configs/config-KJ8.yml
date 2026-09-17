@@ -1,7 +1,0 @@
-oem: "TECNO"
-product_base: "KJ8"
-model: "TECNO SPARK 20 Pro 5G"
-android_version: "14"
-regions:
-  OP: "250108V1200"
-  IN: "260410V1339"

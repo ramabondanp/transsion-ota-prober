@@ -1,8 +1,0 @@
-oem: "Infinix"
-product_base: "X1301"
-model: "Infinix XPAD GT (SD888)"
-android_version: "14"
-regions:
-  OP:
-    build_tag: "UKQ1.240826.001"
-    incremental: "251218V74"

@@ -1,6 +1,0 @@
-oem: "Itel"
-product_base: "P661N"
-model: "itel P55 5G"
-android_version: "13"
-regions:
-  GL: "250723V660"

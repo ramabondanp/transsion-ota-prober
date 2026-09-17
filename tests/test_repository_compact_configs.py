@@ -13,8 +13,8 @@ def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
     documents = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in paths]
     configs = [config for path in paths for config in Config.from_yaml(path)]
 
-    assert len(paths) == 114
-    assert len(configs) == 148
+    assert len(paths) == 96
+    assert len(configs) == 129
     assert all(config.region is not None for config in configs)
     assert all(list(document) == [
         "oem", "product_base", "model", "android_version", "regions"
@@ -29,7 +29,7 @@ def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
         for region in document["regions"].values()
         if isinstance(region, dict) and "build_tag" in region
     ]
-    assert build_tag_overrides == ["AQ3A.250226.002", "UKQ1.240826.001"]
+    assert build_tag_overrides == ["AQ3A.250226.002"]
     assert not set(build_tag_overrides) & set(BUILD_TAG_BY_ANDROID.values())
 
     expected_identities = []

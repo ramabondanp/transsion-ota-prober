@@ -34,10 +34,6 @@ sends Telegram notifications.
 ## SPARK SERIES
 
 - TECNO SPARK Go 1 (KL4)
-- TECNO SPARK 20 (KJ5)
-- TECNO SPARK 20 Pro (KJ6)
-- TECNO SPARK 20 Pro+ (KJ7)
-- TECNO SPARK 20 Pro 5G (KJ8)
 - TECNO SPARK 30C (KL5)
 - TECNO SPARK 30 4G (KL6)
 - TECNO SPARK 30 Pro (KL7)
@@ -56,9 +52,6 @@ sends Telegram notifications.
 
 ## POVA SERIES
 
-- TECNO POVA 6 Neo (LI6)
-- TECNO POVA 6 (LI7)
-- TECNO POVA 6 Pro (LI9)
 - TECNO POVA 7 (LJ6)
 - TECNO POVA 7 5G (LJ7)
 - TECNO POVA 7 Pro 5G (LJ8)
@@ -78,29 +71,21 @@ sends Telegram notifications.
 ## ITEL
 
 - itel A80 (A671LC)
-- itel A95 5G / itel ZENO 5G+ (A671N)
-- itel P55 5G (P661N)
 - itel P65 (P671L)
 - itel P70 (P673L)
-- itel RS4 (S666LN)
 - itel S25 (S685LN)
 - itel S25 Ultra (S686LN)
 - itel Super 26 Ultra (S688LN)
-- itel VistaTab 30 Pro (P13001L)
 - itel CITY 200 (C681L)
 
 ## XPAD
 
 - Infinix XPAD (X1101)
 - Infinix XPAD 20 Pro (X1201)
-- Infinix XPAD GT SD888 (X1301)
 - Infinix XPAD 30 Pro (X1103)
 
 ## HOT SERIES
 
-- Infinix HOT 40i (X6528) (X6528B)
-- Infinix HOT 40 (X6836)
-- Infinix HOT 40 Pro (X6837)
 - Infinix HOT 50i (X6531) (X6531B)
 - Infinix HOT 50 5G (X6720B)
 - Infinix HOT 50 Pro+ (X6880)
@@ -116,8 +101,6 @@ sends Telegram notifications.
 
 ## ZERO SERIES
 
-- Infinix ZERO 30 5G (X6731)
-- Infinix ZERO 30 4G (X6731B)
 - Infinix ZERO 40 4G (X6860)
 - Infinix ZERO 40 5G (X6861)
 - Infinix ZERO Flip (X6962)

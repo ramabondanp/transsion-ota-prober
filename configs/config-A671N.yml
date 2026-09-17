@@ -1,6 +1,0 @@
-oem: "Itel"
-product_base: "A671N"
-model: "itel A95 5G / itel ZENO 5G+"
-android_version: "14"
-regions:
-  IN: "250523V548"
