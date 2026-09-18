@@ -4,5 +4,5 @@ model: "Infinix GT 30"
 android_version: "16"
 regions:
   OP: "301500015"
-  IN: "201500013"
-  RU: "201500013"
+  IN: "301500015"
+  RU: "301500015"

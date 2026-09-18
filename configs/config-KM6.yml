@@ -3,4 +3,4 @@ product_base: "KM6"
 model: "TECNO SPARK 40 Pro"
 android_version: "15"
 regions:
-  OP: "180002"
+  OP: "195001"

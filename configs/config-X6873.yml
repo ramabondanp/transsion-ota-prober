@@ -4,9 +4,9 @@ model: "Infinix GT 30 Pro"
 android_version: "16"
 regions:
   OP: "301500018"
-  IN: "201500011"
-  RU: "201500011"
-  TR: "201500011"
+  IN: "301500018"
+  RU: "301500021"
+  TR: "301500018"
   EU:
     android_version: "15"
     incremental: "131015"

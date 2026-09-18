@@ -4,4 +4,4 @@ model: "Infinix NOTE 50s 5G"
 android_version: "16"
 regions:
   OP: "301500017"
-  IN: "201500023"
+  IN: "301500017"

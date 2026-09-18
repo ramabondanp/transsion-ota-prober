@@ -3,4 +3,4 @@ product_base: "KM8n"
 model: "TECNO SPARK 40 5G"
 android_version: "15"
 regions:
-  OP: "180004"
+  OP: "195001"

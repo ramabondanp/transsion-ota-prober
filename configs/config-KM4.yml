@@ -3,4 +3,4 @@ product_base: "KM4"
 model: "TECNO SPARK Go 2"
 android_version: "15"
 regions:
-  OP: "180003"
+  OP: "195002"

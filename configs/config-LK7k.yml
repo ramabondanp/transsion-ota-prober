@@ -3,5 +3,5 @@ product_base: "LK7k"
 model: "TECNO POVA Curve 2 5G"
 android_version: "16"
 regions:
-  OP: "301400026"
-  IN: "301400026"
+  OP: "301500034"
+  IN: "301500034"

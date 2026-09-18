@@ -7,5 +7,5 @@ regions:
   EU:
     android_version: "15"
     incremental: "123030"
-  TR: "201500012"
-  RU: "201500012"
+  TR: "301500015"
+  RU: "301500015"

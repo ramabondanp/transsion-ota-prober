@@ -1,6 +1,6 @@
 oem: "TECNO"
 product_base: "CL8"
 model: "TECNO CAMON 30 Pro 5G"
-android_version: "15"
+android_version: "16"
 regions:
-  OP: "185003"
+  OP: "301550018"
