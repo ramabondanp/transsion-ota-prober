@@ -37,6 +37,10 @@ def test_help_does_not_seed_configs(monkeypatch):
 
 
 def test_direct_fingerprint_does_not_seed_configs(monkeypatch):
+    # A notifying run requires the Telegram env vars; --fp still exercises
+    # config-path resolution, which is what this test asserts.
+    monkeypatch.setenv("bot_token", "test-token")
+    monkeypatch.setenv("chat_id", "test-chat")
     ctx = SimpleNamespace(stop_event=threading.Event(), stop=lambda: None)
     monkeypatch.setattr(cli, "active_config_dir", _fail_seed)
     monkeypatch.setattr(

@@ -300,6 +300,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | CRLF descriptions showed literal `\x0d` | `description.py` | Normalize CRLF before parsing; continue escaping lone carriage returns |
 | Closed claim handle raised `ValueError` during cleanup | `fingerprints.py` | `release_processed_claim()` checks `claim.closed` and catches `ValueError` |
 | Script timeout flags accepted `nan`/`inf` | `scripts/fetch_spys.py`, `scripts/check_update_proxy.py` | `_positive_float()` requires a finite value |
+| Missing Telegram env silently skipped notifications | `cli.py` | `_require_telegram_env()` runs in `_validate_args` after argument-shape checks: a default (notifying) run without `bot_token`/`chat_id` exits 2 before config seeding, lock pruning, or network work. `--dry-run`/`--skip-telegram`/`--register-update`/`--update-incremental`/`--gen-fp` bypass. Previously only a lazy warning fired inside `create_notifier()`, and the run continued: `_apply_config_update` still rewrote the YAML while `_dispatch_or_buffer_notification` (the only path that commits a title) was skipped, so the update was neither announced nor recorded |
 
 ## Running
 
@@ -322,7 +323,11 @@ checkota -c X6873 --debug                          # save check-in response
 
 Env vars:
 
-+ `bot_token`, `chat_id` — Telegram bot token + target chat
++ `bot_token`, `chat_id` — Telegram bot token + target chat. Notifications are the
+  default: a notifying run fails fast (`parser.error`, exit 2) before any config
+  seeding, lock pruning, or network work when either is missing. Only `--dry-run`,
+  `--skip-telegram`, `--register-update`, `--update-incremental`, and `--gen-fp`
+  bypass the check (`_require_telegram_env` in `cli.py`).
 + `telegraph_token` — Telegraph API token (long descriptions)
 + `CHECKOTA_VENDOR_DIR` — override vendored `google-ota-prober` path
   (default `<repo>/vendor/google-ota-prober`; needed for relocated/wheel installs)

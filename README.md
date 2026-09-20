@@ -269,7 +269,10 @@ instead. Back up locally customized configs before rewriting them.
 
 Telegram env vars:
 
-- `bot_token`, `chat_id` — required for Telegram notifications
+- `bot_token`, `chat_id` — required for Telegram notifications. Notifications are the
+  default, so a run without them **fails fast** (exit 2, before any config seeding or
+  network work) unless the invocation opts out with `--dry-run`, `--skip-telegram`,
+  `--register-update`, `--update-incremental`, or `--gen-fp`.
 - `telegraph_token` — optional; only needed to create Telegra.ph pages for very long
   changelogs (when the message exceeds 4090 characters)
 

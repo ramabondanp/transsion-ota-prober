@@ -19,6 +19,9 @@ from checkota.runtime import RunContext
 def test_cli_delivers_completed_rewrite(
     tmp_path, monkeypatch, selection, stop_after_rewrite
 ):
+    # Default (notifying) runs require the Telegram env vars before any work.
+    monkeypatch.setenv("bot_token", "test-token")
+    monkeypatch.setenv("chat_id", "test-chat")
     configs = tmp_path / "configs"
     configs.mkdir()
     config_path = configs / "config-X6873.yml"

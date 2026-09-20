@@ -4,6 +4,7 @@ top-level run orchestration (sequential and parallel)."""
 import argparse
 import io
 import math
+import os
 import signal
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -151,6 +152,54 @@ def resolve_config_dir(value: Path) -> Path:
     return value
 
 
+# Invocations that never send Telegram notifications; a notifying run (the
+# default) requires the Telegram env vars to be present before any work starts.
+_TELEGRAM_BYPASS_FLAGS = (
+    "--dry-run",
+    "--skip-telegram",
+    "--register-update",
+    "--update-incremental",
+    "--gen-fp",
+)
+
+
+def _telegram_notifications_enabled(args: argparse.Namespace) -> bool:
+    """Notifications are on by default; only explicit opt-outs disable them.
+
+    ``--update-incremental`` and ``--gen-fp`` are also folded into
+    ``skip_telegram`` by ``_validate_args``, but are checked explicitly so the
+    predicate stays correct when validation is stubbed out in tests.
+    """
+    return not (
+        args.dry_run
+        or args.skip_telegram
+        or args.register_update
+        or args.update_incremental
+        or args.gen_fp
+    )
+
+
+def _require_telegram_env(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """Fail fast when a notifying run lacks the Telegram env vars.
+
+    Runs after argument-shape validation and before config path resolution, so
+    a misconfigured invocation exits before config seeding, lock pruning, or
+    any network work. The bypass flags are named in the error so the failure
+    is actionable.
+    """
+    if not _telegram_notifications_enabled(args):
+        return
+    missing = [name for name in ("bot_token", "chat_id") if not os.environ.get(name)]
+    if missing:
+        parser.error(
+            "Telegram notifications are enabled by default, but these env vars "
+            f"are not set: {', '.join(missing)}. Set them, or run without "
+            f"notifications using one of: {', '.join(_TELEGRAM_BYPASS_FLAGS)}"
+        )
+
+
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     args.zip_proxy = getattr(args, "fetch_zip_proxy", False)
     if not math.isfinite(args.timeout) or args.timeout < 0:
@@ -171,6 +220,7 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("Either --fp or --config/--config-dir is required.")
     if args.config and args.config.is_dir():
         parser.error("--config expects a file. Use --config-dir for directories.")
+    _require_telegram_env(parser, args)
     if args.config:
         args.config = resolve_config_path(args.config)
 
