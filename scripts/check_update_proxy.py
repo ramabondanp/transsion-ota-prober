@@ -22,6 +22,7 @@ Requires: requests (and requests[socks] when testing SOCKS proxies)
 import argparse
 import concurrent.futures
 import contextlib
+import json
 import math
 import os
 import re
@@ -49,6 +50,14 @@ COUNTRY_CHECK_URL: Final = "https://api.country.is/"
 COUNTRY_CHECK_TIMEOUT = 12.0
 PROXMINT_PROXY_TEMPLATE_ENV: Final = "PROXMINT_PROXY_TEMPLATE"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+COUNTRY_CODE_RE: Final = re.compile(r"[A-Z]{2}")
+# Hex digits, dots, and colons only -- accepts IPv4/IPv6 while rejecting the
+# control characters and newlines that would forge log lines.
+COUNTRY_IP_RE: Final = re.compile(r"[0-9A-Fa-f:.]{2,45}")
+# api.country.is replies with a tiny JSON object; a hostile exit node must not
+# be able to force an unbounded body into memory.
+MAX_COUNTRY_RESPONSE_BYTES: Final = 64 * 1024
+COUNTRY_RESPONSE_CHUNK: Final = 8192
 
 OUTCOME_UPDATE = "update"
 OUTCOME_NO_UPDATE = "no_update"
@@ -195,34 +204,72 @@ def _proxy_url(address: str, proxy_type: str) -> str:
     return f"{scheme}://{address}"
 
 
+def _redact_error_detail(detail: str, address: str) -> str:
+    """Scrub proxy credentials that requests may embed in an exception message.
+
+    ``requests`` quotes the full proxy URL in ``InvalidURL``/``ProxyError``
+    messages, so an unredacted detail would print the paid proxy password.
+    """
+    if "@" not in address:
+        return detail
+
+    userinfo, _separator, _host = address.rpartition("@")
+    detail = detail.replace(address, _redact_proxy_address(address))
+    _username, _separator, password = userinfo.partition(":")
+    if password:
+        # Backstop for messages that quote only the credentials portion.
+        detail = detail.replace(password, "***")
+    return detail
+
+
 def verify_proxy_country(
     expected_country: str,
     address: str,
     proxy_type: str,
     timeout: float = COUNTRY_CHECK_TIMEOUT,
 ) -> CountryCheck:
-    """Verify the proxy's apparent country through a public IP lookup."""
+    """Verify the proxy's apparent country through a public IP lookup.
+
+    Never raises: any failure is reported as a non-matching ``CountryCheck``
+    with the proxy credentials scrubbed from ``detail``.
+    """
+    expected = expected_country.upper()
     proxy_url = _proxy_url(address, proxy_type)
+    proxies = {"http": proxy_url, "https": proxy_url}
     session = requests.Session()
     session.trust_env = False
     try:
         response = session.get(
             COUNTRY_CHECK_URL,
-            proxies={"http": proxy_url, "https": proxy_url},
+            proxies=proxies,
             timeout=timeout,
+            stream=True,
         )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=COUNTRY_RESPONSE_CHUNK):
+                total += len(chunk)
+                if total > MAX_COUNTRY_RESPONSE_BYTES:
+                    raise ValueError("country lookup response too large")
+                chunks.append(chunk)
+        finally:
+            response.close()
+
+        payload = json.loads(b"".join(chunks))
         if not isinstance(payload, dict):
             raise TypeError("invalid country lookup response")
 
         actual = str(payload.get("country", "")).upper()
-        ip = str(payload.get("ip", ""))
-        if re.fullmatch(r"[A-Z]{2}", actual) is None:
+        if COUNTRY_CODE_RE.fullmatch(actual) is None:
             raise ValueError("country lookup returned no country code")
-        return CountryCheck(actual == expected_country.upper(), actual, ip, "")
+        ip = str(payload.get("ip", ""))
+        if COUNTRY_IP_RE.fullmatch(ip) is None:
+            ip = ""
+        return CountryCheck(actual == expected, actual, ip, "")
     except (OSError, requests.RequestException, TypeError, ValueError) as exc:
-        return CountryCheck(False, "", "", str(exc))
+        return CountryCheck(False, "", "", _redact_error_detail(str(exc), address))
     finally:
         session.close()
 
@@ -231,7 +278,11 @@ def _verify_paid_proxies(
     proxies: list[tuple[str, str, str]], max_workers: int
 ) -> list[CountryCheck]:
     """Verify paid proxies concurrently and return results in input order."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    if not proxies:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, max_workers)
+    ) as executor:
         futures = [
             executor.submit(verify_proxy_country, country, address, proxy_type)
             for country, address, proxy_type in proxies

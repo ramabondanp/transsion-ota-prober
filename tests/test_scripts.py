@@ -154,6 +154,41 @@ def test_proxy_url_maps_socks_and_http():
     assert check_update_proxy._proxy_url("h:1", "HTTPS") == "http://h:1"
 
 
+def test_redact_error_detail_scrubs_credentials():
+    address = "user__cr.ke:s3cr3t@gw.example:8080"
+    # requests quotes the whole proxy URL in InvalidURL/ProxyError messages.
+    detail = check_update_proxy._redact_error_detail(
+        f"Failed to parse: http://{address}", address
+    )
+    assert "s3cr3t" not in detail
+    assert "*__cr.ke:***@gw.example:8080" in detail
+
+    # Backstop for messages that quote only the credentials portion.
+    partial = check_update_proxy._redact_error_detail("bad s3cr3t here", address)
+    assert "s3cr3t" not in partial
+
+    # Credential-free addresses are passed through untouched.
+    assert (
+        check_update_proxy._redact_error_detail("plain failure", "plainhost:80")
+        == "plain failure"
+    )
+
+
+def test_verify_proxy_country_scrubs_malformed_proxy_credentials():
+    # A malformed endpoint makes requests embed the password in the error text;
+    # verify_proxy_country must never surface it in the returned detail.
+    result = check_update_proxy.verify_proxy_country(
+        "KE", "user__cr.ke:s3cr3t@gw.example:notaport", "PAID", timeout=1.0
+    )
+    assert result.matches is False
+    assert result.actual_country == ""
+    assert "s3cr3t" not in result.detail
+
+
+def test_verify_paid_proxies_handles_empty_input():
+    assert check_update_proxy._verify_paid_proxies([], 4) == []
+
+
 def test_clean_output_and_summarize_output():
     assert check_update_proxy._clean_output_line("\x1b[91m✗\x1b[0m boom") == "✗ boom"
 
