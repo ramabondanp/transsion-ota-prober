@@ -663,6 +663,18 @@ def _direct_key_line(line: str, key: str, indent: int | None = None) -> bool:
     )
 
 
+def _starts_scalar_at(text: str, index: int) -> bool:
+    """Return whether a quote at ``index`` can open a YAML scalar.
+
+    A quote is a scalar delimiter only where a node can start: at the first
+    non-space character of the line, or directly after a node indicator. An
+    apostrophe inside a plain scalar (``OLD's``) is ordinary content; treating
+    it as an opening quote used to swallow a trailing ``# comment``.
+    """
+    before = text[:index].rstrip(" \t")
+    return not before or before[-1] in ":,?-[{"
+
+
 def _comment_start(text: str) -> int | None:
     quote: str | None = None
     index = 0
@@ -685,7 +697,7 @@ def _comment_start(text: str) -> int | None:
             index += 1
             continue
 
-        if char in "'\"":
+        if char in "'\"" and _starts_scalar_at(text, index):
             quote = char
         elif char == "#" and (index == 0 or text[index - 1].isspace()):
             return index

@@ -796,3 +796,65 @@ regions:
         _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
     )
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        "OP: OLD's # KEEPME",
+        'OP: ab"cd # KEEPME',
+        "OP: OLD's # don't change",
+    ],
+)
+def test_inline_comment_survives_unbalanced_quote_in_plain_scalar(
+    tmp_path, original
+):
+    """A quote inside a plain scalar must not hide the trailing comment."""
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        f"""\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  {original}
+  IN: "UNCHANGED"
+""",
+    )
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path, cfg, _target(cfg, "16", "BP2A.250605.031.A3", "NEWINC")
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert '  OP: "NEWINC" # KEEPME' in text or '  OP: "NEWINC" # don\'t change' in text
+    assert '  IN: "UNCHANGED"' in text
+
+
+def test_quoted_scalar_keeps_hash_and_comment(tmp_path):
+    """Quoted values must still shield '#' and still expose a real comment."""
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  OP: "a # b" # keep me
+  IN: "UNCHANGED"
+""",
+    )
+    cfg = _config(path)
+
+    assert update_config_from_fingerprint(
+        path, cfg, _target(cfg, "16", "BP2A.250605.031.A3", "NEW#INC")
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert '  OP: "NEW#INC" # keep me' in text
+    assert yaml.safe_load(text)["regions"]["OP"] == "NEW#INC"
