@@ -158,7 +158,10 @@ class Config:
             raise FileNotFoundError(f"Config file not found: {file}")
 
         try:
-            with open(file, encoding="utf-8", newline="") as handle:
+            # utf-8-sig: a leading BOM is valid for editors and PyYAML skips it,
+            # but the line/column arithmetic in the layout validator does not --
+            # a BOM'd config would be rejected as an unsupported key layout.
+            with open(file, encoding="utf-8-sig", newline="") as handle:
                 raw_text = handle.read()
         except OSError as exc:
             raise ValueError(f"Could not read config {file}: {exc}") from exc
@@ -786,7 +789,7 @@ def _update_config_from_fingerprint(
     }
 
     try:
-        with config_path.open("r", encoding="utf-8", newline="") as handle:
+        with config_path.open("r", encoding="utf-8-sig", newline="") as handle:
             raw_text = handle.read()
     except OSError as exc:
         Log.w(f"Failed to read config file {config_path}: {exc}")

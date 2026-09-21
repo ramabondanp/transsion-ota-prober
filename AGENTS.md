@@ -306,6 +306,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Telegraph URL could drop the whole notification | `telegram.py` | The "Read full changelogs" URL is escaped into its `href` and rejected when it contains whitespace/controls (`_telegraph_link_suffix`), so it can no longer unbalance the tag stream. A final fit that still fails now degrades to escaped plain text (`_fallback_plain_text`) instead of returning False, and an unfittable description degrades the same way rather than collapsing to the bare link |
 | Unterminated last line merged two processed titles | `fingerprints.py` | `_append_title()` terminates a dangling final line before appending: `"Title B"` + `"Title C"` no longer becomes `"Title BTitle C"`, so the older title is still deduped and no bogus combined title is persisted (the trim rewrite inherits the normalized list) |
 | Inline comment deleted when a plain scalar held a quote | `manager.py` | `_comment_start()` enters quote mode only where a YAML scalar can start (`_starts_scalar_at`: line start or after a node indicator). An apostrophe inside a plain scalar (`OP: OLD's # keep`) no longer swallows the trailing comment when the value is rewritten |
+| UTF-8 BOM made a valid config unloadable | `manager.py` | Config reads use `encoding="utf-8-sig"`. PyYAML skips the BOM but the layout validator's line/column arithmetic did not, so a BOM'd config failed with a misleading "unsupported mapping key source layout" error; a rewrite now also drops the BOM |
 
 ## Running
 

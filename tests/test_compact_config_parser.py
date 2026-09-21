@@ -855,3 +855,34 @@ build_tag: "BP2A.250605.031.A3"
 incremental: "I"
 """,
         )
+
+
+def test_utf8_bom_config_loads_and_updates(tmp_path):
+    """A BOM is valid YAML; the layout validator must not reject the offset."""
+    from checkota.manager import update_config_from_fingerprint
+
+    path = tmp_path / "config-X6873.yml"
+    text = (
+        'oem: "Infinix"\n'
+        'product_base: "X6873"\n'
+        'model: "Infinix GT 30 Pro"\n'
+        'android_version: "16"\n'
+        "regions:\n"
+        '  OP: "201500011"\n'
+        '  IN: "201500012"\n'
+    )
+    path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+
+    configs = Config.from_yaml(path)
+    assert [c.region for c in configs] == ["OP", "IN"]
+
+    op = configs[0]
+    target = (
+        "Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/"
+        "201600001:user/release-keys"
+    )
+    assert update_config_from_fingerprint(path, op, target)
+
+    rewritten = path.read_bytes()
+    assert not rewritten.startswith(b"\xef\xbb\xbf")
+    assert Config.from_yaml(path)[0].incremental == "201600001"
