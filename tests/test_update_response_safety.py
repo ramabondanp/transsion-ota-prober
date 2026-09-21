@@ -92,3 +92,36 @@ def test_control_only_description_becomes_none():
     parsed = _parse_with([_setting(b"update_description", b"\x1b[2J\x1b[31m")])
 
     assert parsed["description"] is None
+
+
+def test_url_allowlist_rejects_empty_port_and_dot_segments():
+    from checkota.constants import (
+        CHECKIN_API_HOST,
+        OTA_URL_PATH_PREFIXES,
+        ZIP_REDIRECT_ALLOWED_HOSTS,
+        ZIP_REDIRECT_PATH_PREFIXES,
+    )
+    from checkota.validation import is_google_https_url
+
+    ota = {
+        "allowed_hosts": (CHECKIN_API_HOST,),
+        "path_prefixes": OTA_URL_PATH_PREFIXES,
+    }
+    redirect = {
+        "allowed_hosts": ZIP_REDIRECT_ALLOWED_HOSTS,
+        "path_prefixes": ZIP_REDIRECT_PATH_PREFIXES,
+    }
+
+    assert is_google_https_url(
+        "https://android.googleapis.com/packages/ota/x.zip", **ota
+    )
+    assert not is_google_https_url(
+        "https://android.googleapis.com:/packages/ota/x.zip", **ota
+    )
+    for escaped in (
+        "https://android.googleapis.com/packages/ota/../secret",
+        "https://android.googleapis.com/packages/ota/%2e%2e/secret",
+        "https://redirector.gvt1.com/packages/../../x.zip",
+    ):
+        assert not is_google_https_url(escaped, **ota)
+        assert not is_google_https_url(escaped, **redirect)

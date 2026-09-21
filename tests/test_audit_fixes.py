@@ -407,3 +407,39 @@ def test_trim_terminates_unterminated_last_line(tmp_path, monkeypatch):
 
     assert load_processed_titles(path) == {"T2", "T3", "T4"}
     assert path.read_text(encoding="utf-8").endswith("T4\n")
+
+
+def test_skip_telegram_records_the_advanced_update(tmp_path, monkeypatch):
+    """An advanced config must not leave the update unrecorded as well."""
+    from checkota import processor
+
+    ctx = _ctx(tmp_path)
+    update = _update()
+    monkeypatch.setattr(
+        processor, "update_config_from_fingerprint", lambda *a, **k: True
+    )
+
+    with patch("checkota.processor.create_notifier", return_value=None):
+        rc = apply_update_actions(ctx, update, _args(skip_telegram=True))
+
+    assert rc == 0
+    assert update.title in ctx.processed_titles
+    assert update.title in ctx.processed_path.read_text(encoding="utf-8")
+
+
+def test_dry_run_without_notifier_records_nothing(tmp_path, monkeypatch):
+    from checkota import processor
+
+    ctx = _ctx(tmp_path)
+    update = _update()
+    monkeypatch.setattr(
+        processor, "update_config_from_fingerprint", lambda *a, **k: True
+    )
+
+    with patch("checkota.processor.create_notifier", return_value=None):
+        rc = apply_update_actions(
+            ctx, update, _args(skip_telegram=True, dry_run=True)
+        )
+
+    assert rc == 0
+    assert not ctx.processed_path.exists()

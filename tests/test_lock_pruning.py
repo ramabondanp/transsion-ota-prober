@@ -148,3 +148,16 @@ def test_telegram_transport_error_does_not_leak_token(capsys):
     logged = capsys.readouterr().out
     assert token not in logged
     assert "***" in logged
+
+
+def test_load_processed_titles_does_not_create_state(tmp_path):
+    """A pure read must not materialize the database lock file."""
+    from checkota.fingerprints import load_processed_titles
+
+    path = tmp_path / "processed_updates.txt"
+
+    assert load_processed_titles(path) == set()
+    assert list(tmp_path.iterdir()) == []
+
+    path.write_text("T1\n", encoding="utf-8")
+    assert load_processed_titles(path) == {"T1"}

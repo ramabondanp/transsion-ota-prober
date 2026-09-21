@@ -2,6 +2,7 @@
 
 import io
 import struct
+import warnings
 import zipfile
 from typing import cast
 from unittest.mock import MagicMock
@@ -405,4 +406,29 @@ def test_fetch_member_tolerates_alignment_padding_in_extra_field():
             "https://android.googleapis.com/packages/ota/ota.zip", member, session=session
         )
         == content
+    )
+
+
+def test_duplicate_member_names_use_the_last_record():
+    """zipfile, unzip and Java all read the last duplicate; match them."""
+    member = "META-INF/com/android/metadata"
+    first = b"post-build=decoy/one/device:16/B/1:user/release-keys\n"
+    last = b"post-build=Infinix/X6873-OP/Infinix-X6873:16/B/2:user/release-keys\n"
+
+    buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        # zipfile warns about the intentional duplicate name.
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(zipfile.ZipInfo(member), first)
+            archive.writestr(zipfile.ZipInfo(member), last)
+    archive_bytes = buffer.getvalue()
+
+    assert zipfile.ZipFile(io.BytesIO(archive_bytes)).read(member) == last
+    session = _RangeSession(archive_bytes)
+    assert (
+        fetch_zip_member(
+            "https://android.googleapis.com/packages/ota/ota.zip", member, session=session
+        )
+        == last
     )

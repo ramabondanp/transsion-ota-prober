@@ -5,7 +5,7 @@ URL acceptance rules live here so the previously duplicated control-char scans
 and HTTPS/host/path checks cannot drift apart on this security-critical path.
 """
 
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 def has_control_chars(value: str) -> bool:
@@ -62,9 +62,25 @@ def is_google_https_url(
             and parsed.scheme == "https"
             and _host_allowed(parsed.hostname or "", allowed_hosts)
             and parsed.port is None
+            # "https://host:/path" has no port, so .port is None, but the empty
+            # port is still an explicit (and non-canonical) netloc form.
+            and not parsed.netloc.endswith(":")
             and not parsed.username
             and not parsed.password
+            and not _has_dot_segment(parsed.path)
             and parsed.path.startswith(path_prefixes)
         )
     except ValueError:
         return False
+
+
+def _has_dot_segment(path: str) -> bool:
+    """True when any path segment is "." or ".." (also percent-encoded).
+
+    The prefix check runs on the raw path, so an unnormalized
+    "/packages/ota/../other" would pass it while the server resolves it to
+    "/packages/other": reject dot segments instead of relying on normalization.
+    """
+    return any(
+        unquote(segment) in (".", "..") for segment in path.split("/")
+    )

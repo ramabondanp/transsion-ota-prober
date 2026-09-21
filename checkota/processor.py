@@ -675,6 +675,15 @@ def apply_update_actions(
             if claimed and dispatch_result == 130:
                 _release_claimed_update(ctx, update.title)
             return dispatch_result
+    elif update.is_new_update and not getattr(args, "dry_run", False):
+        # The config was just advanced but nothing will announce this update
+        # (--skip-telegram, or Telegram setup unavailable). Record the title so
+        # the update is not left neither announced nor recorded: a later run
+        # cannot re-discover it from a config that already matches the target.
+        if not save_processed_update(ctx, update.title):
+            Log.e("Failed to record the update title; no notification was sent.")
+            return 1
+        Log.i("Notifications disabled; update title recorded without notifying.")
 
     Log.s("Update check completed successfully")
     return 0

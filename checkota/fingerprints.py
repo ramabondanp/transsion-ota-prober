@@ -201,6 +201,11 @@ def prune_title_locks(
 
 
 def load_processed_titles(path: Path) -> set[str]:
+    if not path.exists():
+        # A pure read must not create state: _locked_file would materialize the
+        # database lock beside a file that does not exist yet, so even a dry run
+        # wrote into the state directory.
+        return set()
     try:
         # Acquire the stable lock before checking/opening the data file so a
         # concurrent first writer or trim cannot change the path between the

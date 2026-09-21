@@ -339,3 +339,17 @@ def test_unfittable_markup_degrades_to_plain_text_instead_of_dropping(monkeypatc
     assert calls["n"] == 2
     assert len(session.posts) == 1
     assert "&lt;b&gt;Alert&lt;/b&gt; body" in session.posts[-1][1]["text"]
+
+
+def test_truncated_description_prefers_a_sentence_boundary():
+    """The documented truncation cuts at a sentence, not mid-word."""
+    from checkota.message_text import rendered_length
+
+    session = _Session()
+    notifier = TgNotify("token", "chat", "", session=session)  # type: ignore[arg-type]
+
+    out = notifier._truncate_desc("Fix charging protocol. " * 200, max_len=120)
+
+    assert rendered_length(out) <= 120
+    assert out.endswith("Fix charging protocol.")
+    assert "..." not in out

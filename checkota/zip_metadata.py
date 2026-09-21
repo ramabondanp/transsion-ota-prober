@@ -482,6 +482,11 @@ def _find_entry(
     """
     if len(cd) > MAX_CENTRAL_DIRECTORY_BYTES:
         raise RemoteZipFetchError("Central directory exceeds its size cap.")
+    # Duplicate names are resolved like zipfile/Info-ZIP/Java: the LAST matching
+    # central-directory record wins. Remembering the raw fields and validating
+    # them after the scan keeps a malformed or oversized shadowed record from
+    # failing an archive whose effective entry is fine.
+    chosen: tuple[int, bytes, int, int, int, int, int, int, int] | None = None
     pos = 0
     n = len(cd)
     while pos < n:
@@ -508,35 +513,56 @@ def _find_entry(
         name_start = pos + 46
         extra_start = name_start + name_len
         name = cd[name_start:extra_start]
-        if name != target_name:
-            pos = record_end
-            continue
-
-        # Deep validation only for the entry we are about to fetch.
-        extra = cd[extra_start : extra_start + extra_len]
-        list(_extra_fields(extra))
-        uncomp_size, comp_size, local_offset, disk_start = _zip64_fixup(
-            extra, uncomp_size, comp_size, local_offset, disk_start
-        )
-        if disk_start != 0:
-            raise RemoteZipFetchError(
-                "Multi-disk central-directory entries are unsupported."
+        if name == target_name:
+            chosen = (
+                method,
+                cd[extra_start : extra_start + extra_len],
+                uncomp_size,
+                comp_size,
+                local_offset,
+                disk_start,
+                name_len,
+                extra_len,
+                crc32,
             )
-        if comp_size > MAX_COMPRESSED_METADATA_BYTES:
-            raise RemoteZipFetchError("Compressed metadata exceeds its size cap.")
-        if uncomp_size > MAX_DECOMPRESSED_METADATA_BYTES:
-            raise RemoteZipFetchError("Decompressed metadata exceeds its size cap.")
-        return (
-            method,
-            uncomp_size,
-            comp_size,
-            local_offset,
-            name_len,
-            extra_len,
-            crc32,
-        )
+        pos = record_end
 
-    raise RemoteZipFetchError("Target entry not found in central directory.")
+    if chosen is None:
+        raise RemoteZipFetchError("Target entry not found in central directory.")
+
+    # Deep validation only for the entry we are about to fetch.
+    (
+        method,
+        extra,
+        uncomp_size,
+        comp_size,
+        local_offset,
+        disk_start,
+        name_len,
+        extra_len,
+        crc32,
+    ) = chosen
+    list(_extra_fields(extra))
+    uncomp_size, comp_size, local_offset, disk_start = _zip64_fixup(
+        extra, uncomp_size, comp_size, local_offset, disk_start
+    )
+    if disk_start != 0:
+        raise RemoteZipFetchError(
+            "Multi-disk central-directory entries are unsupported."
+        )
+    if comp_size > MAX_COMPRESSED_METADATA_BYTES:
+        raise RemoteZipFetchError("Compressed metadata exceeds its size cap.")
+    if uncomp_size > MAX_DECOMPRESSED_METADATA_BYTES:
+        raise RemoteZipFetchError("Decompressed metadata exceeds its size cap.")
+    return (
+        method,
+        uncomp_size,
+        comp_size,
+        local_offset,
+        name_len,
+        extra_len,
+        crc32,
+    )
 
 
 def _validate_local_header(

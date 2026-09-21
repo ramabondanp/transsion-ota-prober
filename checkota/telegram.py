@@ -9,6 +9,7 @@ import requests
 from checkota import message_text
 from checkota.constants import (
     DESC_SECTION_RE,
+    SENTENCE_BOUNDARY_RE,
     TELEGRAM_API_TIMEOUT_SECONDS,
     TELEGRAPH_API_TIMEOUT_SECONDS,
     TELEGRAPH_API_URL,
@@ -201,6 +202,24 @@ class TgNotify:
             f' <a href="{html.escape(url, quote=True)}">Read full changelogs</a>'
         )
 
+    @staticmethod
+    def _prefer_sentence_boundary(text: str, max_len: int) -> str:
+        """Trim back to the last sentence break when that keeps most of the text.
+
+        The token-granular fit cuts mid-word. Sentences are the readable unit for
+        a changelog, so prefer the last complete sentence as long as at least
+        half of the fitted text survives; a cut that lands inside a tag is
+        rejected by re-canonicalization and the original text is kept.
+        """
+        boundaries = list(SENTENCE_BOUNDARY_RE.finditer(text))
+        if not boundaries:
+            return text
+        candidate = text[: boundaries[-1].end()].rstrip()
+        if not candidate or rendered_length(candidate) * 2 < rendered_length(text):
+            return text
+        refitted = fit_telegram_html(candidate, max_len)
+        return refitted if refitted is not None else text
+
     def _truncate_desc(
         self, desc: str, max_len: int | None = None, telegraph_url: str | None = None
     ) -> str:
@@ -222,7 +241,7 @@ class TgNotify:
                 truncated = fit_telegram_html(plain_desc, effective_max_len)
         if truncated is None:
             return link_suffix.lstrip()
-        return truncated + link_suffix
+        return self._prefer_sentence_boundary(truncated, effective_max_len) + link_suffix
 
     def send(
         self,

@@ -166,8 +166,9 @@ Same two-stage approach as Telegram:
 ### Notifications & Truncation
 
 + Telegram limit 4096; code uses `MAX_LEN = 4090`.
-+ Over limit: description section found via `DESC_SECTION_RE`, truncated at sentence/para
-  boundary, "Read full changelogs" Telegraph link appended.
++ Over limit: description section found via `DESC_SECTION_RE`, truncated at a sentence
+  boundary when that keeps at least half of the fitted text (token-granular cut otherwise),
+  "Read full changelogs" Telegraph link appended.
 + `DESC_SECTION_RE` captures `<b>Title:</b>` → description → `\n\n?<b>Size:</b>`. Second
   newline optional (`\n\n?`) since sanitization may collapse the blank line.
 
@@ -176,7 +177,8 @@ Same two-stage approach as Telegram:
 + `_is_source_checkout()` (import-time): pyproject.toml + repo configs + vendor dir (or a
   valid `CHECKOTA_VENDOR_DIR` override) ⇒ source mode. Everything else is wheel mode.
 + Source mode: configs/state stay repository-local; legacy CWD fallback for an existing
-  `processed_updates.txt` is preserved.
+  `processed_updates.txt` is preserved. Reading the dedup state never creates it: a
+  missing `processed_updates.txt` short-circuits before the database lock is opened.
 + Wheel mode: bundled defaults are seeded lazily to `$XDG_CONFIG_HOME/checkota/configs`
   (relative XDG values ignored → home fallback) via copy-once publication
   (`_publish_if_missing`: write + fsync a private temporary file → hardlink, or an
@@ -310,6 +312,11 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Inline comment deleted when a plain scalar held a quote | `manager.py` | `_comment_start()` enters quote mode only where a YAML scalar can start (`_starts_scalar_at`: line start or after a node indicator). An apostrophe inside a plain scalar (`OP: OLD's # keep`) no longer swallows the trailing comment when the value is rewritten |
 | UTF-8 BOM made a valid config unloadable | `manager.py` | Config reads use `encoding="utf-8-sig"`. PyYAML skips the BOM but the layout validator's line/column arithmetic did not, so a BOM'd config failed with a misleading "unsupported mapping key source layout" error; a rewrite now also drops the BOM |
 | Control bytes / unbounded size in OTA descriptions | `update_checker.py`, `processor.py` | `_safe_description()` caps the body at 64 KiB and removes ANSI CSI sequences plus C0/C1 controls (tab/newline/CR survive); the `--dry-run --fp` terminal fallback prints `sanitize_log_text(desc)` instead of the raw string; a response without `update_description` now yields the "No description" placeholder instead of a literal `None` body |
+| A read of the dedup state created the lock file | `fingerprints.py` | `load_processed_titles()` returns early when the data file is absent, so a dry run (or any read) no longer materializes `<path>.db.lock` in the state directory |
+| URL allowlist accepted empty ports and dot segments | `validation.py` | `is_google_https_url()` also rejects a netloc ending in ":" (an explicit empty port) and any "." / ".." path segment, including percent-encoded ones (`_has_dot_segment`), instead of trusting the raw prefix match |
+| Duplicate ZIP member names resolved to the first record | `zip_metadata.py` | `_find_entry()` keeps scanning and uses the LAST matching central-directory record, matching zipfile/unzip/Java; deep validation and size caps now apply to the chosen record, so a shadowed decoy cannot fail the fetch |
+| Documented sentence-boundary truncation was never implemented | `telegram.py` | `_prefer_sentence_boundary()` uses `SENTENCE_BOUNDARY_RE`: the fitted description trims back to its last complete sentence when at least half the text survives, and keeps the token-granular cut when the boundary would land inside a tag or drop too much |
+| `--skip-telegram` advanced configs without recording the update | `processor.py` | `apply_update_actions()` records the title when the config was updated but no notifier exists, so the update is not left neither announced nor recorded; `--dry-run` still writes nothing |
 | Deep/unclosed HTML lists made terminal rendering quadratic | `description.py` | `_refresh_indent()` derives the indent from the open-list depth and caps it at `_MAX_LIST_INDENT` (16). Nesting is still tracked in full so end tags pair correctly, but the per-line `" " * indent` prefix is bounded: a hostile description could otherwise expand a few kilobytes into hundreds of megabytes |
 
 ## Running
@@ -338,6 +345,9 @@ Env vars:
   seeding, lock pruning, or network work when either is missing. Only `--dry-run`,
   `--skip-telegram`, `--register-update`, `--update-incremental`, and `--gen-fp`
   bypass the check (`_require_telegram_env` in `cli.py`).
++ A run that advances a config without a notifier (`--skip-telegram`, or Telegram setup
+  unavailable) records the title instead of leaving the update neither announced nor
+  recorded; `--dry-run` still records nothing.
 + `telegraph_token` — Telegraph API token (long descriptions)
 + `CHECKOTA_VENDOR_DIR` — override vendored `google-ota-prober` path
   (default `<repo>/vendor/google-ota-prober`; needed for relocated/wheel installs)
