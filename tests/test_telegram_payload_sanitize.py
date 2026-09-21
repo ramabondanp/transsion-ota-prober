@@ -241,3 +241,101 @@ def test_multiline_content_with_encoded_newline_still_delivered():
     # content around them must survive via the plain-text fallback.
     assert notifier.send("line1&#10;line2", truncate_desc=False) is True
     assert session.posts[-1][1]["text"] == "line1\nline2"
+
+
+def test_telegraph_link_url_is_escaped_into_a_balanced_anchor():
+    """A quote in the Telegraph URL must not unbalance the tag stream.
+
+    The URL is interpolated into an <a href="..."> attribute of a message that
+    is canonicalized as a whole; an unescaped quote made the final fit fail and
+    dropped the notification after the page had already been created.
+    """
+    session = _Session()
+
+    def post(url, json=None, timeout=None, **kwargs):
+        session.posts.append((url, json, timeout))
+        if "createPage" in url:
+            return type(
+                "_TelegraphResponse",
+                (),
+                {
+                    "raise_for_status": lambda self: None,
+                    "json": lambda self: {
+                        "ok": True,
+                        "result": {"url": 'https://telegra.ph/a"b'},
+                    },
+                },
+            )()
+        return _Response()
+
+    session.post = post  # type: ignore[method-assign]
+    notifier = TgNotify("token", "chat", "telegraph", session=session)  # type: ignore[arg-type]
+
+    assert notifier.send(
+        build_notification_message(_update("Fixed things. " * 400)),
+        truncate_desc=True,
+        device_title="D",
+    )
+
+    ends = [url.rsplit("/", 1)[-1] for url, _, _ in session.posts]
+    assert ends == ["createPage", "sendMessage"]
+    text = session.posts[-1][1]["text"]
+    assert 'href="https://telegra.ph/a&quot;b"' in text
+    assert "Read full changelogs" in text
+
+
+def test_unsafe_telegraph_link_is_dropped_and_notification_still_sent():
+    session = _Session()
+
+    def post(url, json=None, timeout=None, **kwargs):
+        session.posts.append((url, json, timeout))
+        if "createPage" in url:
+            return type(
+                "_TelegraphResponse",
+                (),
+                {
+                    "raise_for_status": lambda self: None,
+                    "json": lambda self: {
+                        "ok": True,
+                        "result": {"url": "https://telegra.ph/a\nb"},
+                    },
+                },
+            )()
+        return _Response()
+
+    session.post = post  # type: ignore[method-assign]
+    notifier = TgNotify("token", "chat", "telegraph", session=session)  # type: ignore[arg-type]
+
+    assert notifier.send(
+        build_notification_message(_update("Fixed things. " * 400)),
+        truncate_desc=True,
+        device_title="D",
+    )
+
+    text = session.posts[-1][1]["text"]
+    assert "Read full changelogs" not in text
+    assert "Fixed things." in text
+
+
+def test_unfittable_markup_degrades_to_plain_text_instead_of_dropping(monkeypatch):
+    """The final fit failure must fall back to escaped plain text."""
+    from checkota import telegram
+
+    real_fit = telegram.fit_telegram_html
+    calls = {"n": 0}
+
+    def failing_then_real(value, max_len):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return real_fit(value, max_len)
+
+    monkeypatch.setattr(telegram, "fit_telegram_html", failing_then_real)
+
+    session = _Session()
+    notifier = TgNotify("token", "chat", "", session=session)  # type: ignore[arg-type]
+    assert notifier.send("<b>Alert</b> body", truncate_desc=False)
+
+    assert calls["n"] == 2
+    assert len(session.posts) == 1
+    assert "&lt;b&gt;Alert&lt;/b&gt; body" in session.posts[-1][1]["text"]

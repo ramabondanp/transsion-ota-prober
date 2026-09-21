@@ -20,6 +20,7 @@ from checkota.message_text import (
     rendered_length,
     sanitize_html,
 )
+from checkota.validation import has_unsafe_url_chars
 
 # requests treats None proxy values as "disable proxies" at runtime, but its
 # typeshed annotation only admits str values; normalize the type once here.
@@ -181,23 +182,44 @@ class TgNotify:
             Log.w(f"Failed to create Telegraph page: {exc}")
             return None
 
+    def _telegraph_link_suffix(self, telegraph_url: str | None) -> str:
+        """Build the "Read full changelogs" suffix for a Telegraph URL.
+
+        The URL is interpolated into an HTML attribute of a message that is
+        canonicalized as a whole, so it is escaped and rejected when it carries
+        characters no URL may contain. An unescaped quote (or a newline) used to
+        unbalance the tag stream, which made the final fit fail and dropped the
+        entire notification after the page had already been created.
+        """
+        if not telegraph_url:
+            return ""
+        url = str(telegraph_url)
+        if has_unsafe_url_chars(url):
+            Log.w("Ignoring Telegraph link containing whitespace or control characters.")
+            return ""
+        return (
+            f' <a href="{html.escape(url, quote=True)}">Read full changelogs</a>'
+        )
+
     def _truncate_desc(
         self, desc: str, max_len: int | None = None, telegraph_url: str | None = None
     ) -> str:
         if max_len is None:
             max_len = self.DESC_MAX_LEN
 
-        link_suffix = (
-            f' <a href="{telegraph_url}">Read full changelogs</a>'
-            if telegraph_url
-            else ""
-        )
+        link_suffix = self._telegraph_link_suffix(telegraph_url)
 
         if rendered_length(desc) <= max_len:
             return desc
 
         effective_max_len = max_len - rendered_length(link_suffix)
         truncated = fit_telegram_html(desc, effective_max_len)
+        if truncated is None:
+            # Degrade to escaped plain text rather than discarding the whole
+            # description and keeping only the link.
+            plain_desc = fallback_plain_text(desc)
+            if plain_desc:
+                truncated = fit_telegram_html(plain_desc, effective_max_len)
         if truncated is None:
             return link_suffix.lstrip()
         return truncated + link_suffix
@@ -260,6 +282,15 @@ class TgNotify:
         # The description-specific path is only an optimization. Always apply
         # the final Telegram limit after all sanitization and optional rewriting.
         fitted_msg = fit_telegram_html(msg, self.MAX_LEN)
+        if fitted_msg is None:
+            # Fail safe instead of dropping the notification: the same escaped
+            # plain-text degradation `sanitize_html` uses when markup cannot be
+            # canonicalized. Only a message with nothing sendable is refused.
+            Log.w("Notification HTML could not be fitted; sending as plain text")
+            plain_msg = fallback_plain_text(msg)
+            fitted_msg = (
+                fit_telegram_html(plain_msg, self.MAX_LEN) if plain_msg else None
+            )
         if fitted_msg is None:
             Log.e("Failed to fit Telegram notification within the final length limit")
             return False
