@@ -694,8 +694,17 @@ def _comment_start(text: str) -> int | None:
 
 
 def _quote_yaml_string(value: str) -> str:
+    # `width` disables PyYAML's default 80-column wrapping. The line-oriented
+    # updater requires every scalar on exactly one line, and a wrapped
+    # double-quoted scalar uses `\` continuations that _validate_compact_source_layout
+    # rejects as a multi-line scalar -- the rewrite would then write a config the
+    # next load cannot read.
     return yaml.safe_dump(
-        str(value), default_style='"', default_flow_style=True, allow_unicode=True
+        str(value),
+        default_style='"',
+        default_flow_style=True,
+        allow_unicode=True,
+        width=2**31,
     ).rstrip("\r\n")
 
 
@@ -1317,6 +1326,18 @@ def _write_updated_config(
     if new_text == raw_text:
         Log.i(f"{config_path} already matches target fingerprint values.")
         return True
+
+    # The round-trip parse below proves only that the new text is *readable*.
+    # It must also stay *rewritable*: a layout the updater itself could not edit
+    # again would break the next update (and the next load), so validate it here
+    # and leave the original untouched instead of publishing it.
+    try:
+        _validate_compact_source_layout(new_text, config_path)
+    except (ValueError, yaml.YAMLError) as exc:
+        Log.w(
+            f"Refusing to write an unrewritable config {config_path}: {exc}"
+        )
+        return False
 
     # Write to a temporary file in the same directory, validate it, then
     # atomically replace the original. A failure at any point leaves the

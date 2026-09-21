@@ -71,11 +71,14 @@ class LegacyRegion:
 
 
 def _quoted(value: str) -> str:
+    # `width` disables PyYAML's default 80-column wrapping: the runtime updater
+    # is line-oriented and rejects a scalar continued onto a second line.
     return yaml.safe_dump(
         value,
         default_style='"',
         default_flow_style=True,
         allow_unicode=True,
+        width=2**31,
     ).rstrip("\r\n")
 
 

@@ -301,6 +301,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Closed claim handle raised `ValueError` during cleanup | `fingerprints.py` | `release_processed_claim()` checks `claim.closed` and catches `ValueError` |
 | Script timeout flags accepted `nan`/`inf` | `scripts/fetch_spys.py`, `scripts/check_update_proxy.py` | `_positive_float()` requires a finite value |
 | Missing Telegram env silently skipped notifications | `cli.py` | `_require_telegram_env()` runs in `_validate_args` after argument-shape checks: a default (notifying) run without `bot_token`/`chat_id` exits 2 before config seeding, lock pruning, or network work. `--dry-run`/`--skip-telegram`/`--register-update`/`--update-incremental`/`--gen-fp` bypass. Previously only a lazy warning fired inside `create_notifier()`, and the run continued: `_apply_config_update` still rewrote the YAML while `_dispatch_or_buffer_notification` (the only path that commits a title) was skipped, so the update was neither announced nor recorded |
+| Rewritten scalar wrapped across lines by PyYAML | `manager.py`, `scripts/migrate_compact_configs.py` | `_quote_yaml_string`/`_quoted` dump with `width=2**31`: the default 80-column wrap emits a `\`-continued multi-line scalar that `_validate_compact_source_layout` rejects, so the updater published a config no later load could read. `_write_updated_config` also re-runs the layout validator on the rewritten text and refuses to publish an unrewritable config |
 
 ## Running
 

@@ -601,3 +601,15 @@ def test_publication_and_rollback_failures_are_both_reported(tmp_path, monkeypat
     assert backup.read_bytes() == _legacy_config(incremental="first")
     assert stat.S_IMODE(backup.stat().st_mode) == stat.S_IMODE(first.stat().st_mode)
     assert second.read_bytes() == _legacy_config(region="EU", incremental="second")
+
+
+def test_long_migrated_values_stay_on_one_line():
+    """The runtime updater is line-oriented; a wrapped scalar is not loadable."""
+    _quoted = _MIGRATOR["_quoted"]
+    value = "INCREMENTALVALUE " * 6
+    value = value.strip()
+
+    quoted = _quoted(value)
+
+    assert "\n" not in quoted
+    assert yaml.safe_load(quoted) == value

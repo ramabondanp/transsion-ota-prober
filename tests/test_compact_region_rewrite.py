@@ -726,3 +726,73 @@ regions:
         "OP": {"build_tag": "B", "incremental": "I"},
         "IN": {"android_version": "16", "incremental": "NEW"},
     }
+
+
+def test_long_value_with_spaces_stays_on_one_line(tmp_path):
+    """PyYAML's default 80-column wrap must not split a rewritten scalar.
+
+    A wrapped double-quoted scalar is a multi-line scalar, which
+    _validate_compact_source_layout rejects: the updater would publish a config
+    that every later load (and update) refuses.
+    """
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  OP: "OLD"
+  IN: "UNCHANGED"
+""",
+    )
+    cfg = _config(path)
+    long_incremental = "INCREMENTALVALUE " * 6
+    long_incremental = long_incremental.strip()
+
+    assert update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", long_incremental),
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert f'  OP: "{long_incremental}"' in text
+    assert "\\\n" not in text
+    reloaded = Config.from_yaml(path)
+    assert reloaded[0].incremental == long_incremental
+    assert reloaded[1].incremental == "UNCHANGED"
+
+
+def test_unrewritable_rewrite_is_refused_and_original_kept(tmp_path, monkeypatch):
+    """The pre-write layout guard is load-bearing: refuse to publish text the
+    line-oriented updater could not read back."""
+    path = tmp_path / "config.yml"
+    _write(
+        path,
+        """\
+oem: "Infinix"
+product_base: "X6873"
+model: "Infinix GT 30 Pro"
+android_version: "16"
+regions:
+  OP: "OLD"
+  IN: "UNCHANGED"
+""",
+    )
+    cfg = _config(path)
+    before = path.read_bytes()
+
+    # Simulate a value emitter that wraps its scalar across two lines.
+    monkeypatch.setattr(
+        manager, "_quote_yaml_string", lambda value: f'"WRAPPED\\\n  \\ {value}"'
+    )
+
+    assert not update_config_from_fingerprint(
+        path,
+        cfg,
+        _target(cfg, "16", "BP2A.250605.031.A3", "NEW"),
+    )
+    assert path.read_bytes() == before
