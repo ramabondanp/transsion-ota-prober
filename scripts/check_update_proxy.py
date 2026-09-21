@@ -8,6 +8,9 @@ takes precedence). Pass ``--verify`` to verify paid proxy exit countries before
 running checkota, or ``--free`` to use only proxies fetched from spys.one. Free
 proxies are not country-verified.
 
+Every OTA update check is routed through a proxy; no direct baseline OTA check
+is performed, so a "no match" verdict reflects the proxied exits only.
+
 Usage:
   # scripts/.env: PROXMINT_PROXY_TEMPLATE=user__cr.{country}:password@host:port
   C=KE,NG,KH,PH,CO,SA,CM,MW; python scripts/check_update_proxy.py $C -c CL8 --reg op
@@ -433,7 +436,6 @@ def _print_round_report(
 def _print_target_verdict(
     target: str,
     results: list[tuple[str, CheckResult]],
-    baselines: list[CheckResult],
 ) -> None:
     """End with an explicit answer to the script's target-search question."""
     matches = [(country, result) for country, result in results if result.hit]
@@ -476,14 +478,6 @@ def _print_target_verdict(
             f"NOT FOUND across {len(results)} attempt(s) "
             f"({update_count} updates, {failure_count} failed)."
         )
-
-    baseline_hits = sum(baseline.hit for baseline in baselines)
-    baseline_titles = list(
-        dict.fromkeys(baseline.title for baseline in baselines if baseline.title)
-    )
-    baseline_state = "MATCH" if baseline_hits else "NO MATCH"
-    baseline_detail = f" — {', '.join(baseline_titles)}" if baseline_titles else ""
-    print(f"Direct baseline: {baseline_state}{baseline_detail}")
 
 
 def run_one(
@@ -586,34 +580,6 @@ def run_one(
             unregister_process(process)
 
 
-def _run_baseline(
-    cmd_base: Sequence[str], target: str, timeout: float
-) -> tuple[CheckResult, str]:
-    try:
-        result = subprocess.run(
-            cmd_base,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-        )
-    except TimeoutExpired:
-        return CheckResult(
-            "direct", "DIRECT", timeout, OUTCOME_FAILED, False, "", "Timeout"
-        ), ""
-    except OSError as exc:
-        return CheckResult(
-            "direct", "DIRECT", 0.0, OUTCOME_FAILED, False, "", str(exc)
-        ), ""
-
-    output = (result.stdout or "") + (result.stderr or "")
-    outcome, hit, title, detail = _summarize_output(output, result.returncode, target)
-    return CheckResult("direct", "DIRECT", 0.0, outcome, hit, title, detail), output
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -673,7 +639,7 @@ def main() -> int:
         "--process-timeout",
         type=_positive_float,
         default=DEFAULT_PROCESS_TIMEOUT,
-        help=f"Per-proxy and baseline timeout in seconds (default: {DEFAULT_PROCESS_TIMEOUT:g})",
+        help=f"Per-proxy checkota timeout in seconds (default: {DEFAULT_PROCESS_TIMEOUT:g})",
     )
     args = parser.parse_args()
 
@@ -796,7 +762,6 @@ def main() -> int:
     )
 
     all_results: list[tuple[str, CheckResult]] = []
-    baselines: list[CheckResult] = []
     # Paid mode has exactly one proxy per country, so the address adds nothing.
     show_proxy = args.free
     for round_number in range(1, args.rounds + 1):
@@ -848,20 +813,11 @@ def main() -> int:
         )
 
         all_results.extend(results)
-        baseline, baseline_output = _run_baseline(
-            cmd_base, args.target, args.process_timeout
-        )
-        baselines.append(baseline)
-        # Baseline outcome is reported once in the final verdict; surface full
-        # output immediately only on a direct hit.
-        if baseline.hit:
-            print(f"\nBaseline hit {args.target!r}:")
-            print(baseline_output)
         if round_number < args.rounds:
             # Event.wait is interruptible and avoids a fixed-sleep shutdown delay.
             _STOP_EVENT.wait(0.5)
 
-    _print_target_verdict(args.target, all_results, baselines)
+    _print_target_verdict(args.target, all_results)
     return 0
 
 
