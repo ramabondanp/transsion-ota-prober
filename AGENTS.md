@@ -316,7 +316,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | URL allowlist accepted empty ports and dot segments | `validation.py` | `is_google_https_url()` also rejects a netloc ending in ":" (an explicit empty port) and any "." / ".." path segment, including percent-encoded ones (`_has_dot_segment`), instead of trusting the raw prefix match |
 | Duplicate ZIP member names resolved to the first record | `zip_metadata.py` | `_find_entry()` keeps scanning and uses the LAST matching central-directory record, matching zipfile/unzip/Java; deep validation and size caps now apply to the chosen record, so a shadowed decoy cannot fail the fetch |
 | Documented sentence-boundary truncation was never implemented | `telegram.py` | `_prefer_sentence_boundary()` uses `SENTENCE_BOUNDARY_RE`: the fitted description trims back to its last complete sentence when at least half the text survives, and keeps the token-granular cut when the boundary would land inside a tag or drop too much |
-| `--skip-telegram` advanced configs without recording the update | `processor.py` | `apply_update_actions()` records the title when the config was updated but no notifier exists, so the update is not left neither announced nor recorded; `--dry-run` still writes nothing |
+| `--skip-telegram`/`--update-incremental` advanced configs without recording the update | `processor.py` | `apply_update_actions()` records the title when the config was updated but no notifier exists, so the update is not left neither announced nor recorded; `--dry-run` still writes nothing |
 | Deep/unclosed HTML lists made terminal rendering quadratic | `description.py` | `_refresh_indent()` derives the indent from the open-list depth and caps it at `_MAX_LIST_INDENT` (16). Nesting is still tracked in full so end tags pair correctly, but the per-line `" " * indent` prefix is bounded: a hostile description could otherwise expand a few kilobytes into hundreds of megabytes |
 
 ## Running
@@ -345,9 +345,9 @@ Env vars:
   seeding, lock pruning, or network work when either is missing. Only `--dry-run`,
   `--skip-telegram`, `--register-update`, `--update-incremental`, and `--gen-fp`
   bypass the check (`_require_telegram_env` in `cli.py`).
-+ A run that advances a config without a notifier (`--skip-telegram`, or Telegram setup
-  unavailable) records the title instead of leaving the update neither announced nor
-  recorded; `--dry-run` still records nothing.
++ A run that advances a config without a notifier (`--skip-telegram`,
+  `--update-incremental`, or Telegram setup unavailable) records the title instead of
+  leaving the update neither announced nor recorded; `--dry-run` still records nothing.
 + `telegraph_token` — Telegraph API token (long descriptions)
 + `CHECKOTA_VENDOR_DIR` — override vendored `google-ota-prober` path
   (default `<repo>/vendor/google-ota-prober`; needed for relocated/wheel installs)
