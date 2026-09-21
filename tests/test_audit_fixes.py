@@ -437,9 +437,7 @@ def test_dry_run_without_notifier_records_nothing(tmp_path, monkeypatch):
     )
 
     with patch("checkota.processor.create_notifier", return_value=None):
-        rc = apply_update_actions(
-            ctx, update, _args(skip_telegram=True, dry_run=True)
-        )
+        rc = apply_update_actions(ctx, update, _args(skip_telegram=True, dry_run=True))
 
     assert rc == 0
     assert not ctx.processed_path.exists()

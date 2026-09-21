@@ -1349,9 +1349,7 @@ def _write_updated_config(
     try:
         _validate_compact_source_layout(new_text, config_path)
     except (ValueError, yaml.YAMLError) as exc:
-        Log.w(
-            f"Refusing to write an unrewritable config {config_path}: {exc}"
-        )
+        Log.w(f"Refusing to write an unrewritable config {config_path}: {exc}")
         return False
 
     # Write to a temporary file in the same directory, validate it, then

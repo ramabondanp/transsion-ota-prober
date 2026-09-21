@@ -806,9 +806,7 @@ regions:
         "OP: OLD's # don't change",
     ],
 )
-def test_inline_comment_survives_unbalanced_quote_in_plain_scalar(
-    tmp_path, original
-):
+def test_inline_comment_survives_unbalanced_quote_in_plain_scalar(tmp_path, original):
     """A quote inside a plain scalar must not hide the trailing comment."""
     path = tmp_path / "config.yml"
     _write(
