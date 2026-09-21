@@ -118,3 +118,29 @@ def test_blank_line_after_update_version():
         f"Expected blank line between lines {version_idx} and {comm_idx}"
     )
     assert lines[version_idx + 1] == ""
+
+
+def test_deeply_nested_lists_have_bounded_indent_and_linear_cost():
+    """Unclosed/deep <ul> chains must not blow up the rendered output.
+
+    The indent is materialized for every flushed line, so an unbounded depth
+    made rendering quadratic in a server-controlled description.
+    """
+    depth = 2000
+    items = 2000
+    desc = "<ul>" * depth + "<li>x</li>" * items
+
+    out = format_update_description(desc)
+
+    lines = out.split("\n")
+    assert len(lines) == items
+    longest = max(len(line) for line in lines)
+    # 16-space cap + "• " + content, not depth * 2.
+    assert longest <= 16 + len("• x")
+    assert all(line.startswith(" " * 16 + "• x") for line in lines)
+
+
+def test_list_indent_still_reflects_shallow_nesting():
+    out = format_update_description("<ul><li>a</li><ul><li>b</li></ul></ul>")
+
+    assert out.split("\n") == ["  • a", "    • b"]

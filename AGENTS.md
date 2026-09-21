@@ -307,6 +307,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Unterminated last line merged two processed titles | `fingerprints.py` | `_append_title()` terminates a dangling final line before appending: `"Title B"` + `"Title C"` no longer becomes `"Title BTitle C"`, so the older title is still deduped and no bogus combined title is persisted (the trim rewrite inherits the normalized list) |
 | Inline comment deleted when a plain scalar held a quote | `manager.py` | `_comment_start()` enters quote mode only where a YAML scalar can start (`_starts_scalar_at`: line start or after a node indicator). An apostrophe inside a plain scalar (`OP: OLD's # keep`) no longer swallows the trailing comment when the value is rewritten |
 | UTF-8 BOM made a valid config unloadable | `manager.py` | Config reads use `encoding="utf-8-sig"`. PyYAML skips the BOM but the layout validator's line/column arithmetic did not, so a BOM'd config failed with a misleading "unsupported mapping key source layout" error; a rewrite now also drops the BOM |
+| Deep/unclosed HTML lists made terminal rendering quadratic | `description.py` | `_refresh_indent()` derives the indent from the open-list depth and caps it at `_MAX_LIST_INDENT` (16). Nesting is still tracked in full so end tags pair correctly, but the per-line `" " * indent` prefix is bounded: a hostile description could otherwise expand a few kilobytes into hundreds of megabytes |
 
 ## Running
 

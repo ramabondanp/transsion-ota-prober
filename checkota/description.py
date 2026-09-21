@@ -17,6 +17,9 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 # callers normalise CRLF before parsing, so a surviving \r is stray output, not
 # a line break, and must not reach the terminal as a raw control byte.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# Deeply nested (or unclosed) lists are attacker-controlled input: the indent is
+# materialized per flushed line, so an unbounded depth made rendering quadratic.
+_MAX_LIST_INDENT = 16
 
 
 def _sanitize_terminal_text(value: str) -> str:
@@ -29,7 +32,7 @@ class TerminalParser(HTMLParser):
         super().__init__()
         self.indent = 0
         self.bold = False
-        self.list_stack = []
+        self.list_stack: list[str] = []
         self.ol_counter = []
         self.buffer = ""
         self.lines = []
@@ -50,11 +53,11 @@ class TerminalParser(HTMLParser):
             self.flush()
             self.list_stack.append("ol")
             self.ol_counter.append(0)
-            self.indent += 2
+            self._refresh_indent()
         elif tag == "ul":
             self.flush()
             self.list_stack.append("ul")
-            self.indent += 2
+            self._refresh_indent()
         elif tag == "li":
             self.flush()
         elif tag == "br":
@@ -84,13 +87,21 @@ class TerminalParser(HTMLParser):
                 self.list_stack.pop()
                 if tag == "ol" and self.ol_counter:
                     self.ol_counter.pop()
-                self.indent = max(0, self.indent - 2)
+                self._refresh_indent()
 
     def handle_data(self, data):
         # HTMLParser runs with convert_charrefs=True, so entity references are
         # already decoded exactly once here; calling html.unescape() again would
         # turn literal "&amp;lt;" into "<" and enable tag-injection surprises.
         self.buffer += _sanitize_terminal_text(data)
+
+    def _refresh_indent(self) -> None:
+        """Derive the list indent from the open-list depth, capped.
+
+        Nesting is still tracked in full so end tags keep pairing correctly;
+        only the rendered indentation is bounded.
+        """
+        self.indent = min(2 * len(self.list_stack), _MAX_LIST_INDENT)
 
     def flush(self, style: str | None = None) -> None:
         text = self.buffer.strip()
