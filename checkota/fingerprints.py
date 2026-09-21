@@ -82,6 +82,15 @@ def _read_titles(handle: TextIO) -> tuple[list[str], set[str]]:
 
 
 def _append_title(handle: TextIO, lines: list[str], title: str) -> None:
+    # A state file whose last line has no terminator (hand-edited, or written by
+    # an older tool) would otherwise merge that title with the new one: the old
+    # title is forgotten (duplicate notification later) and a bogus combined
+    # title is persisted. Terminate the dangling line before appending.
+    if lines and not lines[-1].endswith("\n"):
+        handle.seek(0, 2)
+        handle.write("\n")
+        lines = [*lines[:-1], lines[-1] + "\n"]
+
     handle.seek(0, 2)
     handle.write(f"{title}\n")
     handle.flush()

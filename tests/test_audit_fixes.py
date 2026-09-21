@@ -370,3 +370,40 @@ def test_update_checker_debug_filenames():
     checker = UpdateChecker(_cfg(), debug_label="X6873-Global")
     assert checker.debug_file == "debug_checkin_response_X6873-Global.txt"
     assert checker.debug_error_file == "debug_checkin_response_X6873-Global_error.bin"
+
+
+def test_save_processed_title_terminates_unterminated_last_line(tmp_path):
+    """A dangling last line must not swallow the next title."""
+    from checkota.fingerprints import load_processed_titles, save_processed_title
+
+    path = tmp_path / "processed_updates.txt"
+    path.write_text("OLD-TITLE\nUNTERMINATED", encoding="utf-8")
+
+    assert save_processed_title(path, "NEW-TITLE") is True
+
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "OLD-TITLE",
+        "UNTERMINATED",
+        "NEW-TITLE",
+    ]
+    titles = load_processed_titles(path)
+    assert titles == {"OLD-TITLE", "UNTERMINATED", "NEW-TITLE"}
+
+    # The previously dangling title is still deduped.
+    assert save_processed_title(path, "UNTERMINATED") is True
+    assert path.read_text(encoding="utf-8").count("UNTERMINATED") == 1
+
+
+def test_trim_terminates_unterminated_last_line(tmp_path, monkeypatch):
+    """The trim rewrite must not keep a merged title either."""
+    from checkota import fingerprints
+    from checkota.fingerprints import load_processed_titles, save_processed_title
+
+    monkeypatch.setattr(fingerprints, "MAX_PROCESSED_ENTRIES", 3)
+    path = tmp_path / "processed_updates.txt"
+    path.write_text("T1\nT2\nT3", encoding="utf-8")
+
+    assert save_processed_title(path, "T4") is True
+
+    assert load_processed_titles(path) == {"T2", "T3", "T4"}
+    assert path.read_text(encoding="utf-8").endswith("T4\n")
