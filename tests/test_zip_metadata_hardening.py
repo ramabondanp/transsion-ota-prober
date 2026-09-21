@@ -369,3 +369,40 @@ def test_fetch_member_rejects_corrupt_crc_for_stored_and_deflated(compression):
             member,
             session=cast("requests.Session", _RangeSession(bytes(archive))),
         )
+
+
+def test_extra_fields_tolerates_padding_but_rejects_overrunning_body():
+    """1-3 trailing bytes are alignment padding, not a truncated header."""
+    assert list(zip_metadata._extra_fields(b"")) == []
+    assert list(zip_metadata._extra_fields(b"\x00\x00")) == []
+    assert list(zip_metadata._extra_fields(b"\x00")) == []
+    assert list(zip_metadata._extra_fields(struct.pack("<HH", 0x0001, 0))) == [
+        (0x0001, b"")
+    ]
+
+    with pytest.raises(RemoteZipFetchError, match="extra field body"):
+        list(zip_metadata._extra_fields(struct.pack("<HH", 0x0001, 8) + b"short"))
+
+
+def test_fetch_member_tolerates_alignment_padding_in_extra_field():
+    """zipalign/Info-ZIP bump the extra length and append zero bytes.
+
+    The padding is valid for every mainstream reader (zipfile, unzip, Java); a
+    strict rejection made such members unreadable, which for this tool means a
+    structurally failed OTA metadata fetch and a silently missed update.
+    """
+    member = "META-INF/com/android/metadata"
+    content = (
+        b"post-build=Infinix/X6873-OP/Infinix-X6873:16/BP2A.250605.031.A3/1"
+        b":user/release-keys\n"
+    )
+    archive = _build_zip(member, content, extra=b"\x00\x00")
+
+    assert zipfile.ZipFile(io.BytesIO(archive)).read(member) == content
+    session = _RangeSession(archive)
+    assert (
+        fetch_zip_member(
+            "https://android.googleapis.com/packages/ota/ota.zip", member, session=session
+        )
+        == content
+    )

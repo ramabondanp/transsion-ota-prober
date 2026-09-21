@@ -406,11 +406,17 @@ def _locate_cd(tail: bytes, tail_start: int) -> tuple[int, int]:
 
 
 def _extra_fields(extra: bytes):
-    """Yield extra-field (header id, body) pairs, rejecting truncation."""
+    """Yield extra-field (header id, body) pairs, rejecting overrunning bodies.
+
+    A trailing remainder shorter than a header (1-3 bytes) is alignment padding,
+    not a malformed field: zipalign and some Info-ZIP modes bump the extra length
+    and append zero bytes, and every mainstream reader ignores the leftover. A
+    field whose declared body overruns the area is still rejected.
+    """
     pos = 0
     while pos < len(extra):
         if len(extra) - pos < 4:
-            raise RemoteZipFetchError("Truncated ZIP extra field header.")
+            return
         header_id, data_size = struct.unpack_from("<HH", extra, pos)
         body_start = pos + 4
         body_end = body_start + data_size
