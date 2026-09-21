@@ -220,7 +220,9 @@ expands, inserted child keys follow the file's dominant region-child indent
   (`RETRYABLE_HTTP_STATUSES`, shared with zip_metadata), protobuf `DecodeError` retried.
 + Response fields are untrusted: `update_url` must be HTTPS on exactly
   `android.googleapis.com` under `/packages/ota(/api)/` (no port/userinfo/control chars);
-  titles containing control characters are dropped (protects the line-oriented dedup file).
+  titles containing control characters are dropped (protects the line-oriented dedup file);
+  descriptions are capped (`MAX_UPDATE_DESCRIPTION_LENGTH`) and stripped of ANSI
+  sequences plus C0/C1 controls (tab/newline/CR survive) before any consumer sees them.
 + ZIP fetch: strict 206 + exact Content-Range/Content-Length matching, redirects followed
   ≤5 hops only within `android.googleapis.com`/`*.gvt1.com` under `/packages/`, member
   caps (1 MiB compressed/decompressed, 16 MiB central directory), bounded inflate,
@@ -307,6 +309,7 @@ expands, inserted child keys follow the file's dominant region-child indent
 | Unterminated last line merged two processed titles | `fingerprints.py` | `_append_title()` terminates a dangling final line before appending: `"Title B"` + `"Title C"` no longer becomes `"Title BTitle C"`, so the older title is still deduped and no bogus combined title is persisted (the trim rewrite inherits the normalized list) |
 | Inline comment deleted when a plain scalar held a quote | `manager.py` | `_comment_start()` enters quote mode only where a YAML scalar can start (`_starts_scalar_at`: line start or after a node indicator). An apostrophe inside a plain scalar (`OP: OLD's # keep`) no longer swallows the trailing comment when the value is rewritten |
 | UTF-8 BOM made a valid config unloadable | `manager.py` | Config reads use `encoding="utf-8-sig"`. PyYAML skips the BOM but the layout validator's line/column arithmetic did not, so a BOM'd config failed with a misleading "unsupported mapping key source layout" error; a rewrite now also drops the BOM |
+| Control bytes / unbounded size in OTA descriptions | `update_checker.py`, `processor.py` | `_safe_description()` caps the body at 64 KiB and removes ANSI CSI sequences plus C0/C1 controls (tab/newline/CR survive); the `--dry-run --fp` terminal fallback prints `sanitize_log_text(desc)` instead of the raw string; a response without `update_description` now yields the "No description" placeholder instead of a literal `None` body |
 | Deep/unclosed HTML lists made terminal rendering quadratic | `description.py` | `_refresh_indent()` derives the indent from the open-list depth and caps it at `_MAX_LIST_INDENT` (16). Nesting is still tracked in full so end tags pair correctly, but the per-line `" " * indent` prefix is bounded: a hostile description could otherwise expand a few kilobytes into hundreds of megabytes |
 
 ## Running

@@ -7,6 +7,7 @@ import contextlib
 import datetime
 import gzip
 import os
+import re
 import tempfile
 import threading
 import time
@@ -24,6 +25,7 @@ from checkota.constants import (
     CHECKIN_URL,
     DEBUG_FILE,
     MAX_OTA_URL_LENGTH,
+    MAX_UPDATE_DESCRIPTION_LENGTH,
     MAX_UPDATE_SIZE_LENGTH,
     MAX_UPDATE_TITLE_LENGTH,
     OTA_URL_PATH_PREFIXES,
@@ -98,6 +100,13 @@ class _AttemptOutcome:
     error_content: bytes | None = None  # captured body for --debug dumps
 
 
+#: ANSI CSI sequences and the remaining C0/C1 controls may not appear in a
+#: rendered description. Tab, newline and carriage return are legitimate
+#: changelog formatting; escape sequences are removed whole (not left as
+#: printable "[31m" debris) so a control-only body degrades to no description.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_UNPRINTABLE_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
 _CHECK_RETRIES = 3
 _CHECK_TIMEOUT = (5.0, 10.0)
 
@@ -165,6 +174,26 @@ class UpdateChecker:
         if has_control_chars(title):
             return None
         return title
+
+    @staticmethod
+    def _safe_description(value: str) -> str | None:
+        """Keep a bounded, printable changelog body for display.
+
+        The description is the one untrusted field with no other consumer-side
+        bound: it feeds the terminal renderer, the notification text and the
+        Telegraph fallback. Newlines and tabs are legitimate; every other C0/C1
+        control is dropped so a description cannot smuggle escape sequences into
+        a consumer that renders it without its own sanitizer.
+        """
+        description = value.strip()
+        if not description:
+            return None
+        if len(description) > MAX_UPDATE_DESCRIPTION_LENGTH:
+            Log.w("Ignoring oversized update description.")
+            return None
+        cleaned = _ANSI_ESCAPE_RE.sub("", description)
+        cleaned = _UNPRINTABLE_CONTROL_RE.sub("", cleaned)
+        return cleaned if cleaned.strip() else None
 
     @staticmethod
     def _safe_size(value: str) -> str | None:
@@ -432,7 +461,7 @@ class UpdateChecker:
                 else:
                     info["title"] = title
             elif name == "update_description":
-                info["description"] = value.strip()
+                info["description"] = self._safe_description(value)
             elif name == "update_size":
                 size = self._safe_size(value)
                 if size is None:

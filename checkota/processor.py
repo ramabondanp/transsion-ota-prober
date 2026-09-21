@@ -18,7 +18,7 @@ from checkota.fingerprints import (
     release_processed_claim,
     save_processed_title,
 )
-from checkota.logging import Log
+from checkota.logging import Log, sanitize_log_text
 from checkota.manager import (
     Config,
     fingerprint_identity_matches_config,
@@ -384,7 +384,9 @@ def collect_update_info(
     title = data.get("title")
     url = data.get("url")
     size = data.get("size")
-    desc = data.get("description", "No description")
+    # The key always exists (initialised to None), so a plain .get() default
+    # would let a response without an update_description render as "None".
+    desc = data.get("description") or "No description"
 
     if args.dry_run and not title and url and size:
         data["title"] = title = "UNKNOWN_TITLE_DRY_RUN"
@@ -404,7 +406,9 @@ def collect_update_info(
     if args.dry_run and args.fp and desc:
         Log.i("Description:")
         formatted_desc = format_update_description(desc)
-        Log.raw(formatted_desc if formatted_desc else desc)
+        # The fallback prints raw text, so neutralize control bytes here: the
+        # terminal parser only sanitizes what it successfully renders.
+        Log.raw(formatted_desc if formatted_desc else sanitize_log_text(desc))
 
     with ctx.file_lock:
         is_new_update = title not in ctx.processed_titles

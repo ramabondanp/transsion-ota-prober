@@ -63,3 +63,32 @@ def test_parse_drops_untrusted_url_and_unsafe_title():
     assert parsed["found"] is False
     assert parsed["url"] is None
     assert parsed["title"] is None
+
+
+def _parse_with(settings):
+    checker = _checker()
+    return checker._parse(SimpleNamespace(setting=settings))
+
+
+def _setting(name, value):
+    return SimpleNamespace(name=name, value=value)
+
+
+def test_description_keeps_formatting_but_drops_other_control_bytes():
+    parsed = _parse_with(
+        [_setting(b"update_description", b"Fix A\n\tindented\x1b[31m and B\x07")]
+    )
+
+    assert parsed["description"] == "Fix A\n\tindented and B"
+
+
+def test_oversized_description_is_dropped():
+    parsed = _parse_with([_setting(b"update_description", b"x" * (65536 + 1))])
+
+    assert parsed["description"] is None
+
+
+def test_control_only_description_becomes_none():
+    parsed = _parse_with([_setting(b"update_description", b"\x1b[2J\x1b[31m")])
+
+    assert parsed["description"] is None
