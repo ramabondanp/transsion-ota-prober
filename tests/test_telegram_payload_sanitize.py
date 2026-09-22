@@ -353,3 +353,37 @@ def test_truncated_description_prefers_a_sentence_boundary():
     assert rendered_length(out) <= 120
     assert out.endswith("Fix charging protocol.")
     assert "..." not in out
+
+
+def test_tab_and_cr_in_description_keep_the_html_payload():
+    """Regression: _safe_description() deliberately keeps \t and \r, but one
+    of them used to fail the whole-message control scan and degrade the
+    notification to escaped plain text with literal <b> markup."""
+    update = _update(desc="Fixed\tcharging\r\nFixed reboot\rmore fixes")
+
+    text = _sent_text(update)
+
+    assert "<b>Device:</b> Infinix GT 30 Pro" in text
+    assert "&lt;b&gt;" not in text
+    assert "\r" not in text and "\t" not in text
+    assert "Fixed charging\nFixed reboot\nmore fixes" in text
+
+
+def test_sanitize_html_folds_crlf_and_tabs_before_the_safety_scan():
+    from checkota.message_text import sanitize_html
+
+    out = sanitize_html("<b>A</b>\r\nB\tC\rD")
+
+    assert out is not None
+    assert out == "<b>A</b>\nB C\nD"
+
+
+def test_unsafe_controls_still_fail_closed_after_normalization():
+    """Normalization must not widen what is accepted: other raw C0 controls
+    are still refused outright, and an entity-encoded control still fails
+    canonicalization -- degrading to escaped plain text, the documented
+    fail-closed path, with the control dropped."""
+    from checkota.message_text import sanitize_html
+
+    assert sanitize_html("<b>A</b>\x0bC") is None
+    assert sanitize_html("<b>A</b>&#7;") == "&lt;b&gt;A&lt;/b&gt;"

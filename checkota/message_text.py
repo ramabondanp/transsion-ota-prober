@@ -232,9 +232,24 @@ def escape_text_preserving_telegram_tags(value: str) -> str | None:
     return "".join(raw for _, raw, _ in tokens)
 
 
+def _normalize_kept_controls(value: str) -> str:
+    """Fold the controls upstream deliberately keeps into Telegram-safe forms.
+
+    ``UpdateChecker._safe_description()`` lets tab and carriage return through
+    alongside newlines (changelog indentation and CRLF line endings), but
+    :func:`is_safe_code_point` accepts only ``\n`` among the C0 controls -- so
+    one stray ``\t`` or ``\r`` used to reject the whole message and degrade
+    the notification to escaped plain text with literal ``<b>`` markup.
+    CRLF/CR are line breaks and tabs are indentation; normalize them here,
+    before the safety scan, instead of permitting raw controls anywhere else.
+    """
+    return value.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+
+
 def sanitize_html(value: str) -> str | None:
     if not value:
         return value
+    value = _normalize_kept_controls(value)
     if any(not is_safe_code_point(char) for char in value):
         return None
 
