@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 import yaml
 
@@ -858,13 +858,55 @@ def process_region(
     return apply_update_actions(ctx, update, args)
 
 
+def _matching_regions(configs: list[Config], region_code: str) -> list[Config]:
+    """Region-filter predicate shared by the run and the sweep pre-check."""
+    return [
+        cfg for cfg in configs if region_code_from_product(cfg.product) == region_code
+    ]
+
+
+class RegionFilterScan(NamedTuple):
+    """Result of a quiet --reg pre-scan of a directory sweep."""
+
+    any_match: bool
+    any_load_error: bool
+
+
+def scan_region_filter(config_paths: list[Path], region_code: str) -> RegionFilterScan:
+    """Quietly pre-scan a --reg sweep for selection and load health.
+
+    A sweep skips configs that lack the region -- most files in a directory do
+    not carry every region -- so the run itself must not fail per file.
+    cli.main() uses this to decide how to treat an empty selection: fail
+    before any work when every config loaded cleanly (nothing to do, nothing
+    to report), but still run the sweep when some configs failed to load, so
+    the sweep is what reports those errors instead of them being swallowed by
+    the pre-check. Both flags are always computed over every path.
+    """
+    code = region_code.strip().upper()
+    any_match = False
+    any_load_error = False
+    for path in config_paths:
+        try:
+            configs = Config.from_yaml(path)
+        except (OSError, TypeError, ValueError, yaml.YAMLError):
+            any_load_error = True
+            continue
+        if _matching_regions(configs, code):
+            any_match = True
+    return RegionFilterScan(any_match, any_load_error)
+
+
 def load_config_regions(
     config_path: Path, args: argparse.Namespace
 ) -> tuple[int, list[Config]]:
     """Load a config file and return its region-filtered Config list.
 
     Returns (status, configs). status is non-zero on a load/filter error, in
-    which case configs is empty. Applies the --incremental override in place.
+    which case configs is empty. A --reg miss is an error for a single config
+    (-c) but a silent skip for a directory sweep (-d), where most files do not
+    carry the requested region; cli.main() fails the run when no config in the
+    sweep matched. Applies the --incremental override in place.
     """
     try:
         configs = Config.from_yaml(config_path)
@@ -875,12 +917,12 @@ def load_config_regions(
     if args.region:
         region_code = args.region.strip().upper()
         Log.i(f"Filtering configuration regions by region code: {region_code}")
-        filtered_configs = [
-            cfg
-            for cfg in configs
-            if region_code_from_product(cfg.product) == region_code
-        ]
+        filtered_configs = _matching_regions(configs, region_code)
         if not filtered_configs:
+            if is_sweep_mode(args):
+                # Selection, not demand: skipping is reported by the run-level
+                # "no region matched anywhere" check, not per file.
+                return 0, []
             Log.e(
                 f"No configuration regions in {config_path} match region code {region_code}"
             )

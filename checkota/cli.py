@@ -14,6 +14,7 @@ from pathlib import Path
 from checkota.constants import DRAIN_WATCHDOG_SECONDS, HEARTBEAT_INTERVAL_SECONDS
 from checkota.logging import Log
 from checkota.manager import Config
+from checkota.notifier import is_sweep_mode
 from checkota.paths import IS_SOURCE_CHECKOUT, active_config_dir
 from checkota.processor import (
     config_from_fingerprint,
@@ -21,6 +22,7 @@ from checkota.processor import (
     load_config_regions,
     process_config,
     process_region,
+    scan_region_filter,
 )
 from checkota.runtime import (
     RunContext,
@@ -414,6 +416,13 @@ def _run_global_pool(
     return exit_code
 
 
+def _log_empty_region_selection(args: argparse.Namespace) -> None:
+    Log.e(
+        f"No configuration regions in {args.config_dir} match region code "
+        f"{args.region.strip().upper()}"
+    )
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -464,11 +473,32 @@ def main() -> int:
             elif args.jobs < 1:
                 Log.e("--jobs must be >= 1")
                 exit_code = 1
-            elif args.jobs == 1:
-                exit_code = _run_sequential(ctx, args, config_paths)
             else:
-                executor = ThreadPoolExecutor(max_workers=args.jobs)
-                exit_code = _run_global_pool(ctx, args, config_paths, executor)
+                # Sweeps skip configs without the region, so an empty
+                # selection fails the run as a whole -- but only before any
+                # work when every config loaded cleanly. With load errors the
+                # sweep must still run: it is what reports them.
+                scan = (
+                    scan_region_filter(config_paths, args.region)
+                    if is_sweep_mode(args) and args.region
+                    else None
+                )
+                empty_selection = bool(scan is not None and not scan.any_match)
+                fail_before_work = bool(
+                    scan is not None and not scan.any_match and not scan.any_load_error
+                )
+                if fail_before_work:
+                    _log_empty_region_selection(args)
+                    exit_code = 1
+                else:
+                    if args.jobs == 1:
+                        exit_code = _run_sequential(ctx, args, config_paths)
+                    else:
+                        executor = ThreadPoolExecutor(max_workers=args.jobs)
+                        exit_code = _run_global_pool(ctx, args, config_paths, executor)
+                    if empty_selection:
+                        _log_empty_region_selection(args)
+                        exit_code = max(exit_code, 1)
     except KeyboardInterrupt:
         Log.w("Interrupted. Stopping in-flight requests and exiting.")
         ctx.stop_event.set()
