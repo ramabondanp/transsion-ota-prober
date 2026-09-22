@@ -94,6 +94,56 @@ def test_control_only_description_becomes_none():
     assert parsed["description"] is None
 
 
+def test_register_update_rejects_mismatched_target(tmp_path, monkeypatch):
+    import argparse
+
+    from checkota import processor
+    from checkota.runtime import RunContext
+
+    cfg = _checker().cfg
+    ctx = RunContext(
+        env={},
+        processed_path=tmp_path / "titles.txt",
+        processed_titles=set(),
+        dry_run=False,
+    )
+    args = argparse.Namespace(
+        imei=None,
+        debug=False,
+        gen_fp=False,
+        dry_run=False,
+        fp=None,
+        register_update=True,
+        update_incremental=False,
+        force_notify=False,
+    )
+    monkeypatch.setattr(
+        processor,
+        "_check_for_updates",
+        lambda *a: (
+            0,
+            {
+                "title": "OTHER-DEVICE-OTA",
+                "size": "100",
+                "url": "https://android.googleapis.com/packages/ota/a.zip",
+                "description": "test",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        processor,
+        "get_cached_ota_metadata",
+        lambda *a: {
+            "fingerprint": "Infinix/X9999-OP/Infinix-X9999:16/B/2:user/release-keys"
+        },
+    )
+    status, update = processor.collect_update_info(
+        ctx, cfg, tmp_path / "config.yml", args
+    )
+    assert (status, update) == (1, None)
+    assert not ctx.processed_path.exists()
+
+
 def test_url_allowlist_rejects_empty_port_and_dot_segments():
     from checkota.constants import (
         CHECKIN_API_HOST,

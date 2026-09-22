@@ -418,6 +418,11 @@ def collect_update_info(
                 "--register-update flag is set, but update title is already known. No action taken."
             )
             return 0, None
+        # Registration is still title processing. Validate the OTA identity
+        # before persisting it, just as the normal update path does.
+        status, target = _resolve_target_metadata(ctx, cfg, url)
+        if status != 0 or target is None:
+            return status, None
         Log.i("--register-update set. Skipping config incremental update.")
         if args.dry_run:
             Log.i(
