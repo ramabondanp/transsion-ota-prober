@@ -634,6 +634,7 @@ def apply_update_actions(
     # `--force-notify` bypasses this because the user explicitly asked for
     # notifications even for already-processed titles.
     claimed = False
+    duplicate_notification = False
     if (
         notifier
         and update.is_new_update
@@ -647,10 +648,11 @@ def apply_update_actions(
         if not claim_result:
             Log.i(
                 "Update already claimed or processed by another worker; "
-                "skipping duplicate notification."
+                "skipping duplicate notification, but updating this region."
             )
-            return 0
-        claimed = True
+            duplicate_notification = True
+        else:
+            claimed = True
 
     update_incremental_only = bool(getattr(args, "update_incremental", False))
     if (update_incremental_only or update.is_new_update) and not _apply_config_update(
@@ -667,7 +669,7 @@ def apply_update_actions(
         )
         return 1
 
-    if notifier:
+    if notifier and not duplicate_notification:
         dispatch_result = _dispatch_or_buffer_notification(
             ctx, notifier, update, args, claimed, allow_after_stop=True
         )

@@ -184,6 +184,42 @@ def test_apply_update_actions_skips_duplicate_notification(tmp_path):
     assert sent == []
 
 
+def test_duplicate_title_still_updates_other_region(tmp_path):
+    ctx = _ctx(tmp_path)
+    args = _args()
+    sent = []
+
+    class Notifier:
+        def send(self, *a, **kw):
+            sent.append(a[0])
+            return True
+
+    with patch("checkota.processor.create_notifier", return_value=Notifier()):
+        for region in ("OP", "EU"):
+            path = tmp_path / f"{region}.yml"
+            path.write_text(
+                'oem: "Infinix"\nproduct_base: "X1"\nmodel: "Test"\n'
+                f'android_version: "15"\nregions:\n  {region}: "1"\n',
+                encoding="utf-8",
+            )
+            cfg = Config.from_yaml(path)[0]
+            target = (
+                f"Infinix/X1-{region}/Infinix-X1:16/"
+                "BP2A.250605.031.A3/2:user/release-keys"
+            )
+            update = _update(
+                cfg=cfg,
+                config_path=path,
+                title="SHARED-TITLE",
+                target_fp=target,
+                target_incremental="2",
+            )
+            assert apply_update_actions(ctx, update, args) == 0
+            assert Config.from_yaml(path)[0].fingerprint() == target
+
+    assert len(sent) == 1
+
+
 def test_apply_update_actions_reports_claim_failure(tmp_path):
     ctx = _ctx(tmp_path)
 
