@@ -87,15 +87,58 @@ def test_failed_inline_send_survives_restart_and_commits_on_replay(tmp_path):
     restarted.stop()
 
 
-def test_known_title_still_updates_region_without_resending(tmp_path):
+def test_known_title_does_not_update_region_or_resend(tmp_path):
     ctx, update, args = _setup(tmp_path)
     ctx.processed_titles.add(update.title)
     update.is_new_update = False
+    before = update.config_path.read_bytes()
     sender = _Notifier()
     with patch.object(processor, "create_notifier", return_value=sender):
         assert processor.apply_update_actions(ctx, update, args) == 0
-    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert update.config_path.read_bytes() == before
     assert sender.sent == []
+    ctx.stop()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("override", [None, "update_incremental", "force_notify"])
+def test_known_title_skips_metadata_unless_explicitly_requested(
+    tmp_path, dry_run, override
+):
+    ctx, update, args = _setup(tmp_path)
+    ctx.processed_titles.add(update.title)
+    args.dry_run = ctx.dry_run = dry_run
+    args.fp = None
+    if override:
+        setattr(args, override, True)
+    before = update.config_path.read_bytes()
+    with (
+        patch.object(
+            processor,
+            "_check_for_updates",
+            return_value=(
+                0,
+                {
+                    "title": update.title,
+                    "url": update.url,
+                    "size": update.size,
+                },
+            ),
+        ),
+        patch.object(
+            processor, "_resolve_target_metadata", return_value=(0, None)
+        ) as metadata,
+        patch.object(processor, "_apply_config_update") as rewrite,
+    ):
+        assert processor.collect_update_info(
+            ctx, update.cfg, update.config_path, args
+        ) == (0, None)
+        if override:
+            metadata.assert_called_once()
+        else:
+            metadata.assert_not_called()
+        rewrite.assert_not_called()
+    assert update.config_path.read_bytes() == before
     ctx.stop()
 
 
