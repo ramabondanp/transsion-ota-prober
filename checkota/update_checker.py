@@ -424,17 +424,23 @@ class UpdateChecker:
             "url": None,
         }
 
+        # A check-in response is one update, not a list of update records.
+        # Mixing the first URL with the last title/size would label the wrong
+        # ZIP and potentially record the wrong title. Identical repeated values
+        # are harmless, but conflicting values are ambiguous and fail closed.
         for entry in resp.setting:
             name_bytes = entry.name or b""
             value_bytes = entry.value or b""
 
             value = value_bytes.decode("utf-8", errors="ignore")
 
-            if not info["found"] and (
-                name_bytes == b"update_url" or OTA_URL_PREFIX in value_bytes
-            ):
+            if name_bytes == b"update_url" or OTA_URL_PREFIX in value_bytes:
                 url = value.strip()
                 if url and self._is_allowed_ota_url(url):
+                    if info["url"] is not None and info["url"] != url:
+                        raise UpdateCheckError(
+                            "Conflicting update URLs in check-in response"
+                        )
                     info["url"] = url
                     info["found"] = True
                 elif url:
@@ -459,14 +465,32 @@ class UpdateChecker:
                 if title is None:
                     Log.w("Ignoring update title containing control characters.")
                 else:
+                    if info["title"] is not None and info["title"] != title:
+                        raise UpdateCheckError(
+                            "Conflicting update titles in check-in response"
+                        )
                     info["title"] = title
             elif name == "update_description":
-                info["description"] = self._safe_description(value)
+                description = self._safe_description(value)
+                if (
+                    info["description"] is not None
+                    and description is not None
+                    and info["description"] != description
+                ):
+                    raise UpdateCheckError(
+                        "Conflicting update descriptions in check-in response"
+                    )
+                if description is not None:
+                    info["description"] = description
             elif name == "update_size":
                 size = self._safe_size(value)
                 if size is None:
                     Log.w("Ignoring malformed or oversized update size.")
                 else:
+                    if info["size"] is not None and info["size"] != size:
+                        raise UpdateCheckError(
+                            "Conflicting update sizes in check-in response"
+                        )
                     info["size"] = size
 
         return info

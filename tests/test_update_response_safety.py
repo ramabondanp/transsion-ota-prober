@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from checkota.manager import Config
-from checkota.update_checker import UpdateChecker
+from checkota.update_checker import UpdateChecker, UpdateCheckError
 
 
 def _checker() -> UpdateChecker:
@@ -92,6 +92,27 @@ def test_control_only_description_becomes_none():
     parsed = _parse_with([_setting(b"update_description", b"\x1b[2J\x1b[31m")])
 
     assert parsed["description"] is None
+
+
+def test_conflicting_repeated_response_fields_fail_closed():
+    import pytest
+
+    url = "https://android.googleapis.com/packages/ota/"
+    base = [
+        _setting(b"update_url", (url + "a.zip").encode()),
+        _setting(b"update_title", b"OTA A"),
+        _setting(b"update_size", b"1 GB"),
+    ]
+    for conflict in (
+        _setting(b"update_url", (url + "b.zip").encode()),
+        _setting(b"update_title", b"OTA B"),
+        _setting(b"update_size", b"2 GB"),
+    ):
+        with pytest.raises(UpdateCheckError, match="Conflicting update"):
+            _parse_with([*base, conflict])
+
+    # Duplicate identical fields must not cause an error.
+    assert _parse_with([*base, *base])["title"] == "OTA A"
 
 
 def test_register_update_rejects_mismatched_target(tmp_path, monkeypatch):
