@@ -20,6 +20,7 @@ from checkota.processor import (
     config_from_fingerprint,
     drain_pending_notifications,
     load_config_regions,
+    load_outbox_into_context,
     process_config,
     process_region,
     scan_region_filter,
@@ -439,6 +440,12 @@ def main() -> int:
     )
     ctx = args.run_context
     ctx.cli_args = args
+    # Rehydrate records staged by an earlier run BEFORE check-in can hide an
+    # OTA whose YAML was already advanced. A corrupt outbox fails closed.
+    if args.dry_run or args.fp:
+        outbox_ok = True
+    else:
+        outbox_ok = load_outbox_into_context(ctx)
     previous_sigint = install_interrupt_handler(ctx)
     watchdog = start_watchdog(ctx, args.timeout)
     executor = None
@@ -450,7 +457,9 @@ def main() -> int:
     buffered_notifications_possible = getattr(args, "config_dir", None) is not None
 
     try:
-        if args.fp:
+        if not outbox_ok:
+            exit_code = 1
+        elif args.fp:
             args.no_config = True
             try:
                 cfg = config_from_fingerprint(args.fp)
@@ -537,10 +546,16 @@ def main() -> int:
         drain_watchdog = (
             start_watchdog(ctx, DRAIN_WATCHDOG_SECONDS)
             if buffered_notifications_possible
+            and outbox_ok
+            and _telegram_notifications_enabled(args)
             else None
         )
         try:
-            if buffered_notifications_possible:
+            if (
+                buffered_notifications_possible
+                and outbox_ok
+                and _telegram_notifications_enabled(args)
+            ):
                 with ctx.drain_lock:
                     ctx.stop_event.clear()
                     try:

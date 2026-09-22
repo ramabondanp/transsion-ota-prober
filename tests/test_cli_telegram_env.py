@@ -178,6 +178,7 @@ def test_update_incremental_runs_without_env(monkeypatch, tmp_path):
         stop=lambda: None,
         pending_lock=threading.Lock(),
         pending_notifications=[],
+        processed_path=tmp_path / "processed_updates.txt",
         drain_lock=threading.Lock(),
     )
     processed: list[Path] = []

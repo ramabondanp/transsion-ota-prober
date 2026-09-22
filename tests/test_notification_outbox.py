@@ -1,0 +1,194 @@
+"""Regression coverage for notification delivery across rewrites and restarts."""
+
+import argparse
+import sys
+from unittest.mock import patch
+
+import pytest
+
+from checkota import cli, processor
+from checkota.manager import Config
+from checkota.models import PendingNotification, RegionUpdate
+from checkota.outbox import (
+    load_pending_notifications,
+    remove_pending_notification,
+    stage_pending_notification,
+)
+from checkota.runtime import RunContext
+
+TARGET = "Infinix/X1-OP/Infinix-X1:16/BP2A.250605.031.A3/2:user/release-keys"
+
+
+def _setup(tmp_path):
+    config_path = tmp_path / "config-X1.yml"
+    config_path.write_text(
+        'oem: "Infinix"\nproduct_base: "X1"\nmodel: "Test"\n'
+        'android_version: "15"\nregions:\n  OP: "1"\n',
+        encoding="utf-8",
+    )
+    path = tmp_path / "titles.txt"
+    ctx = RunContext(env={}, processed_path=path, processed_titles=set(), dry_run=False)
+    update = RegionUpdate(
+        cfg=Config.from_yaml(config_path)[0],
+        config_path=config_path,
+        region_name="Global",
+        title="TITLE",
+        url="https://android.googleapis.com/packages/ota/a.zip",
+        size="100",
+        desc="desc",
+        is_new_update=True,
+        target_fp=TARGET,
+        target_incremental="2",
+        sdk_message=None,
+        data={},
+    )
+    args = argparse.Namespace(
+        skip_telegram=False,
+        register_update=False,
+        dry_run=False,
+        force_notify=False,
+        update_incremental=False,
+        incremental=None,
+        no_config=False,
+        config_dir=None,
+    )
+    return ctx, update, args
+
+
+class _Notifier:
+    def __init__(self, success=True):
+        self.success = success
+        self.sent = []
+
+    def send(self, msg, **kwargs):
+        self.sent.append(msg)
+        return self.success
+
+
+def test_failed_inline_send_survives_restart_and_commits_on_replay(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    with patch.object(processor, "create_notifier", return_value=_Notifier(False)):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert "TITLE" not in ctx.processed_titles
+    assert len(load_pending_notifications(ctx.processed_path)) == 1
+    ctx.stop()
+
+    restarted = RunContext(
+        env={}, processed_path=ctx.processed_path, processed_titles=set(), dry_run=False
+    )
+    assert processor.load_outbox_into_context(restarted)
+    sender = _Notifier()
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.drain_pending_notifications(restarted, args, delay=0) == 0
+    assert len(sender.sent) == 1
+    assert restarted.processed_path.read_text() == "TITLE\n"
+    assert load_pending_notifications(ctx.processed_path) == []
+    restarted.stop()
+
+
+def test_known_title_still_updates_region_without_resending(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    ctx.processed_titles.add(update.title)
+    update.is_new_update = False
+    sender = _Notifier()
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.apply_update_actions(ctx, update, args) == 0
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert sender.sent == []
+    ctx.stop()
+
+
+def test_staging_failure_does_not_advance_yaml(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    before = update.config_path.read_bytes()
+    with (
+        patch.object(processor, "create_notifier", return_value=_Notifier()),
+        patch.object(processor, "stage_pending_notification", return_value=False),
+    ):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    assert update.config_path.read_bytes() == before
+    ctx.stop()
+
+
+def test_failed_rewrite_does_not_replay_unapplied_update(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    with (
+        patch.object(processor, "create_notifier", return_value=_Notifier()),
+        patch.object(processor, "update_config_from_fingerprint", return_value=False),
+    ):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    assert load_pending_notifications(ctx.processed_path) == []
+    ctx.stop()
+
+
+def test_duplicate_pending_notification_does_not_commit_title_without_send(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    existing = PendingNotification(
+        msg="earlier", title="TITLE", device_title="Test", is_new_update=True
+    )
+    ctx.pending_notifications.append(existing)
+    with patch.object(processor, "create_notifier", return_value=_Notifier()):
+        assert processor.apply_update_actions(ctx, update, args) == 0
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert "TITLE" not in ctx.processed_titles
+    ctx.stop()
+
+
+def test_crash_after_rewrite_before_ready_is_recovered(tmp_path):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET
+    )
+    assert load_pending_notifications(ctx.processed_path) == []
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
+    assert load_pending_notifications(ctx.processed_path) == [note]
+    assert remove_pending_notification(ctx.processed_path, note.title)
+    ctx.stop()
+
+
+def test_cli_replays_outbox_even_when_check_finds_no_updates(tmp_path, monkeypatch):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET, ready=True
+    )
+    sender = _Notifier()
+    monkeypatch.setenv("bot_token", "token")
+    monkeypatch.setenv("chat_id", "chat")
+    monkeypatch.setattr(sys, "argv", ["checkota", "-c", str(update.config_path)])
+    monkeypatch.setattr(cli, "create_run_context", lambda *a, **kw: ctx)
+    monkeypatch.setattr(cli, "start_watchdog", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "process_config", lambda *a, **kw: 0)
+    monkeypatch.setattr(processor, "create_notifier", lambda *a, **kw: sender)
+    assert cli.main() == 0
+    assert sender.sent == ["message"]
+    assert ctx.processed_titles == {"TITLE"}
+    assert load_pending_notifications(ctx.processed_path) == []
+
+
+def test_corrupt_outbox_aborts_without_checking_configs(tmp_path, monkeypatch):
+    ctx, update, _ = _setup(tmp_path)
+    directory = tmp_path / "titles.txt.outbox"
+    directory.mkdir()
+    (directory / "corrupt.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("bot_token", "token")
+    monkeypatch.setenv("chat_id", "chat")
+    monkeypatch.setattr(sys, "argv", ["checkota", "-c", str(update.config_path)])
+    monkeypatch.setattr(cli, "create_run_context", lambda *a, **kw: ctx)
+    monkeypatch.setattr(cli, "start_watchdog", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        cli, "process_config", lambda *a, **kw: pytest.fail("check should not run")
+    )
+    assert cli.main() == 1
+    assert Config.from_yaml(update.config_path)[0].incremental == "1"

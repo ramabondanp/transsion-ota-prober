@@ -38,6 +38,12 @@ from checkota.notifier import (
     create_notifier,
     is_sweep_mode,
 )
+from checkota.outbox import (
+    has_pending_notification,
+    load_pending_notifications,
+    remove_pending_notification,
+    stage_pending_notification,
+)
 from checkota.runtime import RunContext
 from checkota.update_checker import UpdateChecker, UpdateCheckError
 
@@ -444,8 +450,9 @@ def collect_update_info(
                 "Update title already known; proceeding to update incremental value (--update-incremental)."
             )
         elif not getattr(args, "force_notify", False):
-            Log.i("This update has already been processed. Skipping.")
-            return 0, None
+            # A title is shared across regions. Even when another region has
+            # already recorded it, this region may still need the YAML update.
+            Log.i("Title already processed; checking this region's target build.")
 
     status, target = _resolve_target_metadata(ctx, cfg, url)
     if status != 0 or target is None:
@@ -606,7 +613,10 @@ def _dispatch_or_buffer_notification(
     if not sent:
         if claimed:
             _release_claimed_update(ctx, update.title)
-        Log.e("Failed to send notification. Update title will not be saved.")
+        Log.e(
+            "Failed to send notification. Update title will not be saved; "
+            "outbox retained for retry."
+        )
         return 1
     if update.is_new_update:
         if claimed:
@@ -614,6 +624,10 @@ def _dispatch_or_buffer_notification(
                 Log.e("Notification sent, but update title could not be saved.")
                 return 1
         elif not save_processed_update(ctx, update.title):
+            return 1
+        if not getattr(args, "no_config", False) and not remove_pending_notification(
+            ctx.processed_path, update.title
+        ):
             return 1
     return 0
 
@@ -639,9 +653,16 @@ def apply_update_actions(
     # `--force-notify` bypasses this because the user explicitly asked for
     # notifications even for already-processed titles.
     claimed = False
-    duplicate_notification = False
+    with ctx.pending_lock:
+        duplicate_notification = any(
+            note.title == update.title and note.is_new_update
+            for note in ctx.pending_notifications
+        )
+    if duplicate_notification:
+        Log.i("Notification already queued for this title; updating this region.")
     if (
-        notifier
+        not duplicate_notification
+        and notifier
         and update.is_new_update
         and not args.dry_run
         and not getattr(args, "force_notify", False)
@@ -660,9 +681,59 @@ def apply_update_actions(
             claimed = True
 
     update_incremental_only = bool(getattr(args, "update_incremental", False))
-    if (update_incremental_only or update.is_new_update) and not _apply_config_update(
-        ctx, update, args
-    ):
+    needs_config_update = (
+        update_incremental_only
+        or update.is_new_update
+        or not (args.register_update or getattr(args, "no_config", False))
+    )
+    file_backed = not (
+        args.dry_run
+        or getattr(args, "no_config", False)
+        or getattr(args, "incremental", None)
+        or (
+            "Tcard" in update.title
+            and (parsed := parse_fingerprint(update.target_fp)) is not None
+            and parsed["android_version"] == update.cfg.android_version
+        )
+        or not update.target_incremental
+    )
+    staged = False
+    note: PendingNotification | None = None
+    if notifier and update.is_new_update and not duplicate_notification and file_backed:
+        try:
+            already_staged = has_pending_notification(ctx.processed_path, update.title)
+        except (OSError, ValueError, UnicodeError) as exc:
+            Log.e(f"Could not inspect notification outbox: {exc}")
+            if claimed:
+                _release_claimed_update(ctx, update.title)
+            return 1
+        if already_staged:
+            duplicate_notification = True
+            Log.i("Notification already in outbox; updating this region.")
+            if claimed:
+                _release_claimed_update(ctx, update.title)
+                claimed = False
+
+    if notifier and update.is_new_update and not duplicate_notification and file_backed:
+        note = PendingNotification(
+            msg=build_notification_message(update),
+            device_title=f"{update.cfg.model} - {update.title}",
+            title=update.title,
+            is_new_update=True,
+        )
+        if not stage_pending_notification(
+            ctx.processed_path, note, update.config_path, update.target_fp
+        ):
+            if claimed:
+                _release_claimed_update(ctx, update.title)
+            return 1
+        staged = True
+
+    if needs_config_update and not _apply_config_update(ctx, update, args):
+        if staged:
+            # If a rewrite failed after publication, the outbox remains
+            # recoverable; replay checks that the target fingerprint is on disk.
+            Log.w("Config rewrite failed; staged notification will not be sent.")
         if claimed:
             _release_claimed_update(ctx, update.title)
         if ctx.stop_event.is_set():
@@ -674,7 +745,24 @@ def apply_update_actions(
         )
         return 1
 
-    if notifier and not duplicate_notification:
+    if (
+        staged
+        and note is not None
+        and not stage_pending_notification(
+            ctx.processed_path, note, update.config_path, update.target_fp, ready=True
+        )
+    ):
+        # The first (not-ready) record can still be replayed if the YAML
+        # rewrite succeeded; fail this run rather than losing the claim.
+        if claimed:
+            _release_claimed_update(ctx, update.title)
+        return 1
+
+    if (
+        notifier
+        and not duplicate_notification
+        and (update.is_new_update or getattr(args, "force_notify", False))
+    ):
         dispatch_result = _dispatch_or_buffer_notification(
             ctx, notifier, update, args, claimed, allow_after_stop=True
         )
@@ -682,7 +770,7 @@ def apply_update_actions(
             if claimed and dispatch_result == 130:
                 _release_claimed_update(ctx, update.title)
             return dispatch_result
-    elif update.is_new_update and not getattr(args, "dry_run", False):
+    elif not notifier and update.is_new_update and not getattr(args, "dry_run", False):
         # The config was just advanced but nothing will announce this update
         # (--skip-telegram, or Telegram setup unavailable). Record the title so
         # the update is not left neither announced nor recorded: a later run
@@ -707,6 +795,22 @@ def _remove_pending_notification(ctx: RunContext, note: PendingNotification) -> 
 def _release_pending_claim(ctx: RunContext, note: PendingNotification) -> None:
     if note.is_new_update:
         _release_claimed_update(ctx, note.title)
+
+
+def load_outbox_into_context(ctx: RunContext) -> bool:
+    """Queue persisted notifications on startup before any new check-in work."""
+    try:
+        notes = load_pending_notifications(ctx.processed_path)
+    except (OSError, ValueError, UnicodeError) as exc:
+        Log.e(f"Could not load notification outbox: {exc}")
+        return False
+    with ctx.pending_lock:
+        titles = {note.title for note in ctx.pending_notifications}
+        for note in notes:
+            if note.title not in titles:
+                ctx.pending_notifications.append(note)
+                titles.add(note.title)
+    return True
 
 
 def drain_pending_notifications(
@@ -808,6 +912,9 @@ def drain_pending_notifications(
                     f"Skipping already-processed buffered notification: "
                     f"{note.device_title}"
                 )
+                if not remove_pending_notification(ctx.processed_path, note.title):
+                    failed = True
+                    continue
                 _remove_pending_notification(ctx, note)
                 _release_pending_claim(ctx, note)
                 continue
@@ -849,6 +956,10 @@ def drain_pending_notifications(
                 _release_pending_claim(ctx, note)
                 continue
         _remove_pending_notification(ctx, note)
+        if note.is_new_update and not remove_pending_notification(
+            ctx.processed_path, note.title
+        ):
+            failed = True
 
     return 1 if failed else 0
 
