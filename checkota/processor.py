@@ -495,6 +495,20 @@ def _log_dry_run_config_update(
         )
 
 
+def _tcard_allows_config_update(update: RegionUpdate) -> bool:
+    """Tcard packages may rewrite config only for a proven Android upgrade."""
+    if "Tcard" not in update.title:
+        return True
+    parsed = parse_fingerprint(update.target_fp)
+    if parsed is None:
+        return False
+    try:
+        return int(parsed["android_version"]) > int(update.cfg.android_version)
+    except ValueError:
+        # Preview/non-numeric versions cannot establish an upgrade safely.
+        return False
+
+
 def _apply_config_update(ctx: RunContext, update: RegionUpdate, args) -> bool:
     """Rewrite the device config for the target build. Returns success.
 
@@ -511,13 +525,10 @@ def _apply_config_update(ctx: RunContext, update: RegionUpdate, args) -> bool:
     if getattr(args, "no_config", False):
         Log.i("No config file mode; skipping incremental config update.")
         return True
-    if (
-        "Tcard" in update.title
-        and parsed_target
-        and parsed_target["android_version"] == update.cfg.android_version
-    ):
+    if not _tcard_allows_config_update(update):
         Log.i(
-            "Skipping config update because update title contains 'Tcard' without an Android version change."
+            "Skipping config update because update title contains 'Tcard' "
+            "without a newer Android version."
         )
         return True
     if not update.target_incremental:
@@ -685,11 +696,7 @@ def apply_update_actions(
         args.dry_run
         or getattr(args, "no_config", False)
         or getattr(args, "incremental", None)
-        or (
-            "Tcard" in update.title
-            and (parsed := parse_fingerprint(update.target_fp)) is not None
-            and parsed["android_version"] == update.cfg.android_version
-        )
+        or not _tcard_allows_config_update(update)
         or not update.target_incremental
     )
     staged = False

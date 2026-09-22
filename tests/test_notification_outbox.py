@@ -142,6 +142,74 @@ def test_known_title_skips_metadata_unless_explicitly_requested(
     ctx.stop()
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("update_incremental", [False, True])
+@pytest.mark.parametrize(
+    "current,target,should_update",
+    [
+        ("16", "15", False),
+        ("16", "16", False),
+        ("15", "16", True),
+        ("9", "10", True),
+        ("10", "9", False),
+        ("preview", "16", False),
+        ("16", "preview", False),
+    ],
+)
+def test_tcard_only_rewrites_for_android_upgrade(
+    tmp_path, capsys, dry_run, update_incremental, current, target, should_update
+):
+    ctx, update, args = _setup(tmp_path)
+    update.config_path.write_text(
+        'oem: "Infinix"\nproduct_base: "X1"\nmodel: "Test"\n'
+        f'android_version: "{current}"\nregions:\n'
+        '  OP:\n    build_tag: "OLD"\n    incremental: "1"\n',
+        encoding="utf-8",
+    )
+    update.cfg = Config.from_yaml(update.config_path)[0]
+    update.title = "Tcard_X1"
+    update.target_fp = f"Infinix/X1-OP/Infinix-X1:{target}/NEW/2:user/release-keys"
+    args.dry_run = ctx.dry_run = dry_run
+    args.update_incremental = update_incremental
+    before = update.config_path.read_bytes()
+    original_fp = update.cfg.fingerprint()
+    sender = _Notifier()
+    with (
+        patch.object(processor, "create_notifier", return_value=sender),
+        patch.object(
+            processor, "stage_pending_notification", wraps=stage_pending_notification
+        ) as stage,
+    ):
+        assert processor.apply_update_actions(ctx, update, args) == 0
+        assert stage.call_count == (2 if should_update and not dry_run else 0)
+    output = capsys.readouterr().out
+    if should_update and not dry_run:
+        assert Config.from_yaml(update.config_path)[0].fingerprint() == update.target_fp
+        assert update.cfg.fingerprint() == update.target_fp
+    else:
+        assert update.config_path.read_bytes() == before
+        assert update.cfg.fingerprint() == original_fp
+    if not should_update:
+        assert "without a newer Android version" in output
+        assert "Dry-run: would update" not in output
+    elif dry_run:
+        assert "Dry-run: would update" in output
+    assert len(sender.sent) == (0 if dry_run else 1)
+    assert load_pending_notifications(ctx.processed_path) == []
+    ctx.stop()
+
+
+def test_tcard_upgrade_retains_outbox_after_send_failure(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    update.title = "Tcard_X1"
+    with patch.object(processor, "create_notifier", return_value=_Notifier(False)):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert update.title not in ctx.processed_titles
+    assert len(load_pending_notifications(ctx.processed_path)) == 1
+    ctx.stop()
+
+
 def test_staging_failure_does_not_advance_yaml(tmp_path):
     ctx, update, args = _setup(tmp_path)
     before = update.config_path.read_bytes()
