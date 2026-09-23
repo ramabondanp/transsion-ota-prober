@@ -450,8 +450,9 @@ def collect_update_info(
                 "Update title already known; proceeding to update incremental value (--update-incremental)."
             )
         elif not getattr(args, "force_notify", False):
-            Log.i("This update has already been processed. Skipping.")
-            return 0, None
+            # Titles are shared across regions. A title committed for one
+            # region does not prove that this region's YAML reached its target.
+            Log.i("Title already processed; checking this region's target build.")
 
     status, target = _resolve_target_metadata(ctx, cfg, url)
     if status != 0 or target is None:
@@ -691,7 +692,11 @@ def apply_update_actions(
             claimed = True
 
     update_incremental_only = bool(getattr(args, "update_incremental", False))
-    needs_config_update = update_incremental_only or update.is_new_update
+    # Even a known title may belong to another region that was updated first.
+    # The YAML updater leaves already-matching regions byte-identical.
+    needs_config_update = update_incremental_only or update.is_new_update or not (
+        args.register_update or getattr(args, "no_config", False)
+    )
     file_backed = not (
         args.dry_run
         or getattr(args, "no_config", False)
