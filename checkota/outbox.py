@@ -42,16 +42,16 @@ def _decode(raw: bytes, path: Path, processed_path: Path) -> PendingNotification
         raise ValueError("Invalid notification outbox entry")
     if _entry_path(processed_path, data["title"]) != path:
         raise ValueError(f"Notification outbox entry has wrong filename: {path}")
-    if not data["ready"]:
-        # A crash may have happened after staging but BEFORE the YAML rewrite.
-        # Do not deliver an update whose config never advanced. Conversely, if
-        # the rewrite completed but the ready marker did not, recover it here.
-        try:
-            configs = Config.from_yaml(Path(data["config_path"]))
-        except (OSError, TypeError, ValueError):
-            return None
-        if not any(cfg.fingerprint() == data["target_fp"] for cfg in configs):
-            return None
+    # A crash can leave a record before the YAML rewrite, or preserve a ready
+    # record while the config rename is lost or later rolled back. Either way,
+    # replay only while the on-disk target still matches. This also recovers a
+    # rewrite completed before its ready marker could be published.
+    try:
+        configs = Config.from_yaml(Path(data["config_path"]))
+    except (OSError, TypeError, ValueError):
+        return None
+    if not any(cfg.fingerprint() == data["target_fp"] for cfg in configs):
+        return None
     return PendingNotification(
         msg=data["msg"],
         device_title=data["device_title"],
@@ -73,7 +73,7 @@ def load_pending_notifications(processed_path: Path) -> list[PendingNotification
 
 
 def has_pending_notification(processed_path: Path, title: str) -> bool:
-    """Whether a persisted title is ready (or already backed by a YAML rewrite)."""
+    """Whether a persisted title is backed by the target YAML fingerprint."""
     path = _entry_path(processed_path, title)
     try:
         return _decode(path.read_bytes(), path, processed_path) is not None

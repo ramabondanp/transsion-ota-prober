@@ -1327,6 +1327,17 @@ def _converge_android_default(
     return True
 
 
+def _sync_config_directory(directory: Path) -> None:
+    """Make the renamed YAML entry durable before its outbox is marked ready."""
+    if os.name == "nt":  # Windows has no portable directory fsync
+        return
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_updated_config(
     config_path: Path,
     lines: list[str],
@@ -1353,8 +1364,9 @@ def _write_updated_config(
         return False
 
     # Write to a temporary file in the same directory, validate it, then
-    # atomically replace the original. A failure at any point leaves the
-    # original config untouched.
+    # atomically replace the original and sync its directory. Failures before
+    # replacement leave the original untouched; a directory-sync failure after
+    # replacement is recoverable from the staged outbox record.
     tmp_path: Path | None = None
     try:
         # lstat, not stat: if an external tamperer swaps config_path for a
@@ -1430,6 +1442,7 @@ def _write_updated_config(
 
         os.replace(tmp_path, config_path)
         tmp_path = None
+        _sync_config_directory(config_path.parent)
     except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
         Log.w(f"Failed to write updated config {config_path}: {exc}")
         return False

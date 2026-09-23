@@ -1,12 +1,13 @@
 """Regression coverage for notification delivery across rewrites and restarts."""
 
 import argparse
+import os
 import sys
 from unittest.mock import patch
 
 import pytest
 
-from checkota import cli, processor
+from checkota import cli, manager, processor
 from checkota.manager import Config
 from checkota.models import PendingNotification, RegionUpdate
 from checkota.outbox import (
@@ -299,6 +300,80 @@ def test_crash_after_rewrite_before_ready_is_recovered(tmp_path):
     assert load_pending_notifications(ctx.processed_path) == [note]
     assert remove_pending_notification(ctx.processed_path, note.title)
     ctx.stop()
+
+
+def test_ready_outbox_does_not_replay_if_yaml_reverted(tmp_path):
+    ctx, update, _ = _setup(tmp_path)
+    old_yaml = update.config_path.read_bytes()
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
+    new_yaml = update.config_path.read_bytes()
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET, ready=True
+    )
+    update.config_path.write_bytes(old_yaml)
+    assert load_pending_notifications(ctx.processed_path) == []
+    assert processor.load_outbox_into_context(ctx)
+    assert ctx.pending_notifications == []
+    assert update.title not in ctx.processed_titles
+    update.config_path.write_bytes(new_yaml)
+    assert load_pending_notifications(ctx.processed_path) == [note]
+    ctx.stop()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="directory fsync unavailable on Windows")
+def test_config_rewrite_fsyncs_config_directory(tmp_path):
+    ctx, update, _ = _setup(tmp_path)
+    directory_stat = update.config_path.parent.stat()
+    synced_directory = []
+    real_fsync = os.fsync
+
+    def track_fsync(fd):
+        entry = os.fstat(fd)
+        if (entry.st_dev, entry.st_ino) == (
+            directory_stat.st_dev,
+            directory_stat.st_ino,
+        ):
+            synced_directory.append(True)
+        real_fsync(fd)
+
+    with patch.object(manager.os, "fsync", side_effect=track_fsync):
+        assert processor.update_config_from_fingerprint(
+            update.config_path, update.cfg, TARGET
+        )
+    assert synced_directory
+    ctx.stop()
+
+
+def test_directory_sync_failure_leaves_recoverable_outbox(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    sender = _Notifier()
+    with (
+        patch.object(processor, "create_notifier", return_value=sender),
+        patch.object(
+            manager, "_sync_config_directory", side_effect=OSError("sync failed")
+        ),
+    ):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    assert sender.sent == []
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert load_pending_notifications(ctx.processed_path)
+    assert update.title not in ctx.processed_titles
+    ctx.stop()
+
+    restarted = RunContext(
+        env={}, processed_path=ctx.processed_path, processed_titles=set(), dry_run=False
+    )
+    assert processor.load_outbox_into_context(restarted)
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.drain_pending_notifications(restarted, args, delay=0) == 0
+    assert len(sender.sent) == 1
+    assert restarted.processed_titles == {update.title}
+    restarted.stop()
 
 
 def test_cli_replays_outbox_even_when_check_finds_no_updates(tmp_path, monkeypatch):
