@@ -88,20 +88,24 @@ def test_failed_inline_send_survives_restart_and_commits_on_replay(tmp_path):
     restarted.stop()
 
 
-def test_known_title_updates_stale_region_without_resend(tmp_path):
+def test_known_title_does_not_update_region_or_resend(tmp_path):
     ctx, update, args = _setup(tmp_path)
     ctx.processed_titles.add(update.title)
     update.is_new_update = False
+    before = update.config_path.read_bytes()
     sender = _Notifier()
     with patch.object(processor, "create_notifier", return_value=sender):
         assert processor.apply_update_actions(ctx, update, args) == 0
-    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+    assert update.config_path.read_bytes() == before
     assert sender.sent == []
     assert load_pending_notifications(ctx.processed_path) == []
     ctx.stop()
 
 
-def test_shared_title_catches_up_second_region_and_noop_is_byte_identical(tmp_path):
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_processed_tcard_skips_metadata_and_config_even_in_stale_region(
+    tmp_path, dry_run
+):
     ctx, update, args = _setup(tmp_path)
     update.config_path.write_text(
         'oem: "Infinix"\nproduct_base: "X1"\nmodel: "Test"\n'
@@ -110,44 +114,31 @@ def test_shared_title_catches_up_second_region_and_noop_is_byte_identical(tmp_pa
     )
     op, eu = Config.from_yaml(update.config_path)
     assert processor.update_config_from_fingerprint(update.config_path, op, TARGET)
-    assert Config.from_yaml(update.config_path)[1].incremental == "1"
-    ctx.processed_titles.add(update.title)
-    eu_target = TARGET.replace("X1-OP", "X1-EU")
+    ctx.processed_titles.add("Tcard_X1")
     args.fp = None
-    data = {"title": update.title, "url": update.url, "size": update.size}
-    sender = _Notifier()
+    args.dry_run = ctx.dry_run = dry_run
+    data = {"title": "Tcard_X1", "url": update.url, "size": update.size}
+    before = update.config_path.read_bytes()
     with (
         patch.object(processor, "_check_for_updates", return_value=(0, data)),
-        patch.object(
-            processor,
-            "get_cached_ota_metadata",
-            return_value={"fingerprint": eu_target},
-        ),
-        patch.object(processor, "create_notifier", return_value=sender),
+        patch.object(processor, "_resolve_target_metadata") as metadata,
+        patch.object(processor, "apply_update_actions") as actions,
     ):
-        status, found = processor.collect_update_info(ctx, eu, update.config_path, args)
-        assert status == 0 and found is not None and not found.is_new_update
-        assert processor.apply_update_actions(ctx, found, args) == 0
-        op_after, eu_after = Config.from_yaml(update.config_path)
-        assert op_after.fingerprint() == TARGET
-        assert eu_after.fingerprint() == eu_target
-        before = update.config_path.read_bytes()
-        status, found = processor.collect_update_info(
-            ctx, eu_after, update.config_path, args
-        )
-        assert status == 0 and found is not None
-        assert processor.apply_update_actions(ctx, found, args) == 0
+        assert processor.process_region(ctx, eu, update.config_path, args) == 0
+        metadata.assert_not_called()
+        actions.assert_not_called()
     assert update.config_path.read_bytes() == before
-    assert sender.sent == []
+    assert Config.from_yaml(update.config_path)[1].incremental == "1"
     ctx.stop()
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
 @pytest.mark.parametrize("override", [None, "update_incremental", "force_notify"])
-def test_known_title_still_fetches_metadata_to_check_region(
+def test_known_title_skips_metadata_unless_explicitly_requested(
     tmp_path, dry_run, override
 ):
     ctx, update, args = _setup(tmp_path)
+    update.title = "Tcard_X1"
     ctx.processed_titles.add(update.title)
     args.dry_run = ctx.dry_run = dry_run
     args.fp = None
@@ -175,9 +166,32 @@ def test_known_title_still_fetches_metadata_to_check_region(
         assert processor.collect_update_info(
             ctx, update.cfg, update.config_path, args
         ) == (0, None)
-        metadata.assert_called_once()
+        if override:
+            metadata.assert_called_once()
+        else:
+            metadata.assert_not_called()
         rewrite.assert_not_called()
     assert update.config_path.read_bytes() == before
+    ctx.stop()
+
+
+@pytest.mark.parametrize("override", ["update_incremental", "force_notify"])
+def test_known_title_explicit_overrides_keep_their_behavior(tmp_path, override):
+    ctx, update, args = _setup(tmp_path)
+    ctx.processed_titles.add(update.title)
+    update.is_new_update = False
+    setattr(args, override, True)
+    before = update.config_path.read_bytes()
+    sender = _Notifier()
+    notifier = None if override == "update_incremental" else sender
+    with patch.object(processor, "create_notifier", return_value=notifier):
+        assert processor.apply_update_actions(ctx, update, args) == 0
+    if override == "update_incremental":
+        assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
+        assert sender.sent == []
+    else:
+        assert update.config_path.read_bytes() == before
+        assert len(sender.sent) == 1
     ctx.stop()
 
 

@@ -190,6 +190,17 @@ Same two-stage approach as Telegram:
 + Importing the package never seeds anything; seeding happens only when config lookup
   needs it (`active_config_dir()`).
 
+### Processed-title short circuit (`processor.py`)
+
+A processed title is terminal for a normal run, even if another region's YAML is still
+behind. After check-in supplies the title, `collect_update_info()` returns before fetching
+OTA ZIP metadata or updating any config. **Do not re-fetch metadata to "catch up" other
+regions for a known title**: this causes repeated Tcard processing and violates the
+processed-title contract. `apply_update_actions()` must also leave configs alone for a
+known title. Only the explicit `--update-incremental` and `--force-notify` flags bypass
+the early skip; `--update-incremental` may rewrite the config, while `--force-notify`
+resends without rewriting an already-processed update. Dry-run alone is not an override.
+
 ### Fingerprint identity validation (`manager.py`, `processor.py`)
 
 A target fingerprint's immutable identity (`oem`, `product`, `device`) must match the
