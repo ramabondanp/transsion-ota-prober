@@ -3,9 +3,9 @@ product_base: "X6856"
 model: "Infinix NOTE 50 Pro+ 5G"
 android_version: "16"
 regions:
-  OP: "301500015"
+  OP: "301550007"
   EU:
     android_version: "15"
     incremental: "123030"
-  TR: "301500015"
-  RU: "301500015"
+  TR: "301550007"
+  RU: "301550007"

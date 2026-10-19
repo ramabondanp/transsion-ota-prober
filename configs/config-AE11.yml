@@ -3,7 +3,7 @@ product_base: "AE11"
 model: "TECNO PHANTOM V Flip2 5G"
 android_version: "15"
 regions:
-  OP: "135001"
+  OP: "150001"
   TR: "135003"
   RU: "135003"
   IN: "135003"

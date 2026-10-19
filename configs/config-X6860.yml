@@ -3,4 +3,4 @@ product_base: "X6860"
 model: "Infinix ZERO 40 4G"
 android_version: "15"
 regions:
-  OP: "180002"
+  OP: "195002"

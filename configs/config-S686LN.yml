@@ -3,4 +3,4 @@ product_base: "S686LN"
 model: "itel S25 Ultra"
 android_version: "15"
 regions:
-  OP: "180004"
+  OP: "195002"

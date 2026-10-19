@@ -3,4 +3,4 @@ product_base: "S685LN"
 model: "itel S25"
 android_version: "15"
 regions:
-  OP: "180015"
+  OP: "195004"
