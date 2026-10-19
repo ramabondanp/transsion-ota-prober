@@ -6,19 +6,19 @@ from checkota.constants import BUILD_TAG_BY_ANDROID
 from checkota.manager import Config
 
 
-def test_all_repository_configs_use_compact_schema_and_resolve_expected_count():
+def test_all_repository_configs_use_compact_schema_and_resolve_identities():
     config_dir = Path(__file__).parents[1] / "configs"
     paths = sorted(config_dir.glob("config-*.yml"))
 
     documents = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in paths]
     configs = [config for path in paths for config in Config.from_yaml(path)]
 
-    assert len(paths) == 96
-    assert len(configs) == 129
+    assert paths  # guard against a vacuous pass if the config directory is missing
     assert all(config.region is not None for config in configs)
-    assert all(list(document) == [
-        "oem", "product_base", "model", "android_version", "regions"
-    ] for document in documents)
+    assert all(
+        list(document) == ["oem", "product_base", "model", "android_version", "regions"]
+        for document in documents
+    )
     assert all(
         not ({"variants", "product", "device"} & document.keys())
         for document in documents

@@ -49,7 +49,7 @@ checkota/              ← Package (import: from checkota.cli import main)
                          rendered-UTF-16 length fitting, plain-text fallback (no I/O)
     telegram.py        ← Telegram notify + Telegraph fallback; bot token redacted from
                          error logs; delegates text work to message_text.py
-configs/               ← YAML device configs (one per codename, 96 files); bundled into
+configs/               ← YAML device configs (one per codename); bundled into
                          wheels as checkota.bundled_configs and seeded to XDG on first use
 tests/                 ← pytest suite
 scripts/               ← Ad-hoc tooling (proxy-based checks: fetch_spys, check_update_proxy)
@@ -143,6 +143,10 @@ single-region config containing `product` or `device` similarly directs the user
 defaults are migrated, but existing wheel/XDG configs are never overwritten automatically
 and require this manual migration.
 
+The repository test suite validates every config's schema and derived identity without
+pinning config or target counts: adding or removing a config must not require editing
+assertions or documentation numbers.
+
 ### Telegram HTML sanitization (`_sanitize_html`, 5 ordered steps)
 
 1. **Bold headers** — lines like `Android Version<br>` NOT wrapped in `<small>/<font>`
@@ -218,9 +222,9 @@ before and after; a promotion that would change any of them is rejected.
 
 Convergence runs **only on a real update**. A check whose target values already match the
 YAML returns early and leaves the file byte-identical — normalization is a side effect of
-applying an update, not something a no-op sweep across 96 configs may trigger. This
-early return is load-bearing: it was dropped once and restored deliberately; do not let a
-"harmless normalization" pass reintroduce writes on no-op checks. Because
+applying an update, not something a no-op sweep across the repository configs may
+trigger. This early return is load-bearing: it was dropped once and restored deliberately;
+do not let a "harmless normalization" pass reintroduce writes on no-op checks. Because
 collapsing removes child keys, comments attached to them are re-indented to the region key
 and hoisted above it rather than left at a dead indentation level. When a scalar region
 expands, inserted child keys follow the file's dominant region-child indent
