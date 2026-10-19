@@ -71,6 +71,7 @@ sends Telegram notifications.
 ## ITEL
 
 - itel A80 (A671LC)
+- itel A300+ (A681L)
 - itel P65 (P671L)
 - itel P70 (P673L)
 - itel S25 (S685LN)

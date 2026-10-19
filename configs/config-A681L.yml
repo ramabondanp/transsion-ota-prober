@@ -1,0 +1,6 @@
+oem: "itel"
+product_base: "A681L"
+model: "itel A300+"
+android_version: "16"
+regions:
+  OP: "301500192"
