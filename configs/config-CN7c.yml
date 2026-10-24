@@ -3,5 +3,5 @@ product_base: "CN7c"
 model: "TECNO CAMON 50 Ultra 5G / Pro 5G"
 android_version: "16"
 regions:
-  OP: "301500062"
+  OP: "301600072"
   OP-M1: "301500062"

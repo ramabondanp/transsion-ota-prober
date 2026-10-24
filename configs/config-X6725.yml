@@ -3,4 +3,4 @@ product_base: "X6725"
 model: "Infinix SMART 10"
 android_version: "15"
 regions:
-  OP: "195003"
+  OP: "200002"

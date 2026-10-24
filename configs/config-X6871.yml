@@ -1,8 +1,8 @@
 oem: "Infinix"
 product_base: "X6871"
 model: "Infinix GT 20 Pro"
-android_version: "15"
+android_version: "16"
 regions:
-  OP: "180003"
-  IN: "180003"
-  RU: "180003"
+  OP: "301550059"
+  IN: "301550059"
+  RU: "301550059"
