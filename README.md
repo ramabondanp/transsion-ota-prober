@@ -167,7 +167,10 @@ export chat_id="YOUR_CHAT_ID"
 - Notifications are enabled by default; missing `bot_token` or `chat_id` causes exit 2.
   `--dry-run`, `--skip-telegram`, `--register-update`, `--update-incremental`, and
   `--gen-fp` do not require them.
-- Config updates without Telegram still record processed titles; dry runs write nothing.
+- Config updates without Telegram still record processed titles. Dry runs do not
+  rewrite device configs, record titles or send notifications, but still use the
+  network and may create directories, seed missing wheel defaults or create dedup
+  lock files. Adding `--debug` also writes check-in response artifacts.
 - File-backed notifying runs keep pending messages in `processed_updates.txt.outbox/`
   beside the state file. Later notifying runs retry recoverable entries. Delivery is
   at least once, so a crash can cause duplicates. Dry runs do not recover or send them.
@@ -175,7 +178,7 @@ export chat_id="YOUR_CHAT_ID"
 ## Usage
 
 ```bash
-checkota -c X6873 --dry-run                       # Preview without changes
+checkota -c X6873 --dry-run                       # Preview without config updates or notifications
 checkota -c X6873                                 # Check and notify
 checkota -d configs/ --jobs 4 --timeout 600        # Check all configs
 checkota -d configs/ --reg OP-M1                   # Filter by region
@@ -209,7 +212,8 @@ digits, and hyphens, with no leading hyphen (for example, `OP-M1`). Use block-st
 mappings and single-line values; flow collections, block scalars, anchors, and aliases
 are unsupported.
 
-Updates preserve comments and formatting; checks with no new build leave files untouched.
+Updates preserve comments and surrounding formatting; rewritten scalar values use
+double quotes. Checks with matching target values leave config files untouched.
 
 <details>
 <summary>Migrating legacy configs</summary>
@@ -230,6 +234,13 @@ Replace the path if your configs are elsewhere, including a custom `XDG_CONFIG_H
 `scripts/fetch_spys.py` and `scripts/check_update_proxy.py` provide proxy validation
 and update checks. They read credentials from the git-ignored `scripts/.env`:
 keep it private (`chmod 600 scripts/.env`) and never commit it.
+
+## Development
+
+See [AGENTS.md](AGENTS.md) for contributor invariants and the
+[development guide](docs/development.md) for setup, tests, lint/type checks and an
+isolated wheel smoke check. Detailed contracts and historical failure modes live
+in [architecture](docs/architecture.md) and [regression history](docs/regressions.md).
 
 ## Credits and license
 
