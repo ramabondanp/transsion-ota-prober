@@ -3,4 +3,4 @@ product_base: "S688LN"
 model: "itel Super 26 Ultra"
 android_version: "15"
 regions:
-  OP: "185001"
+  OP: "200014"

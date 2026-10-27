@@ -3,4 +3,4 @@ product_base: "C681L"
 model: "itel CITY 200"
 android_version: "15"
 regions:
-  OP: "185004"
+  OP: "200012"
