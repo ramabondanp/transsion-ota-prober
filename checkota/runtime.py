@@ -183,8 +183,8 @@ def install_interrupt_handler(ctx: RunContext) -> SignalHandler:
 
 def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
     """Start a daemon timer that hard-exits the process when the wall-clock
-    budget is exceeded. Returns the timer (cancel it in a finally block), or
-    None when no timeout is configured.
+    budget is exceeded, plus at most one emergency-drain grace period. Returns
+    the timer (cancel it in a finally block), or None when no timeout is configured.
     """
     if timeout <= 0:
         return None
@@ -203,22 +203,24 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
                 except BaseException:  # noqa: S110, BLE001
                     pass
 
-        try:
+        def flush_and_drain() -> None:
             flush_stdio()
-            # Best-effort flush of buffered Telegram notifications before the
-            # hard exit; a one-shot cron run would otherwise lose every update
-            # found by this sweep. Teardown must not hang or crash because of
-            # any exception raised by this optional path.
             try:
                 _emergency_drain_notifications(ctx)
-            # Teardown must not hang or crash on this optional path.
+            # Teardown must not crash on this optional path.
             except BaseException:  # noqa: S110, BLE001
                 pass
             flush_stdio()
+
+        try:
+            # Cleanup can block on worker-owned locks, a socket, or even stdio.
+            # Run ALL of it in a daemon: the watchdog itself waits only for the
+            # fixed grace period, independently of the drain's cooperative
+            # deadline checks. Never log/flush/close sessions on this thread.
+            cleanup = threading.Thread(target=flush_and_drain, daemon=True)
+            cleanup.start()
+            cleanup.join(timeout=EMERGENCY_DRAIN_DEADLINE_SECONDS)
         finally:
-            # Hard-exit: in-flight socket reads (e.g. RemoteZip) may not honour
-            # stop_event mid-call, so force termination after the budget even
-            # when output flushing or emergency draining fails.
             os._exit(124)
 
     watchdog = threading.Timer(timeout, _on_timeout)
@@ -228,7 +230,7 @@ def start_watchdog(ctx: RunContext, timeout: float) -> threading.Timer | None:
 
 
 def _emergency_drain_notifications(ctx: RunContext) -> None:
-    """Best-effort synchronous notification drain from the watchdog thread.
+    """Best-effort notification drain from the watchdog's cleanup daemon.
 
     Workers only BUFFER notifications during a sweep; the drain is the sole
     sender, so running it here cannot double-send. Skips silently when main()
