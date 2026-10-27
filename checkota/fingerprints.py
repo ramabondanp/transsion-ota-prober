@@ -34,11 +34,16 @@ def _database_lock_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.db.lock")
 
 
-def _open_locked(path: Path, mode: str) -> TextIO:
+class TitleClaimBusy(RuntimeError):
+    """Another process owns the title; it is not necessarily processed yet."""
+
+
+def _open_locked(path: Path, mode: str, *, blocking: bool = True) -> TextIO:
     handle = cast(TextIO, path.open(mode, encoding="utf-8"))
     try:
         if _fcntl is not None:
-            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            flags = _fcntl.LOCK_EX | (0 if blocking else _fcntl.LOCK_NB)
+            _fcntl.flock(handle.fileno(), flags)
     except OSError:
         handle.close()
         raise
@@ -222,11 +227,15 @@ def load_processed_titles(path: Path) -> set[str]:
 def claim_processed_title(path: Path, title: str) -> TextIO | None:
     """Claim a title until the returned locked handle is released.
 
-    The title lock is held while the caller performs the notification. The
-    processed file is read under its own lock so ordinary saves cannot race the
-    claim decision.
+    Return None only for a committed title; raise TitleClaimBusy when another
+    process owns the claim. Never wait for a title: sweeps retain several claims
+    until draining, so opposite acquisition orders would deadlock. The database
+    lock still serializes the short read/append transactions.
     """
-    claim = _open_locked(_title_lock_path(path, title), "a+")
+    try:
+        claim = _open_locked(_title_lock_path(path, title), "a+", blocking=False)
+    except BlockingIOError as exc:
+        raise TitleClaimBusy(f"Update title is owned by another process: {title}") from exc
     try:
         with _locked_file(path, "a+") as handle:
             _, existing = _read_titles(handle)
@@ -276,11 +285,12 @@ def save_processed_title(path: Path, title: str) -> bool:
 
     Returns True when the title is known to be in the file after this call
     (whether newly appended or already present from another process). Returns
-    False on any I/O/parse error.
+    False on contention or any I/O/parse error. Like notification claims, saves
+    must not wait for a title retained by another sweep.
     """
     claim: TextIO | None = None
     try:
-        claim = _open_locked(_title_lock_path(path, title), "a+")
+        claim = _open_locked(_title_lock_path(path, title), "a+", blocking=False)
         with _locked_file(path, "a+") as handle:
             lines, existing = _read_titles(handle)
             if title in existing:

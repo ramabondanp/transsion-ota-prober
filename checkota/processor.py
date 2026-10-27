@@ -13,6 +13,7 @@ import yaml
 
 from checkota.description import format_update_description
 from checkota.fingerprints import (
+    TitleClaimBusy,
     claim_processed_title,
     commit_processed_title,
     release_processed_claim,
@@ -185,21 +186,35 @@ def save_processed_update(ctx: RunContext, title: str) -> bool:
 
 
 def _claim_new_update(ctx: RunContext, title: str) -> bool | None:
-    """Claim a new update title across threads and processes."""
+    """Claim a title, raising TitleClaimBusy for a retryable external owner."""
     with ctx.file_lock:
-        if title in ctx.processed_titles or title in ctx.claimed_titles:
+        if title in ctx.processed_titles:
             return False
+        if title in ctx.claimed_titles:
+            if title in ctx.claimed_handles:
+                return False
+            raise TitleClaimBusy(f"Update title acquisition is in progress: {title}")
+        # Reserve locally before releasing the mutex for filesystem I/O. Other
+        # threads still see the title as claimed, but can work on other titles.
+        ctx.claimed_titles.add(title)
+    claimed = False
+    try:
         try:
             claim = claim_processed_title(ctx.processed_path, title)
         except (OSError, UnicodeError, ValueError) as exc:
             Log.e(f"Failed to claim update title {title}: {exc}")
             return None
-        if claim is None:
-            ctx.processed_titles.add(title)
-            return False
-        ctx.claimed_titles.add(title)
-        ctx.claimed_handles[title] = claim
+        with ctx.file_lock:
+            if claim is None:
+                ctx.processed_titles.add(title)
+                return False
+            ctx.claimed_handles[title] = claim
+            claimed = True
         return True
+    finally:
+        if not claimed:
+            with ctx.file_lock:
+                ctx.claimed_titles.discard(title)
 
 
 def _release_claimed_update(ctx: RunContext, title: str) -> None:
@@ -679,7 +694,11 @@ def apply_update_actions(
         and not args.dry_run
         and not getattr(args, "force_notify", False)
     ):
-        claim_result = _claim_new_update(ctx, update.title)
+        try:
+            claim_result = _claim_new_update(ctx, update.title)
+        except TitleClaimBusy:
+            Log.w("Update title is busy in another worker or process; leaving config unchanged for retry.")
+            return 1
         if claim_result is None:
             Log.e("Could not reserve update title; notification was not sent.")
             return 1
@@ -923,7 +942,15 @@ def drain_pending_notifications(
                 _release_pending_claim(ctx, note)
                 continue
             if not has_claim:
-                claim_result = _claim_new_update(ctx, note.title)
+                try:
+                    claim_result = _claim_new_update(ctx, note.title)
+                except TitleClaimBusy:
+                    failed = True
+                    Log.w(
+                        f"Update title is busy in another worker or process; retaining notification: "
+                        f"{note.device_title}"
+                    )
+                    continue
                 if claim_result is None:
                     failed = True
                     Log.e(

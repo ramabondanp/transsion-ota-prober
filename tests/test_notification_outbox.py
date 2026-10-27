@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from checkota import cli, manager, processor
+from checkota import cli, fingerprints, manager, processor
 from checkota.manager import Config
 from checkota.models import PendingNotification, RegionUpdate
 from checkota.outbox import (
@@ -413,6 +413,59 @@ def test_cli_replays_outbox_even_when_check_finds_no_updates(tmp_path, monkeypat
     assert sender.sent == ["message"]
     assert ctx.processed_titles == {"TITLE"}
     assert load_pending_notifications(ctx.processed_path) == []
+
+
+@pytest.mark.skipif(fingerprints._fcntl is None, reason="requires flock")
+def test_busy_title_leaves_config_unchanged_until_retry(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    before = update.config_path.read_bytes()
+    owner = fingerprints.claim_processed_title(ctx.processed_path, update.title)
+    assert owner is not None
+    sender = _Notifier()
+    try:
+        with patch.object(processor, "create_notifier", return_value=sender):
+            assert processor.apply_update_actions(ctx, update, args) == 1
+        assert update.config_path.read_bytes() == before
+        assert sender.sent == []
+        assert ctx.processed_titles == set()
+        assert ctx.claimed_titles == set()
+        assert load_pending_notifications(ctx.processed_path) == []
+    finally:
+        fingerprints.release_processed_claim(owner)
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.apply_update_actions(ctx, update, args) == 0
+    assert len(sender.sent) == 1
+    assert ctx.processed_titles == {update.title}
+    ctx.stop()
+
+
+@pytest.mark.skipif(fingerprints._fcntl is None, reason="requires flock")
+def test_busy_outbox_claim_retains_notification_until_retry(tmp_path):
+    ctx, update, args = _setup(tmp_path)
+    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    note = PendingNotification(
+        msg="message", title=update.title, device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET, ready=True)
+    assert processor.load_outbox_into_context(ctx)
+    owner = fingerprints.claim_processed_title(ctx.processed_path, update.title)
+    assert owner is not None
+    sender = _Notifier()
+    try:
+        with patch.object(processor, "create_notifier", return_value=sender):
+            assert processor.drain_pending_notifications(ctx, args, delay=0) == 1
+        assert sender.sent == []
+        assert ctx.pending_notifications == [note]
+        assert load_pending_notifications(ctx.processed_path) == [note]
+        assert ctx.processed_titles == set()
+        assert ctx.claimed_titles == set()
+    finally:
+        fingerprints.release_processed_claim(owner)
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.drain_pending_notifications(ctx, args, delay=0) == 0
+    assert sender.sent == [note.msg]
+    assert load_pending_notifications(ctx.processed_path) == []
+    ctx.stop()
 
 
 def test_corrupt_outbox_aborts_without_checking_configs(tmp_path, monkeypatch):

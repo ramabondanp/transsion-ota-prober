@@ -17,9 +17,11 @@ import argparse
 import multiprocessing
 import time
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from checkota.manager import Config
 from checkota.models import PendingNotification, RegionUpdate
@@ -98,20 +100,25 @@ def _claim_worker(path: str, barrier, results) -> None:
         processed_titles=set(),
         dry_run=False,
     )
+    from checkota.fingerprints import TitleClaimBusy
+
     barrier.wait()
-    claimed = _claim_new_update(ctx, "PROCESS-TITLE")
+    try:
+        claimed = _claim_new_update(ctx, "PROCESS-TITLE")
+    except TitleClaimBusy:
+        claimed = False
     committed = _commit_claimed_update(ctx, "PROCESS-TITLE") if claimed else False
     results.put((claimed, committed))
+    ctx.stop()
 
 
 # --- H1: network failures are errors ------------------------------------------
 
 
 def test_update_checker_raises_on_network_failure():
-    checker = UpdateChecker(_cfg(), session=MagicMock())
-    checker.session.post.side_effect = __import__(
-        "requests"
-    ).exceptions.ConnectionError("boom")
+    session = MagicMock()
+    checker = UpdateChecker(_cfg(), session=session)
+    session.post.side_effect = requests.ConnectionError("boom")
     with (
         patch("checkota.update_checker.time.sleep", lambda _s: None),
         pytest.raises(UpdateCheckError),
@@ -120,12 +127,11 @@ def test_update_checker_raises_on_network_failure():
 
 
 def test_update_checker_raises_on_http_error():
-    checker = UpdateChecker(_cfg(), session=MagicMock())
+    session = MagicMock()
+    checker = UpdateChecker(_cfg(), session=session)
     response = MagicMock()
-    response.raise_for_status.side_effect = __import__("requests").exceptions.HTTPError(
-        "bad"
-    )
-    checker.session.post.return_value = response
+    response.raise_for_status.side_effect = requests.HTTPError("bad")
+    session.post.return_value = response
     with pytest.raises(UpdateCheckError):
         checker.check()
 
@@ -169,12 +175,13 @@ def test_claim_new_update_is_process_safe(tmp_path):
 
 def test_apply_update_actions_skips_duplicate_notification(tmp_path):
     ctx = _ctx(tmp_path)
-    ctx.claimed_titles.add("TECNO-X123-15.0.1.2-OP001")
+    assert _claim_new_update(ctx, "TECNO-X123-15.0.1.2-OP001") is True
 
     sent: list[str] = []
 
     class _StubNotifier:
         def send(self, msg, truncate_desc=True, device_title=None):
+            assert device_title is not None
             sent.append(device_title)
             return True
 
@@ -182,6 +189,7 @@ def test_apply_update_actions_skips_duplicate_notification(tmp_path):
         rc = apply_update_actions(ctx, _update(), _args(no_config=True))
     assert rc == 0
     assert sent == []
+    ctx.stop()
 
 
 def test_duplicate_title_still_updates_other_region(tmp_path):
@@ -249,7 +257,7 @@ def test_telegram_send_fails_when_ok_false():
         def post(self, *a, **k):
             return _Resp()
 
-    notifier = TgNotify("token", "chat", "telegraph", session=_Session())
+    notifier = TgNotify("token", "chat", "telegraph", session=cast(requests.Session, _Session()))
     assert notifier.send("hello", truncate_desc=False) is False
 
 
@@ -262,6 +270,7 @@ def test_apply_update_actions_returns_1_when_config_update_fails(tmp_path):
 
     class _StubNotifier:
         def send(self, msg, truncate_desc=True, device_title=None):
+            assert device_title is not None
             sent.append(device_title)
             return True
 
@@ -282,7 +291,7 @@ def test_telegraph_token_optional():
         def post(self, *a, **k):
             return MagicMock()
 
-    notifier = TgNotify("token", "chat", "", session=_Session())
+    notifier = TgNotify("token", "chat", "", session=cast(requests.Session, _Session()))
     assert notifier.telegraph_token == ""
 
 
