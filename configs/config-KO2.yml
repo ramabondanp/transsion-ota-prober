@@ -1,0 +1,6 @@
+oem: "TECNO"
+product_base: "KO2"
+model: "TECNO POP 20C"
+android_version: "16"
+regions:
+  OP: "301550024"

@@ -51,6 +51,10 @@ sends Telegram notifications.
 - TECNO SPARK 50 4G (KN4)
 - TECNO SPARK 50 5G (KN8)
 
+## POP SERIES
+
+- TECNO POP 20C (KO2)
+
 ## POVA SERIES
 
 - TECNO POVA 7 (LJ6)
