@@ -1,0 +1,6 @@
+oem: "TECNO"
+product_base: "CN6"
+model: "TECNO CAMON Slim"
+android_version: "16"
+regions:
+  OP: "301550028"

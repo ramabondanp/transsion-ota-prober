@@ -1,6 +1,6 @@
 oem: "TECNO"
 product_base: "CN6c"
-model: "TECNO CAMON Slim"
+model: "TECNO CAMON Air"
 android_version: "16"
 regions:
   OP: "301550020"

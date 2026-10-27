@@ -28,7 +28,8 @@ sends Telegram notifications.
 - TECNO CAMON 40 Premier 5G (CM8)
 - TECNO CAMON 50 4G (CN5)
 - TECNO CAMON 50 Pro 4G (CN5c)
-- TECNO CAMON Slim (CN6c)
+- TECNO CAMON Slim (CN6)
+- TECNO CAMON Air (CN6c)
 - TECNO CAMON 50 Ultra 5G / Pro 5G (CN7c)
 
 ## SPARK SERIES
