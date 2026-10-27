@@ -140,72 +140,56 @@ sends Telegram notifications.
 
 ## Install
 
-From a source checkout, an editable install keeps configs and processed-update state
-in the repository:
+Requires Python 3.10+. From the repository root:
 
 ```bash
-pip install -e .
+uv venv
+uv pip install -e .
+source .venv/bin/activate
 ```
 
-Regular wheels are self-contained and include the pinned protobuf vendor tree and
-default YAML configs:
+Source installs keep configs and `processed_updates.txt` in the repository.
+Wheels bundle configs and vendor dependencies; configs are seeded without overwriting
+existing files to `$XDG_CONFIG_HOME/checkota/configs` (default
+`~/.config/checkota/configs`), with state in `$XDG_STATE_HOME/checkota` (default
+`~/.local/state/checkota`). XDG paths must be absolute.
+
+## Telegram
+
+Set these environment variables before a notifying run:
 
 ```bash
-pip install dist/checkota-*.whl
+export bot_token="YOUR_BOT_TOKEN"
+export chat_id="YOUR_CHAT_ID"
 ```
 
-For a wheel install, configs are copied when bundled config lookup is first needed to
-`$XDG_CONFIG_HOME/checkota/configs` (or `~/.config/checkota/configs`) and missing
-defaults are added without overwriting existing user files. Processed-update state
-is stored in `$XDG_STATE_HOME/checkota` (or `~/.local/state/checkota`). Relative XDG
-variables are ignored in favor of the home-directory defaults. Source checkouts
-continue to use repository-local configs and `processed_updates.txt`. Wheel installs
-do not migrate `processed_updates.txt` from the current working directory.
+- `telegraph_token` is optional for publishing long changelogs to Telegra.ph.
+- Notifications are enabled by default; missing `bot_token` or `chat_id` causes exit 2.
+  `--dry-run`, `--skip-telegram`, `--register-update`, `--update-incremental`, and
+  `--gen-fp` do not require them.
+- Config updates without Telegram still record processed titles; dry runs write nothing.
+- File-backed notifying runs keep pending messages in `processed_updates.txt.outbox/`
+  beside the state file. Later notifying runs retry recoverable entries. Delivery is
+  at least once, so a crash can cause duplicates. Dry runs do not recover or send them.
 
-Config seeding writes and fsyncs a private temporary file before publishing it.
-On filesystems without hard links, the fallback uses an atomic no-replace rename
-(Linux `renameat2` or Windows `rename`). If neither primitive is available, seeding
-fails safely rather than exposing a partial config or overwriting a user file.
-
-`CHECKOTA_VENDOR_DIR` remains an explicit override for a relocated vendor tree; a
-source checkout with a valid override continues to use repository-local configs and
-state even when the default `vendor/google-ota-prober/` directory has moved. The
-vendored implementation's attribution and version metadata are included in the wheel.
-Public wheel publication remains license-gated until redistribution terms are
-confirmed.
-
-## Run
-
-After install, use the `checkota` command directly:
+## Usage
 
 ```bash
-# Single config (bare codename resolves to configs/config-<codename>.yml)
-checkota -c X6873
-
-# All configs in parallel (4 jobs)
-checkota -d configs/ --jobs 4
-
-# Dry run
-checkota -c X6873 --dry-run
-
-# Use proxy environment variables when fetching OTA ZIP metadata
-checkota -c X6873 --fetch-zip-proxy
-
-# Direct fingerprint
-checkota --fp "Infinix/X6873-OP/Infinix-X6873:16/BP2A..."
-
-# Cap overall runtime (signals in-flight requests to stop, then exits)
-checkota -d configs/ --jobs 4 --timeout 600
+checkota -c X6873 --dry-run                       # Preview without changes
+checkota -c X6873                                 # Check and notify
+checkota -d configs/ --jobs 4 --timeout 600        # Check all configs
+checkota -d configs/ --reg OP-M1                   # Filter by region
+checkota -c X6873 --update-incremental             # Update config without Telegram
+checkota -c X6873 --fetch-zip-proxy                # Use proxy env for ZIP metadata
+checkota --help                                   # All options
 ```
 
-With a wheel install, the documented `-d configs/` path selects the seeded XDG config
-directory when no `configs/` directory exists in the current working directory. Any
-explicit directory that already exists is used as given.
+`-c X6873` selects `config-X6873.yml`. For wheel installs, `-d configs/` uses the
+seeded config directory unless a local `configs/` directory exists.
 
-## Config Format
+## Configs
 
-The runtime supports only the compact `regions` schema. Shared identity and defaults are
-stored once; product, device, and canonical build tags are derived at runtime:
+Use the compact `regions` format:
 
 ```yaml
 oem: "Infinix"
@@ -219,108 +203,41 @@ regions:
     incremental: "131015"
 ```
 
-Updates rewrite the file line by line to preserve comments, quoting, and newline style, so
-a config must stay expressible that way. Loading rejects anything the updater could not
-rewrite — flow-style collections (`regions: {OP: "1"}`, `OP: {incremental: "1"}`),
-multi-line scalars, literal/folded block scalars (`|`, `>`), and YAML anchors or aliases —
-rather than accepting a config that reads fine but can never be updated. Region codes are
-restricted to `[A-Z0-9-]` (uppercase, no leading hyphen) because the code is concatenated
-into `product` and from there into the check-in fingerprint.
+Each region supplies an incremental or a mapping of overrides. Product, device, and
+canonical build tags are derived automatically. Region codes use uppercase letters,
+digits, and hyphens, with no leading hyphen (for example, `OP-M1`). Use block-style
+mappings and single-line values; flow collections, block scalars, anchors, and aliases
+are unsupported.
 
-A check that finds no new build never touches the file. When an update does land and every
-region has converged on the same Android version, the top-level `android_version` default
-is promoted and the now-redundant per-region overrides are dropped; comments attached to
-removed keys are re-indented to the region key and kept above it.
+Updates preserve comments and formatting; checks with no new build leave files untouched.
 
-For example, this former `variants` representation is legacy input and is no longer
-accepted:
+<details>
+<summary>Migrating legacy configs</summary>
 
-```yaml
-oem: "Infinix"
-device: "Infinix-X6873"
-model: "Infinix GT 30 Pro"
-variants:
-  - variant: "Global"
-    product: "X6873-OP"
-    android_version: "16"
-    build_tag: "BP2A.250605.031.A3"
-    incremental: "201500011"
-  - variant: "Europe"
-    product: "X6873-EU"
-    android_version: "15"
-    build_tag: "AP3A.240905.015.A2"
-    incremental: "131015"
-```
-
-Its supported compact equivalent is the example above. Loading a config with `variants`
-reports that it `uses the legacy 'variants' schema; migrate it to a 'regions' mapping`.
-Legacy single-region files containing `product` or `device` are likewise rejected with
-instructions to migrate to `product_base` and `regions`.
-
-An existing wheel installation's XDG configs are not overwritten when new bundled defaults
-are installed, so XDG configs that still use `variants` require manual migration. From a
-repository checkout, run the migration tool against that config directory, for example:
+Legacy `variants` and single-region `product`/`device` configs require migration.
+Back up custom configs, then run from a checkout:
 
 ```bash
 python scripts/migrate_compact_configs.py --write ~/.config/checkota/configs
 ```
 
-If `XDG_CONFIG_HOME` is set to an absolute path, use its `checkota/configs` directory
-instead. Back up locally customized configs before rewriting them.
+Replace the path if your configs are elsewhere, including a custom `XDG_CONFIG_HOME`.
 
-Telegram env vars:
+</details>
 
-- `bot_token`, `chat_id` — required for Telegram notifications. Notifications are the
-  default, so a run without them **fails fast** (exit 2, before any config seeding or
-  network work) unless the invocation opts out with `--dry-run`, `--skip-telegram`,
-  `--register-update`, `--update-incremental`, or `--gen-fp`.
-- `telegraph_token` — optional; only needed to create Telegra.ph pages for very long
-  changelogs (when the message exceeds 4090 characters)
+## Proxy scripts
 
-### Notification recovery
+`scripts/fetch_spys.py` and `scripts/check_update_proxy.py` provide proxy validation
+and update checks. They read credentials from the git-ignored `scripts/.env`:
+keep it private (`chmod 600 scripts/.env`) and never commit it.
 
-File-backed notifying runs stage pending messages beside the processed-title file in
-`processed_updates.txt.outbox/` before advancing a config. After the rewrite is durably
-confirmed, that notification remains due even if a later OTA advances the config again
-or the config is rolled back. A subsequent notifying run retries it without rewriting
-the current config. Delivery is at least once: a crash after Telegram accepts a message
-but before the title is recorded can cause a duplicate.
+## Credits and license
 
-An unconfirmed entry is recoverable only when its target fingerprint matches the YAML.
-Startup confirms such completed rewrites before checking for newer OTAs; if confirmation
-fails or another process still owns the title, the run stops for retry rather than risk
-losing the pending notification. Dry runs do not confirm or send outbox entries.
+Built on [google-ota-prober](https://github.com/tangalbert919/google-ota-prober)
+by tangalbert919. The trimmed vendor copy's pinned commit and attribution are in
+[`VERSION`](vendor/google-ota-prober/VERSION) and
+[`ATTRIBUTION`](vendor/google-ota-prober/ATTRIBUTION).
 
-## Operational scripts
-
-The geo-proxy batch tools (`scripts/fetch_spys.py`, `scripts/check_update_proxy.py`) provide
-ad-hoc proxy validation and update verification.
-The scripts load a paid proxy template from `scripts/.env`, which is git-ignored and must
-not be committed. Keep that file mode `0600` (`chmod 600 scripts/.env`) because it contains
-live proxy credentials.
-
-## Credits
-
-checkota builds on
-<https://github.com/tangalbert919/google-ota-prober> — full credit for the original
-Android check-in protobuf request/response handling.
-
-A trimmed, pinned copy lives in `vendor/google-ota-prober/`:
-
-- Pinned upstream commit: see `vendor/google-ota-prober/VERSION`
-- Scope and license notes: see `vendor/google-ota-prober/ATTRIBUTION`
-
-Only the compiled protobuf modules (`checkin/`), the `.proto` sources, and
-`utils/functions.py` are vendored — `checkota` does not use `probe.py`, `gui.py`,
-or the original `config.yml` format.
-
-## License and third-party notices
-
-The original code in this repository currently carries no public redistribution
-grant; see `LICENSE`. The vendored google-ota-prober copy is documented in
-`NOTICE` and `vendor/google-ota-prober/ATTRIBUTION`. Public wheel publication
-remains gated on confirming the upstream terms for that vendored copy.
-
-The repository ships a GitHub Actions workflow (`.github/workflows/ci.yml`) that
-runs Ruff, Pyright, and pytest across supported Python versions. Operational
-script parsing helpers are covered by `tests/test_scripts.py`.
+This repository currently grants no public redistribution rights; see
+[`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Public wheel publication remains gated
+on confirming the vendored code's redistribution terms.
