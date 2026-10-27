@@ -51,6 +51,7 @@ sends Telegram notifications.
 - TECNO SPARK 50 4G (KN4)
 - TECNO SPARK 50 5G (KN8)
 - TECNO SPARK Go 3 Pro (KO3)
+- TECNO SPARK 50C (KO3-H1)
 
 ## POP SERIES
 

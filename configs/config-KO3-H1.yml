@@ -1,0 +1,6 @@
+oem: "TECNO"
+product_base: "KO3"
+model: "TECNO SPARK 50C"
+android_version: "16"
+regions:
+  OP-H1: "301500024"
