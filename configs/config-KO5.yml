@@ -1,0 +1,6 @@
+oem: "TECNO"
+product_base: "KO5"
+model: "TECNO SPARK 50 Pro / SPARK 50T"
+android_version: "16"
+regions:
+  OP: "301500037"
