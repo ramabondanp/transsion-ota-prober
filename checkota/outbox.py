@@ -3,15 +3,19 @@
 A notification is staged *before* advancing its YAML config. It is removed only
 once its title has been committed to the processed-title database. Sending is
 at-least-once: a crash between Telegram accepting a send and the title commit
-can cause a duplicate, but cannot silently lose the update.
+can cause a duplicate, but cannot silently lose the update. A ready record is
+proof of a completed rewrite: later config updates or rollbacks do not cancel
+its delivery. Unconfirmed records still need a matching on-disk fingerprint.
 """
 
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
+from checkota.fingerprints import claim_processed_title, release_processed_claim
 from checkota.logging import Log
 from checkota.manager import Config
 from checkota.models import PendingNotification
@@ -26,7 +30,26 @@ def _entry_path(processed_path: Path, title: str) -> Path:
     return _directory(processed_path) / f"{digest}.json"
 
 
-def _decode(raw: bytes, path: Path, processed_path: Path) -> PendingNotification | None:
+@dataclass(frozen=True)
+class _Entry:
+    note: PendingNotification
+    config_path: Path
+    target_fp: str
+    ready: bool
+
+    def is_recoverable(self) -> bool:
+        # A confirmed rewrite is a historical delivery obligation, even if the
+        # config has since advanced, rolled back, moved, or been deleted.
+        if self.ready:
+            return True
+        try:
+            configs = Config.from_yaml(self.config_path)
+        except (OSError, TypeError, ValueError):
+            return False
+        return any(cfg.fingerprint() == self.target_fp for cfg in configs)
+
+
+def _decode(raw: bytes, path: Path, processed_path: Path) -> _Entry:
     try:
         data = json.loads(raw)
     except (ValueError, UnicodeError) as exc:
@@ -42,41 +65,86 @@ def _decode(raw: bytes, path: Path, processed_path: Path) -> PendingNotification
         raise ValueError("Invalid notification outbox entry")
     if _entry_path(processed_path, data["title"]) != path:
         raise ValueError(f"Notification outbox entry has wrong filename: {path}")
-    # A crash can leave a record before the YAML rewrite, or preserve a ready
-    # record while the config rename is lost or later rolled back. Either way,
-    # replay only while the on-disk target still matches. This also recovers a
-    # rewrite completed before its ready marker could be published.
-    try:
-        configs = Config.from_yaml(Path(data["config_path"]))
-    except (OSError, TypeError, ValueError):
-        return None
-    if not any(cfg.fingerprint() == data["target_fp"] for cfg in configs):
-        return None
-    return PendingNotification(
-        msg=data["msg"],
-        device_title=data["device_title"],
-        title=data["title"],
-        is_new_update=True,
+    return _Entry(
+        note=PendingNotification(
+            msg=data["msg"],
+            device_title=data["device_title"],
+            title=data["title"],
+            is_new_update=True,
+        ),
+        config_path=Path(data["config_path"]),
+        target_fp=data["target_fp"],
+        ready=data["ready"],
     )
 
 
-def load_pending_notifications(processed_path: Path) -> list[PendingNotification]:
+def _confirm_entry(
+    path: Path, processed_path: Path, title: str
+) -> PendingNotification | None:
+    """Recover a completed rewrite under its title claim, or fail closed.
+
+    Reread after claiming: another run may have confirmed, sent, or removed the
+    entry since the directory scan. A busy title raises TitleClaimBusy so startup
+    cannot advance configs past an unconfirmed record owned by a live worker.
+    """
+    claim = claim_processed_title(processed_path, title)
+    if claim is None:  # Already committed: no delivery obligation remains.
+        return None
+    try:
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        entry = _decode(raw, path, processed_path)
+        if not entry.is_recoverable():
+            return None
+        if not entry.ready:
+            # The previous process may have failed its config directory fsync.
+            # Establish durability before making the delivery unconditional.
+            with entry.config_path.open("rb") as handle:
+                os.fsync(handle.fileno())
+            _sync_directory(entry.config_path.parent)
+            if not stage_pending_notification(
+                processed_path, entry.note, entry.config_path, entry.target_fp, ready=True
+            ):
+                raise OSError(f"Could not confirm completed rewrite for {title}")
+        return entry.note
+    finally:
+        release_processed_claim(claim)
+
+
+def load_pending_notifications(
+    processed_path: Path, *, confirm: bool = False
+) -> list[PendingNotification]:
+    """Read pending work; startup uses confirm=True before allowing OTA checks.
+
+    Confirmation durably promotes recovered rewrites so another OTA cannot hide
+    their pending notification. Plain reads never promote entries.
+    """
     directory = _directory(processed_path)
     if not directory.exists():
         return []
     notes = []
     for entry in sorted(directory.glob("*.json")):
-        note = _decode(entry.read_bytes(), entry, processed_path)
+        try:
+            raw = entry.read_bytes()
+        except FileNotFoundError:
+            continue  # Another process finished delivery after our scan.
+        decoded = _decode(raw, entry, processed_path)
+        if confirm and not decoded.ready:
+            note = _confirm_entry(entry, processed_path, decoded.note.title)
+        else:
+            note = decoded.note if decoded.is_recoverable() else None
         if note is not None:
             notes.append(note)
     return notes
 
 
 def has_pending_notification(processed_path: Path, title: str) -> bool:
-    """Whether a persisted title is backed by the target YAML fingerprint."""
+    """Whether a title is confirmed or backed by its target YAML fingerprint."""
     path = _entry_path(processed_path, title)
     try:
-        return _decode(path.read_bytes(), path, processed_path) is not None
+        return _decode(path.read_bytes(), path, processed_path).is_recoverable()
     except FileNotFoundError:
         return False
 

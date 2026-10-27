@@ -821,10 +821,10 @@ def _release_pending_claim(ctx: RunContext, note: PendingNotification) -> None:
 
 
 def load_outbox_into_context(ctx: RunContext) -> bool:
-    """Queue persisted notifications on startup before any new check-in work."""
+    """Confirm and queue persisted notifications before any new check-in work."""
     try:
-        notes = load_pending_notifications(ctx.processed_path)
-    except (OSError, ValueError, UnicodeError) as exc:
+        notes = load_pending_notifications(ctx.processed_path, confirm=True)
+    except (TitleClaimBusy, OSError, ValueError, UnicodeError) as exc:
         Log.e(f"Could not load notification outbox: {exc}")
         return False
     with ctx.pending_lock:

@@ -277,6 +277,20 @@ Telegram env vars:
 - `telegraph_token` — optional; only needed to create Telegra.ph pages for very long
   changelogs (when the message exceeds 4090 characters)
 
+### Notification recovery
+
+File-backed notifying runs stage pending messages beside the processed-title file in
+`processed_updates.txt.outbox/` before advancing a config. After the rewrite is durably
+confirmed, that notification remains due even if a later OTA advances the config again
+or the config is rolled back. A subsequent notifying run retries it without rewriting
+the current config. Delivery is at least once: a crash after Telegram accepts a message
+but before the title is recorded can cause a duplicate.
+
+An unconfirmed entry is recoverable only when its target fingerprint matches the YAML.
+Startup confirms such completed rewrites before checking for newer OTAs; if confirmation
+fails or another process still owns the title, the run stops for retry rather than risk
+losing the pending notification. Dry runs do not confirm or send outbox entries.
+
 ## Operational scripts
 
 The geo-proxy batch tools (`scripts/fetch_spys.py`, `scripts/check_update_proxy.py`) provide

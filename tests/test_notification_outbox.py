@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from checkota import cli, fingerprints, manager, processor
+from checkota import cli, fingerprints, manager, outbox, processor
 from checkota.manager import Config
 from checkota.models import PendingNotification, RegionUpdate
 from checkota.outbox import (
@@ -316,8 +316,9 @@ def test_crash_after_rewrite_before_ready_is_recovered(tmp_path):
     ctx.stop()
 
 
-def test_ready_outbox_does_not_replay_if_yaml_reverted(tmp_path):
-    ctx, update, _ = _setup(tmp_path)
+@pytest.mark.parametrize("ready", [False, True])
+def test_only_confirmed_outbox_replays_after_config_rollback(tmp_path, ready):
+    ctx, update, args = _setup(tmp_path)
     old_yaml = update.config_path.read_bytes()
     note = PendingNotification(
         msg="message", title="TITLE", device_title="Test", is_new_update=True
@@ -325,18 +326,154 @@ def test_ready_outbox_does_not_replay_if_yaml_reverted(tmp_path):
     assert processor.update_config_from_fingerprint(
         update.config_path, update.cfg, TARGET
     )
-    new_yaml = update.config_path.read_bytes()
     assert stage_pending_notification(
-        ctx.processed_path, note, update.config_path, TARGET, ready=True
+        ctx.processed_path, note, update.config_path, TARGET, ready=ready
     )
     update.config_path.write_bytes(old_yaml)
-    assert load_pending_notifications(ctx.processed_path) == []
+    expected = [note] if ready else []
+    assert load_pending_notifications(ctx.processed_path) == expected
     assert processor.load_outbox_into_context(ctx)
-    assert ctx.pending_notifications == []
-    assert update.title not in ctx.processed_titles
-    update.config_path.write_bytes(new_yaml)
-    assert load_pending_notifications(ctx.processed_path) == [note]
+    assert ctx.pending_notifications == expected
+    sender = _Notifier()
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.drain_pending_notifications(ctx, args, delay=0) == 0
+    assert sender.sent == ([note.msg] if ready else [])
+    assert ctx.processed_titles == ({update.title} if ready else set())
+    assert update.config_path.read_bytes() == old_yaml
     ctx.stop()
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_older_pending_update_survives_newer_ota_and_restart(tmp_path, ready):
+    ctx, update, args = _setup(tmp_path)
+    with patch.object(processor, "create_notifier", return_value=_Notifier(False)):
+        assert processor.apply_update_actions(ctx, update, args) == 1
+    if not ready:
+        # Also cover a crash after the config rename but before its ready marker.
+        note = load_pending_notifications(ctx.processed_path)[0]
+        assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    ctx.stop()
+
+    restarted = RunContext(
+        env={}, processed_path=ctx.processed_path, processed_titles=set(), dry_run=False
+    )
+    assert processor.load_outbox_into_context(restarted)
+    update.cfg = Config.from_yaml(update.config_path)[0]
+    update.title = "TITLE_2"
+    update.target_fp = TARGET.replace("/2:user/", "/3:user/")
+    update.target_incremental = "3"
+    args.config_dir = tmp_path
+    sender = _Notifier()
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.apply_update_actions(restarted, update, args) == 0
+    assert sender.sent == []  # Crash before the shutdown drain.
+    restarted.stop()
+
+    recovered = RunContext(
+        env={}, processed_path=ctx.processed_path, processed_titles=set(), dry_run=False
+    )
+    assert processor.load_outbox_into_context(recovered)
+    assert {note.title for note in recovered.pending_notifications} == {"TITLE", "TITLE_2"}
+    with patch.object(processor, "create_notifier", return_value=sender):
+        assert processor.drain_pending_notifications(recovered, args, delay=0) == 0
+    assert len(sender.sent) == 2
+    assert recovered.processed_titles == {"TITLE", "TITLE_2"}
+    assert load_pending_notifications(ctx.processed_path) == []
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == update.target_fp
+    recovered.stop()
+
+
+@pytest.mark.skipif(fingerprints._fcntl is None, reason="requires flock")
+@pytest.mark.parametrize("applied", [False, True])
+def test_unconfirmed_recovery_defers_busy_owner_without_overwriting(tmp_path, applied):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    if applied:
+        assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    entry_path = outbox._entry_path(ctx.processed_path, note.title)
+    before = entry_path.read_bytes()
+    owner = fingerprints.claim_processed_title(ctx.processed_path, note.title)
+    assert owner is not None
+    try:
+        assert processor.load_outbox_into_context(ctx) is False
+        assert ctx.pending_notifications == []
+        assert entry_path.read_bytes() == before
+    finally:
+        fingerprints.release_processed_claim(owner)
+    assert processor.load_outbox_into_context(ctx)
+    assert ctx.pending_notifications == ([note] if applied else [])
+    assert ctx.processed_titles == set()
+    ctx.stop()
+
+
+@pytest.mark.parametrize("failure", ["fsync", "_sync_directory"])
+def test_config_sync_failure_does_not_confirm_recovered_entry(tmp_path, failure):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    entry_path = outbox._entry_path(ctx.processed_path, note.title)
+    before = entry_path.read_bytes()
+    target = outbox.os if failure == "fsync" else outbox
+    with patch.object(target, failure, side_effect=OSError("sync failed")):
+        assert processor.load_outbox_into_context(ctx) is False
+    assert ctx.pending_notifications == []
+    assert entry_path.read_bytes() == before
+    assert processor.load_outbox_into_context(ctx)  # Failure released the claim.
+    assert ctx.pending_notifications == [note]
+    ctx.stop()
+
+
+def test_confirmation_rereads_after_claim_and_does_not_resurrect_removed_entry(tmp_path):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    claims = []
+
+    def claim_and_remove(path, title):
+        claim = fingerprints.claim_processed_title(path, title)
+        assert claim is not None
+        claims.append(claim)
+        assert remove_pending_notification(path, title)
+        return claim
+
+    with patch.object(outbox, "claim_processed_title", side_effect=claim_and_remove):
+        assert processor.load_outbox_into_context(ctx)
+    assert ctx.pending_notifications == []
+    assert load_pending_notifications(ctx.processed_path) == []
+    assert len(claims) == 1 and claims[0].closed
+    ctx.stop()
+
+
+def test_confirmation_failure_aborts_before_new_config_work(tmp_path, monkeypatch):
+    ctx, update, _ = _setup(tmp_path)
+    note = PendingNotification(
+        msg="message", title="TITLE", device_title="Test", is_new_update=True
+    )
+    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    monkeypatch.setenv("bot_token", "token")
+    monkeypatch.setenv("chat_id", "chat")
+    monkeypatch.setattr(sys, "argv", ["checkota", "-c", str(update.config_path)])
+    monkeypatch.setattr(cli, "create_run_context", lambda *a, **kw: ctx)
+    monkeypatch.setattr(cli, "start_watchdog", lambda *a, **kw: None)
+    monkeypatch.setattr(outbox, "stage_pending_notification", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        cli, "process_config", lambda *a, **kw: pytest.fail("must confirm before checking")
+    )
+    assert cli.main() == 1
+    assert ctx.pending_notifications == []
+    assert ctx.processed_titles == set()
+    assert load_pending_notifications(ctx.processed_path) == [note]
+    assert Config.from_yaml(update.config_path)[0].fingerprint() == TARGET
 
 
 @pytest.mark.skipif(os.name == "nt", reason="directory fsync unavailable on Windows")
