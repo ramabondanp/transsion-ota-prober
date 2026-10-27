@@ -351,7 +351,9 @@ def test_older_pending_update_survives_newer_ota_and_restart(tmp_path, ready):
     if not ready:
         # Also cover a crash after the config rename but before its ready marker.
         note = load_pending_notifications(ctx.processed_path)[0]
-        assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+        assert stage_pending_notification(
+            ctx.processed_path, note, update.config_path, TARGET
+        )
     ctx.stop()
 
     restarted = RunContext(
@@ -373,7 +375,10 @@ def test_older_pending_update_survives_newer_ota_and_restart(tmp_path, ready):
         env={}, processed_path=ctx.processed_path, processed_titles=set(), dry_run=False
     )
     assert processor.load_outbox_into_context(recovered)
-    assert {note.title for note in recovered.pending_notifications} == {"TITLE", "TITLE_2"}
+    assert {note.title for note in recovered.pending_notifications} == {
+        "TITLE",
+        "TITLE_2",
+    }
     with patch.object(processor, "create_notifier", return_value=sender):
         assert processor.drain_pending_notifications(recovered, args, delay=0) == 0
     assert len(sender.sent) == 2
@@ -390,9 +395,13 @@ def test_unconfirmed_recovery_defers_busy_owner_without_overwriting(tmp_path, ap
     note = PendingNotification(
         msg="message", title="TITLE", device_title="Test", is_new_update=True
     )
-    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET
+    )
     if applied:
-        assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+        assert processor.update_config_from_fingerprint(
+            update.config_path, update.cfg, TARGET
+        )
     entry_path = outbox._entry_path(ctx.processed_path, note.title)
     before = entry_path.read_bytes()
     owner = fingerprints.claim_processed_title(ctx.processed_path, note.title)
@@ -415,8 +424,12 @@ def test_config_sync_failure_does_not_confirm_recovered_entry(tmp_path, failure)
     note = PendingNotification(
         msg="message", title="TITLE", device_title="Test", is_new_update=True
     )
-    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
-    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET
+    )
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
     entry_path = outbox._entry_path(ctx.processed_path, note.title)
     before = entry_path.read_bytes()
     target = outbox.os if failure == "fsync" else outbox
@@ -429,13 +442,19 @@ def test_config_sync_failure_does_not_confirm_recovered_entry(tmp_path, failure)
     ctx.stop()
 
 
-def test_confirmation_rereads_after_claim_and_does_not_resurrect_removed_entry(tmp_path):
+def test_confirmation_rereads_after_claim_and_does_not_resurrect_removed_entry(
+    tmp_path,
+):
     ctx, update, _ = _setup(tmp_path)
     note = PendingNotification(
         msg="message", title="TITLE", device_title="Test", is_new_update=True
     )
-    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
-    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET
+    )
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
     claims = []
 
     def claim_and_remove(path, title):
@@ -458,8 +477,12 @@ def test_confirmation_failure_aborts_before_new_config_work(tmp_path, monkeypatc
     note = PendingNotification(
         msg="message", title="TITLE", device_title="Test", is_new_update=True
     )
-    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET)
-    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET
+    )
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
     monkeypatch.setenv("bot_token", "token")
     monkeypatch.setenv("chat_id", "chat")
     monkeypatch.setattr(sys, "argv", ["checkota", "-c", str(update.config_path)])
@@ -467,7 +490,9 @@ def test_confirmation_failure_aborts_before_new_config_work(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "start_watchdog", lambda *a, **kw: None)
     monkeypatch.setattr(outbox, "stage_pending_notification", lambda *a, **kw: False)
     monkeypatch.setattr(
-        cli, "process_config", lambda *a, **kw: pytest.fail("must confirm before checking")
+        cli,
+        "process_config",
+        lambda *a, **kw: pytest.fail("must confirm before checking"),
     )
     assert cli.main() == 1
     assert ctx.pending_notifications == []
@@ -579,11 +604,15 @@ def test_busy_title_leaves_config_unchanged_until_retry(tmp_path):
 @pytest.mark.skipif(fingerprints._fcntl is None, reason="requires flock")
 def test_busy_outbox_claim_retains_notification_until_retry(tmp_path):
     ctx, update, args = _setup(tmp_path)
-    assert processor.update_config_from_fingerprint(update.config_path, update.cfg, TARGET)
+    assert processor.update_config_from_fingerprint(
+        update.config_path, update.cfg, TARGET
+    )
     note = PendingNotification(
         msg="message", title=update.title, device_title="Test", is_new_update=True
     )
-    assert stage_pending_notification(ctx.processed_path, note, update.config_path, TARGET, ready=True)
+    assert stage_pending_notification(
+        ctx.processed_path, note, update.config_path, TARGET, ready=True
+    )
     assert processor.load_outbox_into_context(ctx)
     owner = fingerprints.claim_processed_title(ctx.processed_path, update.title)
     assert owner is not None

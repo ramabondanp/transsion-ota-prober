@@ -697,7 +697,9 @@ def apply_update_actions(
         try:
             claim_result = _claim_new_update(ctx, update.title)
         except TitleClaimBusy:
-            Log.w("Update title is busy in another worker or process; leaving config unchanged for retry.")
+            Log.w(
+                "Update title is busy in another worker or process; leaving config unchanged for retry."
+            )
             return 1
         if claim_result is None:
             Log.e("Could not reserve update title; notification was not sent.")

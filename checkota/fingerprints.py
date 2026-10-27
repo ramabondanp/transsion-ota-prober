@@ -235,7 +235,9 @@ def claim_processed_title(path: Path, title: str) -> TextIO | None:
     try:
         claim = _open_locked(_title_lock_path(path, title), "a+", blocking=False)
     except BlockingIOError as exc:
-        raise TitleClaimBusy(f"Update title is owned by another process: {title}") from exc
+        raise TitleClaimBusy(
+            f"Update title is owned by another process: {title}"
+        ) from exc
     try:
         with _locked_file(path, "a+") as handle:
             _, existing = _read_titles(handle)

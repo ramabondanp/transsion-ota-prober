@@ -257,7 +257,9 @@ def test_telegram_send_fails_when_ok_false():
         def post(self, *a, **k):
             return _Resp()
 
-    notifier = TgNotify("token", "chat", "telegraph", session=cast(requests.Session, _Session()))
+    notifier = TgNotify(
+        "token", "chat", "telegraph", session=cast(requests.Session, _Session())
+    )
     assert notifier.send("hello", truncate_desc=False) is False
 
 

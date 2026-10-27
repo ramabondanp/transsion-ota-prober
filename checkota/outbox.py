@@ -105,7 +105,11 @@ def _confirm_entry(
                 os.fsync(handle.fileno())
             _sync_directory(entry.config_path.parent)
             if not stage_pending_notification(
-                processed_path, entry.note, entry.config_path, entry.target_fp, ready=True
+                processed_path,
+                entry.note,
+                entry.config_path,
+                entry.target_fp,
+                ready=True,
             ):
                 raise OSError(f"Could not confirm completed rewrite for {title}")
         return entry.note

@@ -12,7 +12,9 @@ pytestmark = pytest.mark.skipif(fingerprints._fcntl is None, reason="requires fl
 
 
 def _ctx(path):
-    return RunContext(env={}, processed_path=path, processed_titles=set(), dry_run=False)
+    return RunContext(
+        env={}, processed_path=path, processed_titles=set(), dry_run=False
+    )
 
 
 def _opposite_claims(path, first, second, barrier, results):
@@ -45,7 +47,10 @@ def test_overlapping_sweeps_with_opposite_claim_order_do_not_deadlock(tmp_path):
     for process in processes:
         process.start()
     try:
-        assert [results.get(timeout=10) for _ in processes] == [(True, set()), (True, set())]
+        assert [results.get(timeout=10) for _ in processes] == [
+            (True, set()),
+            (True, set()),
+        ]
     finally:
         for process in processes:
             process.join(timeout=1)
@@ -80,7 +85,9 @@ def test_busy_title_is_not_processed_and_can_be_retried(tmp_path):
         contender.stop()
 
 
-def test_claim_io_does_not_hold_context_lock_and_reserves_local_title(tmp_path, monkeypatch):
+def test_claim_io_does_not_hold_context_lock_and_reserves_local_title(
+    tmp_path, monkeypatch
+):
     ctx = _ctx(tmp_path / "titles")
 
     def claim(path, title):

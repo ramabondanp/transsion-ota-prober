@@ -8,7 +8,9 @@ from textwrap import dedent
 import pytest
 
 
-@pytest.mark.parametrize("blocked", ["pending_lock", "file_lock", "telegram_lock", "send", "flush"])
+@pytest.mark.parametrize(
+    "blocked", ["pending_lock", "file_lock", "telegram_lock", "send", "flush"]
+)
 def test_watchdog_hard_exit_bounds_blocked_cleanup(tmp_path, blocked):
     script = dedent(
         """\
