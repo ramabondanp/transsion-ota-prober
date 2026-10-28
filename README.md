@@ -67,6 +67,7 @@ sends Telegram notifications.
 - TECNO POVA 7 Ultra 5G (LJ9)
 - TECNO POVA Slim 5G (KM9)
 - TECNO POVA Curve 2 5G (LK7k)
+- TECNO POVA 8 5G (LK6)
 - TECNO POVA 8 Pro 5G (LK7)
 
 ## MEGAPAD

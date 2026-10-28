@@ -1,0 +1,6 @@
+oem: "TECNO"
+product_base: "LK6"
+model: "TECNO POVA 8 5G"
+android_version: "16"
+regions:
+  OP: "301500063"
