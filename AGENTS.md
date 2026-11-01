@@ -7,6 +7,8 @@ Google's protobuf Android check-in API. The CLI enables Telegram notifications b
 default; explicit non-notifying modes are available.
 
 Entry points: `checkota` / `python -m checkota` → `checkota.cli.main`.
+For user-facing setup and operation, start with the [usage guide](docs/usage.md).
+For a code change, read the relevant implementation and contract below before editing.
 
 | Area | Start here |
 | --- | --- |
@@ -29,7 +31,7 @@ Read the relevant reference before changing a subsystem:
   and an isolated wheel smoke check.
 - [Regression history](docs/regressions.md): historical failures and fix rationale;
   superseded implementations are not current instructions.
-- [README](README.md): user installation, credentials, usage and migration.
+- [Usage guide](docs/usage.md): user installation, credentials, usage and migration.
 
 ## Non-negotiable invariants
 
@@ -94,12 +96,13 @@ Read the relevant reference before changing a subsystem:
   edit vendored/generated protobuf code or remove existing state/build artifacts.
 - Do not run live OTA/Telegram checks for routine verification. Normal commands can
   rewrite configs, persist titles and deliver pending messages. `--skip-telegram`
-  and `--update-incremental` still mutate data; `--dry-run` still uses the network,
-  can create directories/default configs or dedup locks, and writes response
-  artifacts with `--debug`. Prefer mocked tests/temp paths.
+  and `--update-incremental` still mutate data; non-dry-run file-backed modes can
+  also confirm pending outbox entries. `--dry-run` still uses the network, can create
+  directories/default configs or dedup locks, and writes response artifacts with
+  `--debug`. Prefer mocked tests and temporary paths.
 - Never commit credentials, `scripts/.env`, real outbox contents or debug dumps.
   Notifying runs require `bot_token` and `chat_id` before any operational work;
-  non-notifying exceptions are documented in the [README](README.md#telegram).
+  non-notifying exceptions are documented in the [usage guide](docs/usage.md#telegram).
 
 ## Setup and verification
 
@@ -127,6 +130,7 @@ artifacts: vendored redistribution rights remain gated by [LICENSE](LICENSE) and
 
 Before finishing, review the diff, update affected contracts/tests and report the
 checks actually run (including failures or unavailable checks). For docs-only
-changes, validate links, commands and Markdown; do not claim runtime coverage
-from an empty diagnostics cache. Keep detailed implementation explanations and
-historical fixes in the linked docs, not in this file.
+changes, validate links, anchors, commands and Markdown as described in the
+[documentation checklist](docs/development.md#documentation-only-changes); do not
+claim runtime coverage from an empty diagnostics cache. Keep detailed implementation
+explanations and historical fixes in the linked docs, not in this file.

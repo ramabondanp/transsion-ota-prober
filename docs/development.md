@@ -2,7 +2,15 @@
 
 Start with [AGENTS.md](../AGENTS.md) for invariants and
 [architecture.md](architecture.md) for implementation details. User-facing
-installation, credentials and usage belong in [README.md](../README.md).
+setup and operating instructions are in the [usage guide](usage.md).
+
+A safe workflow is to inspect the working tree, read the affected contract and
+implementation, run focused tests while changing code, then run the applicable
+checks and review the diff. Do not use live OTA or Telegram requests as tests.
+
+- [Local setup](#safe-local-setup) · [Standard checks](#standard-checks)
+- [Targeted tests](#targeted-regression-tests) · [Documentation checks](#documentation-only-changes)
+- [Operational safety](#avoid-operational-side-effects) · [Wheel smoke check](#wheel-smoke-check)
 
 ## Safe local setup
 
@@ -33,9 +41,9 @@ Run the checks relevant to a change during development, then the full suite for
 code changes. Report which checks ran, their results, and anything unavailable.
 An empty editor diagnostics cache is not verification.
 
-For documentation-only edits, check local links/anchors, referenced commands and
-paths, Markdown formatting, and the diff. Runtime tests are optional unless the
-edit changes executable examples or makes new behavioral claims.
+For documentation-only edits, follow the [documentation checklist](#documentation-only-changes).
+Runtime tests are optional unless the edit changes executable examples or makes
+new behavioral claims.
 
 ### Targeted regression tests
 
@@ -64,13 +72,35 @@ For example:
 uv run --no-sync python -m pytest -q tests/test_notification_outbox.py tests/test_title_claim_contention.py
 ```
 
+### Documentation-only changes
+
+1. Check every changed local link, including its target heading/anchor, and
+   verify referenced files and commands against the current tree.
+2. Review fenced code blocks, heading hierarchy, tables and lists. Use an
+   available Markdown checker if one is installed; report if it is unavailable.
+3. Check executable examples without contacting external services or using real
+   state. For example, these help commands only parse arguments and exit:
+
+   ```bash
+   uv run --no-sync python -m checkota --help
+   uv run --no-sync python scripts/migrate_compact_configs.py --help
+   ```
+
+4. For new behavioral claims, inspect the implementation and run relevant mocked
+   tests or isolated temporary-file checks. Do not infer coverage from an empty
+   diagnostics cache.
+5. Run `git diff --check` and review the documentation diff. Report the checks
+   actually run, including anything that could not be verified.
+
 ## Avoid operational side effects
 
 - Ordinary check commands can rewrite repository configs, persist processed
   titles, recover/send pending notifications and contact external services.
   Do not run them as a routine test or to regenerate expected fixtures.
 - `--skip-telegram` and `--update-incremental` still mutate configs/state.
-  `--register-update` explicitly persists state. None is a read-only check.
+  `--register-update` explicitly persists state. Non-dry-run file-backed modes
+  can also inspect and confirm outbox entries, even with notifications disabled.
+  None of these is a read-only check.
 - `--dry-run` avoids device-config rewrites, title commits and outbox delivery,
   but still performs network work. It can create the wheel state directory,
   seed missing config defaults or create a database lock when reading existing
@@ -166,15 +196,18 @@ This smoke test does not replace cross-platform failure/race tests in
 
 Do **not** publish the wheel as part of verification. Public redistribution is
 gated on vendored licensing confirmation; see [LICENSE](../LICENSE),
-[NOTICE](../NOTICE) and the [README](../README.md#credits-and-license).
+[NOTICE](../NOTICE) and the [usage guide](usage.md#credits-and-license).
 
 ## Keeping the documentation useful
 
 - Root `AGENTS.md`: concise instructions, high-priority invariants and verification.
 - `architecture.md`: current implementation contracts and subsystem details.
 - `regressions.md`: historical failure modes and the rationale behind fixes.
-- `README.md`: user installation, configuration and operational usage.
+- `README.md`: tracked device catalogue and a link to the user guide.
+- `usage.md`: user installation, usage, modes, configuration and migration.
 
 Update the relevant contract alongside behavior changes and add regression tests
-for non-obvious failures. Avoid copying full implementation explanations or
-historical tables back into the root agent instructions.
+for non-obvious failures. Keep current behavior distinct from historical fixes,
+use relative links between documents, and update links when headings move. Avoid
+copying full implementation explanations or historical tables back into the root
+agent instructions.

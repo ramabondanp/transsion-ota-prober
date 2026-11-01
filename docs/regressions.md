@@ -1,14 +1,18 @@
 # Regression history
 
-This is the historical maintenance record moved out of [AGENTS.md](../AGENTS.md).
-It explains why seemingly small implementation choices matter. For **current
-contracts**, use [architecture.md](architecture.md); for test selection, use the
-[verification guide](development.md#targeted-regression-tests).
+This historical maintenance record explains why seemingly small implementation
+choices matter. For **current contracts**, use [architecture.md](architecture.md);
+for test selection, use the [verification guide](development.md#targeted-regression-tests).
+Inspect current code and tests before applying an entry to a change.
 
 Historical implementation names below are not current instructions. In
 particular, `checkota.py` was split into the package, `RemoteZip` was replaced by
 `zip_metadata.py`, and notification delivery now also uses the durable outbox.
 Do not restore superseded implementations merely because they appear here.
+
+- [Config and identity](#config-schema-identity-and-rewriting) · [Delivery and recovery](#processed-titles-notifications-and-recovery)
+- [Network and metadata](#network-metadata-and-untrusted-data) · [Text rendering](#telegram-and-terminal-text)
+- [Concurrency](#concurrency-and-shutdown) · [Packaging](#packaging-and-maintenance)
 
 ## Historical module mapping
 
@@ -43,6 +47,11 @@ The paths below use current modules where possible.
 | UTF-8 BOM caused a misleading source-layout error | `manager.py` | Read with `utf-8-sig`, aligning the validator with PyYAML; a rewrite drops the BOM. |
 | Config lock files accumulated beside configs | `manager.py` | Prune released locks after a nonblocking probe. A residual unlink race is documented; rewrites remain atomic and idempotent. |
 
+The comment-preservation guarantees above apply to runtime updates. The legacy
+migration script regenerates YAML and does not preserve comments or formatting;
+back up user configs before using `--write`. See the
+[config and migration instructions](usage.md#configs).
+
 ## Processed titles, notifications and recovery
 
 | Failure | Relevant files | Fix / rationale |
@@ -66,8 +75,10 @@ crash. `outbox.py` now stages file-backed notifications before rewriting configs
 confirms completed rewrites durably, replays recoverable work on later notifying
 runs, and removes entries only after title commit. Ready records remain delivery
 obligations even if the config changes or disappears. Startup recovery fails
-closed on corrupt state or unresolved claims. Delivery is at least once, not
-exactly once; dry runs never recover or send pending work.
+closed on corrupt state or unresolved claims. Non-dry-run file-backed modes can
+confirm pending records even when notifications are disabled; notifying runs
+can deliver them. Delivery is at least once, not exactly once; dry runs and
+direct `--fp` runs do not load or send pending outbox work.
 
 See [the outbox contract](architecture.md#durable-outbox) and
 [`test_notification_outbox.py`](../tests/test_notification_outbox.py).
@@ -137,7 +148,11 @@ See [the outbox contract](architecture.md#durable-outbox) and
 
 ## Maintaining this record
 
-Keep normative rules in `AGENTS.md` and `architecture.md`, not only in this history.
-For a new bug, add a focused regression test first and record its failure mode
-here when the rationale is non-obvious. Update current module references after
-extraction; explicitly label obsolete implementation details as historical.
+Keep normative rules in [AGENTS.md](../AGENTS.md) and
+[architecture.md](architecture.md), not only in this history. For a new bug,
+add a focused regression test first and record its failure mode here when the
+rationale is non-obvious. Link the relevant tests from the
+[verification guide](development.md#targeted-regression-tests), update module
+references after extraction, and explicitly label obsolete implementation details
+as historical. If a historical entry conflicts with the implementation, verify
+the current behavior before updating the record.

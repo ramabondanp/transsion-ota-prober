@@ -1,8 +1,14 @@
 # Architecture and behavioral contracts
 
-This is the implementation reference for [AGENTS.md](../AGENTS.md). Read the
-sections relevant to a change; use [regressions.md](regressions.md) for historical
-failure modes and [development.md](development.md) for verification.
+This is the current implementation reference for [AGENTS.md](../AGENTS.md).
+Read the sections relevant to a change; use [regressions.md](regressions.md) for
+historical failure modes and [development.md](development.md) for verification.
+For operating instructions, see the [usage guide](usage.md).
+
+- [Data flow](#data-flow) · [Config schema and identity](#config-schema-and-identity)
+- [Processed titles and delivery](#processed-titles-and-delivery) · [Concurrency](#concurrency-interrupts-and-deadlines)
+- [Install modes and paths](#install-modes-and-paths) · [Network boundaries](#network-and-untrusted-input)
+- [Telegram and terminal text](#telegram-text-and-terminal-rendering)
 
 ## Module map
 
@@ -14,6 +20,7 @@ failure modes and [development.md](development.md) for verification.
 | `checkota/processor.py` | Check/update pipeline, region selection, metadata cache, notification dispatch/recovery/draining |
 | `checkota/models.py` | Shared update and pending-notification dataclasses |
 | `checkota/manager.py` | Config parsing, fingerprint derivation and identity checks, comment-preserving atomic YAML rewrites |
+| `checkota/paths.py` | Source/wheel path resolution, lazy config seeding and vendor bootstrap |
 | `checkota/update_checker.py` | Protobuf check-in request construction, bounded HTTP response reading and response validation |
 | `checkota/metadata.py` | OTA metadata parsing and transient retries; success/failure caching is coordinated in `processor.py` using `RunContext` state |
 | `checkota/zip_metadata.py` | ZIP64-aware HTTP Range access to one ZIP member; no full OTA download |
@@ -33,6 +40,9 @@ failure modes and [development.md](development.md) for verification.
 
 ## Data flow
 
+A normal, file-backed notifying check follows this path (individual steps may
+short-circuit when no update is available, a title is known or an error occurs):
+
 1. Load compact YAML defaults and region overrides; derive product, device and
    fingerprint for each selected region.
 2. Build an `AndroidCheckinRequest` with fingerprint and generated identity values,
@@ -44,12 +54,25 @@ failure modes and [development.md](development.md) for verification.
    fingerprint, incremental, patch level and SDK level. Per-URL in-flight events
    and caches deduplicate metadata work across workers, including a negative TTL.
 6. Validate the target's immutable identity against the config before actions.
-7. For a notifying, file-backed update, durably stage a notification before
-   rewriting YAML. Atomically publish and sync the config, then mark the outbox
-   record ready.
+7. When a notifying update will rewrite a file-backed config, durably stage a
+   notification before rewriting YAML. Atomically publish and sync the config,
+   then mark the outbox record ready.
 8. Send or buffer the notification. Commit the processed title on successful
    delivery, then remove the durable pending record. Without a notifier, record a
    new title after successful update actions instead. Dry runs do not persist it.
+
+Important alternate paths:
+
+- `--fp` derives the source identity directly from a fingerprint instead of
+  loading or rewriting a config; it does not load the durable outbox.
+- `--gen-fp` fetches and identity-checks target metadata, then prints the target
+  fingerprint instead of taking update actions. It does so before the normal
+  processed-title short circuit.
+- `--register-update` validates target identity before recording a new title;
+  it neither rewrites the config nor sends a notification.
+- Dry runs do not rewrite configs, commit titles or deliver notifications, but
+  they can use the network and create local files. See the
+  [mode and side-effect table](usage.md#modes-and-side-effects).
 
 ## Config schema and identity
 
@@ -64,6 +87,12 @@ regions:
     android_version: "15"
     incremental: "131015"
 ```
+
+The required top-level keys are `oem`, `product_base`, `model`,
+`android_version` and the non-empty `regions` mapping. Each region is either a
+string incremental or a mapping with a required `incremental` and optional
+`product_base`, `android_version` and `build_tag` overrides. Scalar values must
+be non-empty strings; quote numeric-looking values in YAML. Unknown keys are rejected.
 
 - Product is `{effective_product_base}-{region}`. A region may override
   `product_base`, as `IN` does in `config-X6857.yml` (`X6857B`).
@@ -92,8 +121,11 @@ in-memory identity disagrees with the latest YAML.
 
 The runtime accepts only the compact `regions` schema. Legacy `variants` and
 single-region `product`/`device` configs fail with migration guidance. See the
-[README config and migration instructions](../README.md#configs). Bundled
+[config and migration instructions](usage.md#configs). Bundled
 defaults are migrated; existing user/XDG configs are never migrated automatically.
+The migration script regenerates legacy YAML rather than preserving comments or
+formatting. Its preflight mode validates without publishing changes; `--write`
+preflights the directory and then rewrites legacy files.
 
 `_UniqueKeyLoader` rejects duplicate keys. `_validate_compact_source_layout` runs
 on load and before updates, rejecting syntax the line-oriented rewriter cannot
@@ -136,9 +168,11 @@ behind. `collect_update_info()` returns before ZIP metadata work, and
 `apply_update_actions()` leaves configs alone. Do not fetch metadata to catch up
 other regions for a known title; that repeats Tcard processing.
 
-Only explicit `--update-incremental` and `--force-notify` bypass this skip:
-`--update-incremental` may rewrite YAML; `--force-notify` resends without rewriting
-an already-processed update. Dry-run alone is not an override.
+Only explicit `--update-incremental` and `--force-notify` bypass this skip for
+update actions: `--update-incremental` may rewrite YAML; `--force-notify` resends
+without rewriting an already-processed update. Dry-run alone is not an override.
+`--gen-fp` is a separate print-only path and checks target metadata before this
+short circuit.
 
 The processed-title log retains the newest 2000 titles. Reading a missing log
 returns before opening its database lock, so a read does not create state. Append
@@ -163,8 +197,10 @@ notification, config path, target fingerprint and a `ready` flag.
   do not advance configs past unresolved recovery work.
 - Remove a record only after the title commit. Delivery is **at least once**:
   a crash between Telegram acceptance and title commit can cause a duplicate.
-- Later notifying runs recover pending work even if no fresh update is found.
-  Dry runs do not recover or send it.
+- Non-dry-run file-backed invocations inspect and can confirm pending entries
+  at startup, including when notifications are disabled. Notifying runs also
+  deliver recoverable work even if no fresh update is found. Dry runs and direct
+  `--fp` invocations do not load or deliver the outbox.
 
 Keep these durable guarantees distinct from in-memory notification buffering.
 After a successful config step, both `-c` and `-d` jobs may buffer locally after a
