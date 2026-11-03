@@ -44,6 +44,8 @@ from typing import Final, NamedTuple
 import requests
 from fetch_spys import fetch_spys
 
+from checkota.proxy import PROXMINT_PROXY_TEMPLATE_ENV, load_proxy_template
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 ENV_FILE = SCRIPT_DIR / ".env"
@@ -51,7 +53,6 @@ DEFAULT_PROCESS_TIMEOUT = 35.0
 DEFAULT_MAX_WORKERS = 32
 COUNTRY_CHECK_URL: Final = "https://api.country.is/"
 COUNTRY_CHECK_TIMEOUT = 12.0
-PROXMINT_PROXY_TEMPLATE_ENV: Final = "PROXMINT_PROXY_TEMPLATE"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 COUNTRY_CODE_RE: Final = re.compile(r"[A-Z]{2}")
 # Hex digits, dots, and colons only -- accepts IPv4/IPv6 while rejecting the
@@ -154,23 +155,7 @@ def _clean_output_line(line: str) -> str:
 
 def _load_proxy_template() -> str:
     """Read the proxy template from the process environment or scripts/.env."""
-    value = os.environ.get(PROXMINT_PROXY_TEMPLATE_ENV, "").strip()
-    if value or not ENV_FILE.is_file():
-        return value
-
-    try:
-        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise ValueError(f"could not read {ENV_FILE}: {exc}") from exc
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        name, raw_value = stripped.split("=", 1)
-        if name.strip() == PROXMINT_PROXY_TEMPLATE_ENV:
-            return raw_value.strip().strip("'\"")
-    return ""
+    return load_proxy_template(ENV_FILE)
 
 
 def _proxmint_proxy(country: str, template: str) -> str:

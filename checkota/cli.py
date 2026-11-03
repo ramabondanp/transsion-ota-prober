@@ -102,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         " signalled to stop and the process exits (0 = no limit).",
     )
     parser.add_argument(
+        "--region-proxy",
+        action="store_true",
+        help="Use the configured Proxmint country proxy for IN/RU check-ins (opt-in)",
+    )
+    parser.add_argument(
         "--fetch-zip-proxy",
         "--zip-proxy",
         action="store_true",

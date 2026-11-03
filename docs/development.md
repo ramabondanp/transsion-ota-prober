@@ -64,6 +64,7 @@ failure injection; do not replace them with live OTA/Telegram runs.
 | Terminal rendering | [`test_description_terminal_wrap.py`](../tests/test_description_terminal_wrap.py), [`test_audit_fixes.py`](../tests/test_audit_fixes.py) |
 | Install modes, config seeding and vendor bootstrap | [`test_paths.py`](../tests/test_paths.py), [`test_cli_paths.py`](../tests/test_cli_paths.py), [`test_bootstrap.py`](../tests/test_bootstrap.py) |
 | Credential validation, region filtering and scripts | [`test_cli_telegram_env.py`](../tests/test_cli_telegram_env.py), [`test_region_filter.py`](../tests/test_region_filter.py), [`test_scripts.py`](../tests/test_scripts.py) |
+| IN/RU proxy selection, overrides and credential redaction | [`test_region_proxy.py`](../tests/test_region_proxy.py), [`test_scripts.py`](../tests/test_scripts.py), [`test_telegraph_no_proxy.py`](../tests/test_telegraph_no_proxy.py) |
 | State persistence and lock cleanup | [`test_lock_pruning.py`](../tests/test_lock_pruning.py), [`test_regression_followups.py`](../tests/test_regression_followups.py), [`test_audit_fixes.py`](../tests/test_audit_fixes.py) |
 
 For example:

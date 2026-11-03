@@ -38,6 +38,7 @@ from checkota.constants import (
 )
 from checkota.logging import Log
 from checkota.manager import Config
+from checkota.proxy import checkin_proxy_url, redact_proxy_error
 from checkota.validation import has_control_chars, is_google_https_url
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -119,9 +120,12 @@ class UpdateChecker:
         imei: str | None = None,
         stop_event: threading.Event | None = None,
         debug_label: str | None = None,
+        region_proxy: bool = False,
     ):
         self.cfg = cfg
         self.session = session or requests.Session()
+        self.region_proxy = region_proxy
+        self._checkin_proxy: str | None = None
         self.imei = imei
         self.stop_event = stop_event
         if debug_label:
@@ -271,6 +275,16 @@ class UpdateChecker:
         Log.i("Checking for updates...")
         if self.imei:
             Log.i(f"Using custom IMEI: {self.imei}")
+        try:
+            self._checkin_proxy = (
+                checkin_proxy_url(self.cfg.product, self.session)
+                if self.region_proxy
+                else None
+            )
+        except ValueError as exc:
+            raise UpdateCheckError(str(exc)) from None
+        if self._checkin_proxy:
+            Log.i("Using regional proxy for check-in.")
         delay = RETRY_BASE_DELAY_SECONDS
         data = self._build_request()
 
@@ -290,16 +304,19 @@ class UpdateChecker:
                 Log.w("Update check interrupted.")
                 return False, None
 
+            error_detail = redact_proxy_error(str(outcome.error), self._checkin_proxy)
+            # Do not expose a credential-bearing transport error in a traceback.
+            error_cause = None if self._checkin_proxy else outcome.error
             if outcome.retryable and attempt < _CHECK_RETRIES - 1:
                 if outcome.http_status is None:
                     Log.w(
-                        f"Update check network error: {outcome.error}. Retrying in "
+                        f"Update check network error: {error_detail}. Retrying in "
                         f"{delay} seconds... "
                         f"({attempt + 1}/{_CHECK_RETRIES})"
                     )
                 else:
                     Log.w(
-                        f"Update check HTTP {outcome.http_status}: {outcome.error}. "
+                        f"Update check HTTP {outcome.http_status}: {error_detail}. "
                         f"Retrying in {delay} seconds... "
                         f"({attempt + 1}/{_CHECK_RETRIES})"
                     )
@@ -316,27 +333,32 @@ class UpdateChecker:
             if outcome.retryable and outcome.http_status is None:
                 Log.e(
                     "Update check failed after multiple retries due to network "
-                    f"error: {outcome.error}"
+                    f"error: {error_detail}"
                 )
                 raise UpdateCheckError(
                     "Update check failed after multiple retries due to network "
-                    f"error: {outcome.error}"
-                ) from outcome.error
+                    f"error: {error_detail}"
+                ) from error_cause
             if outcome.retryable:
                 Log.e(
                     f"Update check failed after multiple retries due to HTTP "
-                    f"{outcome.http_status}: {outcome.error}"
+                    f"{outcome.http_status}: {error_detail}"
                 )
             else:
-                Log.e(f"Update check failed: {outcome.error}")
+                Log.e(f"Update check failed: {error_detail}")
             raise UpdateCheckError(
-                f"Update check failed: {outcome.error}"
-            ) from outcome.error
+                f"Update check failed: {error_detail}"
+            ) from error_cause
         raise UpdateCheckError("Update check failed: request loop exhausted")
 
     def _attempt_once(self, data: bytes, debug: bool) -> _AttemptOutcome:
         """Perform a single POST + parse and classify the outcome."""
         response = None
+        proxies = (
+            {"http": self._checkin_proxy, "https": self._checkin_proxy}
+            if self._checkin_proxy
+            else None
+        )
         try:
             try:
                 response = self.session.post(
@@ -346,6 +368,7 @@ class UpdateChecker:
                     timeout=_CHECK_TIMEOUT,
                     allow_redirects=False,
                     stream=True,
+                    proxies=proxies,
                 )
                 status = getattr(response, "status_code", None)
                 if isinstance(status, int) and 300 <= status < 400:

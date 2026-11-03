@@ -348,6 +348,7 @@ def _check_for_updates(
         imei=args.imei,
         stop_event=ctx.stop_event,
         debug_label=debug_label,
+        region_proxy=getattr(args, "region_proxy", False),
     )
     try:
         found, data = checker.check(args.debug)

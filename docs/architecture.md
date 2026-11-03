@@ -22,6 +22,7 @@ For operating instructions, see the [usage guide](usage.md).
 | `checkota/manager.py` | Config parsing, fingerprint derivation and identity checks, comment-preserving atomic YAML rewrites |
 | `checkota/paths.py` | Source/wheel path resolution, lazy config seeding and vendor bootstrap |
 | `checkota/update_checker.py` | Protobuf check-in request construction, bounded HTTP response reading and response validation |
+| `checkota/proxy.py` | Optional IN/RU check-in proxy selection, private template loading and credential redaction |
 | `checkota/metadata.py` | OTA metadata parsing and transient retries; success/failure caching is coordinated in `processor.py` using `RunContext` state |
 | `checkota/zip_metadata.py` | ZIP64-aware HTTP Range access to one ZIP member; no full OTA download |
 | `checkota/validation.py` | Shared control-character and Google HTTPS URL validation |
@@ -281,6 +282,27 @@ configs; lookup via `active_config_dir()` triggers lazy seeding.
 ## Network and untrusted input
 
 ### Check-in
+
+Regional check-in proxies are off by default. Only `--region-proxy` (or
+`UpdateChecker(region_proxy=True)`) enables country selection for exact `IN` and
+`RU` regions using `PROXMINT_PROXY_TEMPLATE` (`{country}` becomes `in` or `ru`).
+Without the flag, check-ins do not read the template and keep existing routing.
+An exported template wins over source-checkout `scripts/.env`; wheels read only
+the environment.
+Read only that dotenv setting without exporting credentials or other values.
+Preserve explicit session proxies, environment proxies applicable to the check-in
+URL and `NO_PROXY` exemptions; a session with `trust_env=False` opts out of
+country selection. Missing settings leave routing unchanged. When opted in,
+malformed or unreadable settings fail the affected check before network work,
+with no silent direct fallback.
+
+Pass the selected proxy on the individual check-in POST, never through shared
+session mutation or process-wide environment changes. Pin it across retries so
+parallel or reused worker sessions cannot mix IN/RU/other-region routing. Do not
+apply it to ZIP metadata (even with `--fetch-zip-proxy`) or notification delivery.
+Scrub automatic proxy credentials from retry/failure logs and surfaced errors,
+including tracebacks. See the [setup instructions](usage.md#regional-check-in-proxies)
+and [regression tests](../tests/test_region_proxy.py).
 
 POST with `allow_redirects=False`; reject redirects. Stream responses with a
 4 MiB cap. Check-in and OTA metadata fetching each allow three total attempts

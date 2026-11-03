@@ -160,6 +160,42 @@ print a diff. Replace the path if your configs are elsewhere, including under a
 custom `XDG_CONFIG_HOME`. The tool preflights the directory before writing;
 already-compact files are validated and left unchanged.
 
+## Regional check-in proxies
+
+Regional proxies are **off by default**. Add `--region-proxy` to use the
+configured country proxy for the exact `IN` (India) and `RU` (Russia) regions:
+
+```bash
+checkota -c X6873 --reg IN --region-proxy --dry-run
+checkota -c X6873 --reg RU --region-proxy --dry-run
+```
+
+With that flag, source installs read `PROXMINT_PROXY_TEMPLATE` from the private,
+git-ignored `scripts/.env`; an exported value takes precedence. Wheel installs
+use the exported setting only. Without the flag, normal check-ins do not read
+the template and keep their existing routing even when it is configured.
+
+```dotenv
+PROXMINT_PROXY_TEMPLATE="user__cr.{country}:password@gw.proxmint.com:823"
+```
+
+Replace the example credentials with your own and keep the file private
+(`chmod 600 scripts/.env`). The `{country}` placeholder becomes `in` or `ru`;
+`http://` is added if no scheme is given. An explicit `http://` or `https://`
+proxy URL is also accepted. `--region-proxy` applies to each selected region,
+including parallel sweeps and direct `--fp` checks.
+
+An explicit proxy applicable to the check-in URL (for example, `HTTPS_PROXY` or
+`ALL_PROXY`, including their lowercase forms) takes precedence. `NO_PROXY`
+exemptions are respected. Other regions and unconfigured installs retain their
+existing routing. With `--region-proxy`, an invalid configured template fails
+the affected check before any request rather than silently checking directly.
+
+Regional proxies apply **only to check-in requests**. ZIP metadata
+continues to be fetched directly by default; `--fetch-zip-proxy` uses explicit
+proxy environment settings, not the automatic country proxy. Telegram and
+Telegraph routing is unchanged. See the [network contract](architecture.md#check-in).
+
 ## Proxy scripts
 
 [`scripts/fetch_spys.py`](../scripts/fetch_spys.py) and
