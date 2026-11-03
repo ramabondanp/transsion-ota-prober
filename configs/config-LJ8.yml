@@ -3,6 +3,6 @@ product_base: "LJ8"
 model: "TECNO POVA 7 Pro 5G"
 android_version: "16"
 regions:
-  OP: "301450006"
+  OP: "301600019"
   IN: "301450006"
-  RU: "301450006"
+  RU: "301600019"
