@@ -6,7 +6,7 @@ regions:
   OP: "301600013"
   IN: "301600013"
   RU: "301500021"
-  TR: "301500018"
+  TR: "301600013"
   EU:
     android_version: "15"
     incremental: "131015"
